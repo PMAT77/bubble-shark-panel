@@ -28,7 +28,6 @@ docs/*
 !docs/IMAGE_DISTRIBUTION.md
 !docs/ARCHITECTURE.md
 !docs/DST_TUTORIAL.md
-!docs/VIDEO.md
 !docs/API.md
 !docs/DATABASE.md
 !docs/GLOSSARY.md

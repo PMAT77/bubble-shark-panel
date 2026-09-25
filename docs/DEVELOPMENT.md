@@ -235,9 +235,11 @@ git diff --exit-code -- server/drizzle      # 迁移漂移检查：无输出即�
 | `pnpm run lint` | vue-tsc 类型检查 |
 | `pnpm run lint:ox` | oxlint 静态检查（`--deny-warnings`） |
 | `pnpm run lint:copy` | UI 文案检查 |
-| `pnpm test:unit` | 单元测试（前端与脚本用例） |
-| `pnpm test:server` | 后端测试 |
+| `pnpm test:unit` | 全部测试：后端 `server/src/**` 与前端 `src/**`、脚本用例（发布门禁跑的就是它） |
+| `pnpm test:server` | 只跑后端 `server/src/**/*.test.ts`，是 `test:unit` 的真子集，用于改后端时快速迭代 |
 | `pnpm run build` | 生产构建（仅前端 `dist/`；服务端 bundle 用 `pnpm run build:server`） |
+
+**`test:unit` 与 `test:server` 的关系容易记反**：`scripts/run-unit-tests.mjs` 的第一个 glob 就是 `server/src/**/*.test.ts`，所以**后端的全部用例本来就在 `test:unit` 里**，`test:server` 是它的真子集（139 个文件 / 1231 个用例），只用来在改后端时少跑一会儿。也因此 `release:check` 与 CI 的 `Quality Gate` 跑 `test:unit` 一条就等于跑全量（当前共 164 个文件 / 1458 个用例），后端并没有落在门禁之外。
 
 **`pnpm run lint` 走增量构建（`vue-tsc -b`），会吃掉构建缓存。** 改动涉及类型边界（菜单数据、跨目录 import、`RouteMetaRaw` 这类 `string | (() => string)` 的联合类型）后，务必强制全量重跑一次：
 

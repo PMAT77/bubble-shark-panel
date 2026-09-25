@@ -25,7 +25,8 @@
 
 ## Git 分支
 
-- **`develop`**：历史记录中的日常开发分支。注意当前 CI（`.github/workflows/ci.yml`）只在 PR 与推送到 `main` 时触发，推送到 `develop` 不会产生任何检查结果。
-- **`main`**：可部署基线；里程碑验证后从 `develop` 合并并打 tag。
-- **`feature/*`**：可选，大改动隔离后合并回 `develop`。
+- **`main`**：唯一长期分支，也是可部署基线。仓库已不再使用 `develop`。
+- **`feature/*` / `fix/*`**：改动在临时分支上做，通过 PR 合入 `main`。
+- CI（`.github/workflows/ci.yml`）在 PR 与推送到 `main` 时运行；只推临时分支不会产生检查结果，PR 才是拿到门禁的路径。
+- 发布：`main` 上的提交通过门禁后打 `v*` tag，[`docker-publish.yml`](.github/workflows/docker-publish.yml) 会要求该 commit 已在 `main` 上，见 [docs/RELEASE.md](docs/RELEASE.md)。
 - 数据库：改 schema 后 `pnpm db:generate`，同 commit 提交 `server/drizzle/`；不提交 `*.sqlite`。

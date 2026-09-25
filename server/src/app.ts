@@ -130,7 +130,7 @@ export async function createServerApp(config: Pick<ServerConfig, 'mode' | 'logLe
     })
   })
 
-  // 注册业务模块路由（config / file 仍为占位，待实现后再注册；backup 已实现）
+  // 注册业务模块路由（仅 config 模块仍为占位，未实现因而未注册；files 等其余模块均已实现）
   registerAuthModule(app)
   registerSystemModule(app)
   registerNodeModule(app)

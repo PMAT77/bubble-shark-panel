@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { darken, mix } from './color'
+import { darken, deriveTileColor, mix } from './color'
 import { TILE_CATALOG, tileLabel } from './terrain-catalog'
 import {
   DEFAULT_TILE_PALETTE,
@@ -13,6 +13,31 @@ import {
 function pixelAt(image: { width: number, pixels: Buffer }, x: number, y: number) {
   const offset = (y * image.width + x) * 3
   return { r: image.pixels[offset]!, g: image.pixels[offset + 1]!, b: image.pixels[offset + 2]! }
+}
+
+/** RGB → HSL 色相；只用于比较"是不是同一个色系" */
+function hueOf(color: { r: number, g: number, b: number }): number {
+  const r = color.r / 255
+  const g = color.g / 255
+  const b = color.b / 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const delta = max - min
+  if (delta === 0) {
+    return 0
+  }
+  const raw = max === r
+    ? ((g - b) / delta) % 6
+    : max === g
+      ? (b - r) / delta + 2
+      : (r - g) / delta + 4
+  return ((raw * 60) % 360 + 360) % 360
+}
+
+/** 两个色相之间的最短夹角（0–180） */
+function hueDistance(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360
+  return diff > 180 ? 360 - diff : diff
 }
 
 describe('renderTerrain 基本渲染', () => {
@@ -242,6 +267,68 @@ describe('色板覆盖：真机数据回归', () => {
   it('目录本身没有重复 ID', () => {
     const ids = TILE_CATALOG.map(spec => spec.id)
     assert.equal(new Set(ids).size, ids.length, '有 ID 被写了两次，后者会覆盖前者')
+  })
+})
+
+describe('未收录地块的派生色', () => {
+  it('真机那三个未收录地块落在海洋色系里，而不是散成三种无关颜色', () => {
+    // 起因（2026-09-21 真机）：#263 / #269 / #272 面积都很小、混在成片海洋（203/204）里，
+    // 自由散色相会把它们涂成与海面毫无关系的高饱和色块，看起来像渲染坏了。
+    // 实测色相距离：263 → 15.0°、269 → 7.6°、272 → 4.3°。
+    const oceanHue = hueOf(DEFAULT_TILE_PALETTE[203]!)
+    for (const id of [263, 269, 272]) {
+      const distance = hueDistance(hueOf(deriveTileColor(id)), oceanHue)
+      assert.ok(
+        distance <= 30,
+        `地块 ${id} 的派生色与海洋色相差 ${distance.toFixed(1)}°，应当落在海洋色系内（≤30°）`,
+      )
+    }
+  })
+
+  it('257 一带的沙滩与 261 起的海洋新增段不共用基调', () => {
+    // 这一段不能合成一个"岸线"段：色板里 257（猴岛沙滩，色相 43.6）是黄的、264（浮冰，色相 201.4）是蓝的。
+    // 按一个基调处理，要么把浮冰涂成沙滩黄、要么把沙滩涂成海蓝，两种都错——这条用例钉住拆分。
+    const beachHue = hueOf(DEFAULT_TILE_PALETTE[257]!)
+    const floeHue = hueOf(DEFAULT_TILE_PALETTE[264]!)
+    assert.ok(
+      hueDistance(beachHue, floeHue) > 90,
+      '257 与 264 本身就是两种色系，色板数据变了这条用例的前提也就不成立了',
+    )
+    const nearBeach = deriveTileColor(258)
+    const nearFloe = deriveTileColor(263)
+    assert.ok(
+      hueDistance(hueOf(nearBeach), beachHue) <= 30,
+      `同段（257–260）的未收录地块应当贴近沙滩色系，实际差 ${hueDistance(hueOf(nearBeach), beachHue).toFixed(1)}°`,
+    )
+    assert.ok(
+      hueDistance(hueOf(nearFloe), floeHue) <= 40,
+      `同段（261–288）的未收录地块应当贴近浮冰/海洋色系，实际差 ${hueDistance(hueOf(nearFloe), floeHue).toFixed(1)}°`,
+    )
+    assert.ok(
+      hueDistance(hueOf(nearBeach), beachHue) < hueDistance(hueOf(nearBeach), floeHue),
+      '260 及之前的号应当更靠近沙滩而不是浮冰',
+    )
+  })
+
+  it('同一段落里两个未收录地块仍然分得开', () => {
+    // 收敛色系不等于涂成同一个颜色——真机上三块要能互相分辨
+    const colors = new Set([263, 269, 272].map(id => {
+      const c = deriveTileColor(id)
+      return `${c.r},${c.g},${c.b}`
+    }))
+    assert.equal(colors.size, 3, `三个未收录地块应当是三种颜色，实际：${[...colors].join(' / ')}`)
+  })
+
+  it('不在任何段落里的 ID 仍按自由散色相处理', () => {
+    // 陆地 ID 在 1–50 之间密集且色相跨度极大，套一个基调色会比散色相更误导
+    const hues = [60001, 60002, 60003].map(id => Math.round(hueOf(deriveTileColor(id))))
+    assert.equal(new Set(hues).size, 3, `段落外的 ID 应当各自拿到不同色相，实际：${hues.join(', ')}`)
+  })
+
+  it('同一个 ID 每次派生出同一个颜色', () => {
+    for (const id of [263, 60001]) {
+      assert.deepEqual(deriveTileColor(id), deriveTileColor(id))
+    }
   })
 })
 

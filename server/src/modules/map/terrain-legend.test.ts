@@ -177,6 +177,8 @@ describe('合并图例', () => {
   })
 
   it('真机那三个地块目前仍是"未收录"（补录后这条要跟着改）', () => {
+    // 注意：这三个号的**着色**已经收敛到所属 ID 段的基调色系（见 terrain-render.test.ts 的
+    // 「未收录地块的派生色」），但"有没有收录"这件事与着色无关——本条钉的是图例上的「未收录」标记。
     for (const id of REAL_UNCATALOGUED_IDS) {
       assert.equal(
         isKnownTile(id),

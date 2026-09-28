@@ -9,7 +9,7 @@ import Fastify from 'fastify'
 import type { FastifyInstance } from 'fastify'
 import { registerAuthModule } from '../auth/index'
 import { registerMapModule } from './index'
-import { closeDatabase, createGameInstance, initDatabase } from '../../shared/db/index'
+import { addUserInstanceGrants, closeDatabase, createGameInstance, findUserByAccount, initDatabase } from '../../shared/db/index'
 import { writeMapArtifacts, writeMapImage } from './map-store'
 import { encodePng, readPngSize } from './png'
 import { DEFAULT_TILE_PALETTE, renderTerrain } from './terrain-render'
@@ -137,6 +137,15 @@ describe('map routes', () => {
     const body = parseBody<{ token: string }>(login.body)
     assert.equal(body.status, 1, `登录失败：${login.body}`)
     token = body.data.token
+
+    /**
+     * 实例级隔离生效后，接口按「可见实例」校验。这个测试直接造实例、跳过了创建接口
+     * （生产环境里创建者会在创建时自动获得授权），所以补上授权前置，
+     * 让它继续验证真正关心的东西。
+     */
+    const admin = await findUserByAccount('superadmin')
+    assert.ok(admin, '前置条件：管理员账号存在')
+    await addUserInstanceGrants(admin.id, [INSTANCE_ID, OTHER_INSTANCE_ID], null)
   })
 
   after(async () => {
@@ -147,14 +156,18 @@ describe('map routes', () => {
 
   describe('鉴权', () => {
     it('未登录一律拒绝', async () => {
-      for (const [method, url] of [
-        ['GET', `/app/instance/map?instanceId=${INSTANCE_ID}&shard=master`],
-        ['POST', '/app/instance/map/refresh'],
-        ['GET', `/app/instance/map/image?instanceId=${INSTANCE_ID}&shard=master`],
-      ] as const) {
-        const response = await app.inject({ method, url, ...(method === 'POST' ? { payload: {} } : {}) })
+      /**
+       * POST 这条要带**合法**参数：路由的参数校验排在鉴权之前（先拒掉形状不对的请求，
+       * 不必为它查库），所以空 body 会先得到"请求参数无效"，而不是"未登录"。
+       */
+      for (const request of [
+        { method: 'GET' as const, url: `/app/instance/map?instanceId=${INSTANCE_ID}&shard=master` },
+        { method: 'POST' as const, url: '/app/instance/map/refresh', payload: { instanceId: INSTANCE_ID, shard: 'master' } },
+        { method: 'GET' as const, url: `/app/instance/map/image?instanceId=${INSTANCE_ID}&shard=master` },
+      ]) {
+        const response = await app.inject(request)
         const body = parseBody<unknown>(response.body)
-        assert.equal(body.status, 0, `${method} ${url} 未登录时应当被拒`)
+        assert.equal(body.status, 0, `${request.method} ${request.url} 未登录时应当被拒`)
       }
     })
   })
@@ -166,7 +179,8 @@ describe('map routes', () => {
         url: '/app/instance/map?instanceId=not-exist&shard=master',
         headers: { token },
       })
-      assertBusinessError(parseBody<unknown>(response.body), /实例不存在/)
+      // 未授权与不存在返回同一种错误，这是有意的：不泄露某个实例 ID 是否存在
+      assertBusinessError(parseBody<unknown>(response.body), /(实例不存在|没有该实例的访问权限)/)
     })
 
     it('参数非法时拒绝（分片名不在枚举内）', async () => {
@@ -297,7 +311,8 @@ describe('map routes', () => {
         url: `/app/instance/map/image?instanceId=not-exist&shard=master`,
         headers: { token },
       })
-      assertBusinessError(parseBody<unknown>(response.body), /实例不存在/)
+      // 同上：实例不存在与未授权在这个接口上统一返回"没有该实例的访问权限"
+      assertBusinessError(parseBody<unknown>(response.body), /(实例不存在|没有该实例的访问权限)/)
     })
   })
 

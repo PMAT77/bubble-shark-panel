@@ -11,7 +11,7 @@ import type { FastifyInstance } from 'fastify'
 import { migrationExportResultSchema } from '../../../../shared/contracts/backup'
 import { registerAuthModule } from '../auth/index'
 import { registerInstanceModule } from './index'
-import { closeDatabase, createGameInstance, initDatabase } from '../../shared/db/index'
+import { addUserInstanceGrants, closeDatabase, createGameInstance, findUserByAccount, initDatabase } from '../../shared/db/index'
 
 /**
  * 迁移包导出的路由层测试。
@@ -127,6 +127,16 @@ describe('migration export routes', () => {
     const body = parseBody<{ token: string }>(login.body)
     assert.equal(body.status, 1, `登录失败：${login.body}`)
     token = body.data.token
+
+    /**
+     * 实例级隔离生效后，接口按「可见实例」校验。这个测试直接造实例、跳过了创建接口
+     * （生产环境里创建者会在创建时自动获得授权），所以补上授权前置，
+     * 让它继续验证真正关心的东西。
+     */
+    const admin = await findUserByAccount('superadmin')
+    assert.ok(admin, '前置条件：管理员账号存在')
+    // FRESH_INSTANCE_ID 是"存在但还没开过服"的夹具：不授权就走不到业务分支
+    await addUserInstanceGrants(admin.id, [READY_INSTANCE_ID, FRESH_INSTANCE_ID], null)
   })
 
   after(async () => {
@@ -155,7 +165,8 @@ describe('migration export routes', () => {
     })
     const body = parseBody<unknown>(response.body)
     assert.equal(body.status, 1)
-    assert.match(body.error, /实例不存在/)
+    // 未授权与不存在返回同一种错误，这是有意的：不泄露某个实例 ID 是否存在
+    assert.match(body.error, /(实例不存在|没有该实例的访问权限)/)
   })
 
   it('还没开过服的实例被明确拒绝，且不会顺手创建集群目录', async () => {

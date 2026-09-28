@@ -357,3 +357,114 @@ export async function listAllInstanceIds(): Promise<string[]> {
   const rows = await drizzleDb.select({ id: gameInstances.id }).from(gameInstances)
   return rows.map(row => row.id)
 }
+
+/**
+ * 把权限点物化回最终生效表（`user_permissions`）。
+ *
+ * **这是唯一允许写 `user_permissions` 的地方。** 角色侧改权限、成员改角色，
+ * 都要调它把结果落下去——鉴权读的是这张表，角色配得再漂亮、物化没生效也等于没有。
+ * 先清后写：权限点被取消时必须真的消失，否则"收权"会静默失败。
+ */
+export async function replaceUserPermissions(userId: string, permissions: readonly string[]): Promise<void> {
+  const { drizzleDb } = ensureDb()
+  const now = nowIso()
+  await drizzleDb.delete(userPermissions).where(eq(userPermissions.userId, userId))
+  if (permissions.length > 0) {
+    await drizzleDb.insert(userPermissions).values(
+      permissions.map(permission => ({ userId, permission, createdAt: now })),
+    )
+  }
+}
+
+/** 某个角色下的全部成员 ID */
+export async function listUserIdsByRoleId(roleId: string): Promise<string[]> {
+  const { drizzleDb } = ensureDb()
+  const rows = await drizzleDb
+    .select({ userId: userRoles.userId })
+    .from(userRoles)
+    .where(eq(userRoles.roleId, roleId))
+  return rows.map(row => row.userId)
+}
+
+export async function createUserRecord(input: {
+  id: string
+  account: string
+  passwordHash: string
+  email: string
+  avatar: string
+  status: number
+  mustChangePassword: boolean
+}): Promise<void> {
+  const { drizzleDb } = ensureDb()
+  const now = nowIso()
+  await drizzleDb.insert(users).values({
+    id: input.id,
+    account: input.account,
+    passwordHash: input.passwordHash,
+    email: input.email,
+    avatar: input.avatar,
+    status: input.status,
+    mustChangePassword: input.mustChangePassword ? 1 : 0,
+    createdAt: now,
+    updatedAt: now,
+  })
+}
+
+export async function updateUserStatusById(userId: string, status: number): Promise<void> {
+  const { drizzleDb } = ensureDb()
+  await drizzleDb
+    .update(users)
+    .set({ status, updatedAt: nowIso() })
+    .where(eq(users.id, userId))
+}
+
+/** 管理员重置密码后强制对方下次登录改密（否则初始密码会变成长期凭据） */
+export async function updateUserMustChangePassword(userId: string, value: boolean): Promise<void> {
+  const { drizzleDb } = ensureDb()
+  await drizzleDb
+    .update(users)
+    .set({ mustChangePassword: value ? 1 : 0, updatedAt: nowIso() })
+    .where(eq(users.id, userId))
+}
+
+/** 账号是否已存在（建号前的唯一性检查） */
+export async function findUserIdByAccount(account: string): Promise<string | undefined> {
+  const { drizzleDb } = ensureDb()
+  const rows = await drizzleDb
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.account, account))
+    .limit(1)
+  return rows[0]?.id
+}
+
+/** 删账号：连同它的角色关联与实例授权一起清掉，避免留下指不到人的行 */
+export async function deleteUserCascade(userId: string): Promise<void> {
+  const { drizzleDb } = ensureDb()
+  await drizzleDb.delete(userRoles).where(eq(userRoles.userId, userId))
+  await drizzleDb.delete(instanceGrants).where(eq(instanceGrants.userId, userId))
+  await drizzleDb.delete(userPermissions).where(eq(userPermissions.userId, userId))
+  await drizzleDb.delete(users).where(eq(users.id, userId))
+}
+
+/** 某个角色下**启用中**且持有指定权限点的账号数（防锁死约束用） */
+export async function countActiveUsersWithRoleAndPermission(
+  roleId: string,
+  permission: string,
+): Promise<number> {
+  const memberIds = await listUserIdsByRoleId(roleId)
+  if (memberIds.length === 0) {
+    return 0
+  }
+  const { drizzleDb } = ensureDb()
+  const rows = await drizzleDb
+    .select({ id: users.id })
+    .from(users)
+    .innerJoin(userPermissions, eq(userPermissions.userId, users.id))
+    .where(and(
+      eq(users.status, 1),
+      eq(userPermissions.permission, permission),
+    ))
+  const memberSet = new Set(memberIds)
+  return rows.filter(row => memberSet.has(row.id)).length
+}

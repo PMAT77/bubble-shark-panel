@@ -30,7 +30,7 @@ import type {
 } from './types'
 
 export * from './types'
-export { closeDatabase, initDatabase, verifyPassword } from './connection'
+export { closeDatabase, hashPassword, initDatabase, verifyPassword } from './connection'
 export * from './instance-repository'
 export * from './rbac-repository'
 export * from './backup-repository'

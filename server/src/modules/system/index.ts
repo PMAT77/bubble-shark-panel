@@ -95,6 +95,7 @@ import type { PanelPortSyncResult } from './panel-port-deploy'
 import { registerDatabaseBackupRoutes } from './db-backup-routes'
 import { registerCommercialSupportRoutes } from './commercial'
 import { registerPluginRoutes } from './plugin-routes'
+import { registerRbacRoutes } from './rbac-routes'
 import { collectSelfCheckReport } from './self-check'
 import { createPluginRuntime } from '../../plugins/host'
 import type { PluginRuntime } from '../../plugins/host'
@@ -763,6 +764,8 @@ export function registerSystemModule(app: FastifyInstance) {
   // 在文档中给出，面板自身不做网关编排。
   registerDatabaseBackupRoutes(app)
   registerCommercialSupportRoutes(app)
+  // 成员与角色：和系统设置同属"面板怎么运行"，但权限点独立（member:*/role:*）
+  registerRbacRoutes(app)
   // 运行时对象在 onReady 里才创建，因此传一个读取函数而不是实例本身
   registerPluginRoutes(app, () => pluginRuntime)
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { RouteLocationRaw } from 'vue-router'
 import { FRONTEND_ROUTE_PATHS } from '../../shared/constants/frontend-routes.ts'
+import { isKnownPermission } from '../../shared/constants/permissions.ts'
 import { menuRouteList } from '../../server/src/shared/menu-routes.ts'
 import { ROUTE_NAMES } from '@/navigation/game-routes'
 import { HOME_CAPABILITIES } from './home-capabilities.ts'
@@ -24,7 +25,7 @@ import { HOME_CAPABILITIES } from './home-capabilities.ts'
  * （路由与页面都在，只是入口收起来了），所以留在这份名单里：等它恢复成主导航项时，
  * 主页要不要给它一张卡片是一个需要重新做决定的问题，不该被顺手跳过。
  */
-const ADMIN_ONLY_MODULES = new Set(['系统设置', '插件', '商业支持与 Pro'])
+const ADMIN_ONLY_MODULES = new Set(['系统设置', '插件', '商业支持与 Pro', '成员与角色'])
 
 /** 从菜单里取出「主页应该展示的任务顺序」：只保留面向日常使用的页面，跳过管理类 */
 function expectedHomeOrder(): string[] {
@@ -107,21 +108,15 @@ describe('首页核心能力卡片', () => {
     assert.deepEqual(unknown, [], `卡片路由名不在 ROUTE_NAMES 中：\n${unknown.join('\n')}`)
   })
 
-  it('需要权限的卡片都声明了权限点，且不是随便写的字符串', () => {
-    const validPermissions = new Set([
-      'pages.node.instance:manage',
-      'system:read',
-      'system:manage',
-      'ops:read',
-      'ops:manage',
-    ])
+  it('每张卡片都声明了权限点，且都在权限点清单里', () => {
     for (const card of HOME_CAPABILITIES) {
-      if (!card.permission) {
-        // 只有监控台这类"登录即可看"的页面可以不带权限
-        assert.equal(card.name, '监控台', `${card.name} 应当声明权限点，否则任何登录用户都能进`)
-        continue
-      }
-      assert.ok(validPermissions.has(card.permission), `${card.name} 的权限点未在已知清单里：${card.permission}`)
+      // 卡片是「点一下打开对应页面」的入口：缺权限点的卡片会让无权账号点进一个打不开的页面，
+      // 而首页此前正是靠这张卡片在替用户判断"我能不能进"——所以一张都不许留空。
+      assert.ok(card.permission, `${card.name} 应当声明权限点，否则任何登录用户都能进`)
+      assert.ok(
+        isKnownPermission(card.permission),
+        `${card.name} 的权限点未在 shared/constants/permissions.ts 的清单里：${card.permission}`,
+      )
     }
   })
 

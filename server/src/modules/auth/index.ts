@@ -23,7 +23,8 @@ import { resolveClientIp } from '../../shared/http/client-ip'
 import { createSessionTokens, findPermissionsByUserId, findUserByAccount, findUserByToken, revokeSession, rotateSessionByRefreshToken, updateUserPassword, userMustChangePassword, verifyPassword } from '../../shared/db/index'
 import { businessError, success, unauthorized } from '../../shared/http/response'
 import type { MenuRouteItem } from '../../shared/menu-routes'
-import { menuRouteList } from '../../shared/menu-routes'
+import { filterMenuRoutes, menuRouteList } from '../../shared/menu-routes'
+import { resolveAuthorizedContext } from '../system/auth'
 import {
   clearLoginGuardState,
   getBlockRemainingSeconds,
@@ -220,8 +221,22 @@ function clearPasswordChangeFailures(userId: string) {
  * 负责认证、登录态、密码管理等能力。
  */
 export function registerAuthModule(app: FastifyInstance) {
-  app.get('/app/route/list', async (request): Promise<ApiSuccessResponse<MenuRouteItem[]>> => {
-    return success(menuRouteList, request)
+  /**
+   * 菜单与路由定义（后端驱动，`routeBaseOn: 'backend'`）。
+   *
+   * **按登录账号的权限点过滤后再返回**：前端拿它生成路由，返回什么就注册什么，
+   * 所以这一步同时决定了「侧边栏有哪些入口」和「哪些页面连路由都不存在」。
+   * 此前它既不校验登录、也不做任何过滤，等于把整张功能地图（含每项需要的权限点）
+   * 交给匿名请求，而且让无权页面依然可达。
+   */
+  app.get('/app/route/list', async (request): Promise<ApiSuccessResponse<MenuRouteItem[]> | ApiErrorResponse> => {
+    const auth = await resolveAuthorizedContext(request)
+    if (auth.error || !auth.context) {
+      return auth.error ?? unauthorized(request)
+    }
+    // resolveAuthorizedContext 只在传了权限点时才去查权限表，这里需要完整集合，所以显式取一次
+    const permissions = await findPermissionsByUserId(auth.context.user.id)
+    return success(filterMenuRoutes(menuRouteList, new Set(permissions)), request)
   })
 
   app.post('/app/account/login', async (request): Promise<ApiSuccessResponse<LoginResponse> | ApiErrorResponse> => {

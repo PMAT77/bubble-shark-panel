@@ -60,7 +60,7 @@ export const PERMISSION_GROUPS = [
 
 export type PermissionGroup = typeof PERMISSION_GROUPS[number]
 
-export const PERMISSION_SPECS: readonly PermissionSpec[] = [
+export const PERMISSION_SPECS = [
   // ── 监控 ────────────────────────────────────────────────────────────────
   {
     key: 'console.monitor:read',
@@ -508,18 +508,29 @@ export const PERMISSION_SPECS: readonly PermissionSpec[] = [
     scope: 'global',
     summary: '新建、修改、删除角色与其权限点',
   },
-]
+] as const satisfies readonly PermissionSpec[]
+
+/**
+ * 全部权限点的**字面量联合**。
+ *
+ * 菜单的 `auth`、路由的权限点参数都用它约束：写错一个字母会被 `tsc` 拦住，
+ * 而不是等到运行时表现为「这个角色怎么点都进不去」。
+ * 它是从 `PERMISSION_SPECS` 推导的，不要手写——手写一定会和数组不同步。
+ */
+export type PermissionKey = typeof PERMISSION_SPECS[number]['key']
 
 /** 全部权限点字符串，顺序即展示顺序 */
-export const ALL_PERMISSIONS: readonly string[] = PERMISSION_SPECS.map(spec => spec.key)
+export const ALL_PERMISSIONS: readonly PermissionKey[] = PERMISSION_SPECS.map(spec => spec.key)
 
-const SPEC_BY_KEY = new Map(PERMISSION_SPECS.map(spec => [spec.key, spec]))
+const SPEC_BY_KEY: ReadonlyMap<string, PermissionSpec> = new Map(
+  PERMISSION_SPECS.map(spec => [spec.key as string, spec as PermissionSpec]),
+)
 
 export function findPermissionSpec(key: string): PermissionSpec | undefined {
   return SPEC_BY_KEY.get(key)
 }
 
-export function isKnownPermission(key: string): boolean {
+export function isKnownPermission(key: string): key is PermissionKey {
   return SPEC_BY_KEY.has(key)
 }
 
@@ -529,12 +540,12 @@ export function permissionLabel(key: string): string {
 }
 
 /** 只读权限点（全部 read）。「只读角色」用得上，也是游客角色的基线 */
-export const READ_ONLY_PERMISSIONS: readonly string[] = PERMISSION_SPECS
+export const READ_ONLY_PERMISSIONS: readonly PermissionKey[] = PERMISSION_SPECS
   .filter(spec => spec.action === 'read')
   .map(spec => spec.key)
 
 /** 需要实例授权的权限点 */
-export const INSTANCE_SCOPED_PERMISSIONS: readonly string[] = PERMISSION_SPECS
+export const INSTANCE_SCOPED_PERMISSIONS: readonly PermissionKey[] = PERMISSION_SPECS
   .filter(spec => spec.scope === 'instance')
   .map(spec => spec.key)
 

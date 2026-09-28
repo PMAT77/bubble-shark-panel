@@ -43,7 +43,7 @@ const multiPageModule = {
     path: '/node',
     component: 'Layout',
     redirect: FRONTEND_ROUTE_PATHS.nodeInstance,
-    meta: { title: '实例管理', auth: 'pages.node.instance:manage' },
+    meta: { title: '实例管理', auth: 'instance:read' },
     children: [{
       path: 'instance',
       name: 'nodeInstance',
@@ -59,7 +59,7 @@ const hiddenModule = {
   children: [{
     path: FRONTEND_ROUTE_PATHS.plugins,
     component: 'Layout',
-    meta: { title: '插件', auth: 'system:manage' },
+    meta: { title: '插件', auth: 'plugin:read' },
     children: [{ path: '', name: 'systemPlugins', component: 'system/plugins.vue', meta: { title: '插件' } }],
   }],
 } as unknown as RouteRecordMainRaw
@@ -112,7 +112,8 @@ describe('单页模块的布局容器', () => {
     const page = container.children![0]!
     assert.equal(page.path, '', '子页面用相对空路径挂载，解析结果仍是模块自身的绝对路径')
     assert.equal(page.component, 'system/settings.vue', '页面组件不能被换掉')
-    assert.equal(page.meta?.auth, 'system:manage', '页面的权限点必须原样保留')
+    // 权限点是数组（页内三个 tab 的权限不同），必须原样保留：丢了它就等于这一页对所有登录账号开放
+    assert.deepEqual(page.meta?.auth, ['settings:read', 'audit:read'], '页面的权限点必须原样保留')
     assert.equal(page.meta?.activeMenu, FRONTEND_ROUTE_PATHS.systemSettings, '侧栏高亮依赖 activeMenu')
 
     // 容器路径 + 空路径子路由 = `resolveRoutePath` 给出的这条路径，仍是原地址

@@ -9,7 +9,6 @@ import { drizzle } from 'drizzle-orm/sqlite-proxy'
 import { migrate } from 'drizzle-orm/sqlite-proxy/migrator'
 import type { AdminCredentialOutcome } from '../config/credentials-file'
 import { ALL_PERMISSIONS } from '../../../../shared/constants/permissions'
-import { OPS_MANAGE_PERMISSION, OPS_READ_PERMISSION, SYSTEM_MANAGE_PERMISSION, SYSTEM_READ_PERMISSION } from '../menu-routes'
 import type { RbacMigrationOutcome } from './rbac-migration'
 import {
   systemSettings,
@@ -45,40 +44,30 @@ interface DbDefaultUserSeed {
 }
 
 const AUTH_FORCE_PASSWORD_CHANGE_KEY = 'auth.force_password_change'
-const ADMIN_DEFAULT_PERMISSIONS = [
-  'pages.general:browse',
-  'pages.form:browse',
-  'pages.list:browse',
-  'pages.shop:browse',
-  'pages.node.instance:manage',
-  SYSTEM_READ_PERMISSION,
-  SYSTEM_MANAGE_PERMISSION,
-  OPS_READ_PERMISSION,
-  OPS_MANAGE_PERMISSION,
-]
+/**
+ * 管理员默认权限：全部细粒度权限点。
+ *
+ * 此前这里是 9 条「4 个母仓遗留示例页权限 + 5 个粗粒度权限点」。改完之后，
+ * `seedAdminUserFromEnv` 造出来的管理员直接就是新体系的用户，迁移函数按 `settings:write`
+ * 认出它是管理员并挂上「系统管理员」角色。
+ * 那 4 个 `pages.*` 是本项目没有对应页面的母仓遗留项，不再写入。
+ */
+const ADMIN_DEFAULT_PERMISSIONS: readonly string[] = [...ALL_PERMISSIONS]
 const defaultUserSeeds: DbDefaultUserSeed[] = [
   {
     account: 'superadmin',
     password: '123456',
     email: 'superadmin@game.com',
     avatar: 'https://api.dicebear.com/9.x/bottts-neutral/svg?seed=superadmin',
-    permissions: [
-      'pages.general:browse',
-      'pages.form:browse',
-      'pages.list:browse',
-      'pages.shop:browse',
-      'pages.node.instance:manage',
-      SYSTEM_READ_PERMISSION,
-      SYSTEM_MANAGE_PERMISSION,
-      OPS_READ_PERMISSION,
-      OPS_MANAGE_PERMISSION,
-    ],
+    permissions: [...ADMIN_DEFAULT_PERMISSIONS],
   },
   {
     account: 'test',
     password: '123456',
     email: 'test@game.com',
     avatar: 'https://api.dicebear.com/9.x/bottts-neutral/svg?seed=test',
+    // 故意只留一个母仓遗留权限点：它是「迁移必须把无效权限点清干净」的真实样本，
+    // 对应的断言在 rbac-migration.test.ts 的「只持有母仓遗留权限点的账号」一条
     permissions: ['pages.general:browse'],
   },
 ]

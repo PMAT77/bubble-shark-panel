@@ -1,5 +1,6 @@
 import type { RouteMetaRaw } from '../../../packages/types/types'
 import { FRONTEND_ROUTE_PATHS } from '../../../shared/constants/frontend-routes'
+import type { PermissionKey } from '../../../shared/constants/permissions'
 import {
   NODE_INSTANCE_MANAGE_PERMISSION,
   OPS_MANAGE_PERMISSION,
@@ -8,9 +9,57 @@ import {
   SYSTEM_READ_PERMISSION,
 } from '../../../shared/constants/permissions'
 
-/** 与前端 `vue-router` RouteMeta（RouteMetaRaw）对齐 */
-export type MenuRouteMeta = RouteMetaRaw & {
+/**
+ * 与前端 `vue-router` RouteMeta（RouteMetaRaw）对齐。
+ *
+ * `auth` 被收窄成 `PermissionKey`（权限点清单里的字面量联合）：菜单是权限体系的第二个消费方
+ * （第一个是路由鉴权），写错一个字符就会让「这个角色怎么点都进不去」，而这类错误在运行时
+ * 只表现为菜单少一项——所以让 `tsc` 在第一道就拦住它。
+ * 数组是 `some` 语义（任一满足即显示），用于「成员与角色」这类两个页面权限不同的模块。
+ */
+export type MenuRouteMeta = Omit<RouteMetaRaw, 'auth'> & {
   title: string
+  auth?: PermissionKey | PermissionKey[]
+}
+
+/**
+ * 按权限点过滤菜单。
+ *
+ * 为什么这一步是「直接输地址也进不去」的关键：本项目 `routeBaseOn: 'backend'`
+ * （`src/settings.ts`），前端路由**完全由这份菜单生成**——被过滤掉的页面根本不会注册路由，
+ * 用户手工输地址只会落到 404 分支。这比「路由注册了但页面靠前端守卫拦」更硬：
+ * 后者只要守卫漏一个分支就破功。
+ *
+ * 过滤规则：
+ * - 单项的 `auth` 不满足 → 整项去掉（含它的子树）；
+ * - 有子项的模块 → 子项过滤后一个不剩，模块本身也去掉（否则侧边栏会留一个点不开的空壳）；
+ * - `auth` 数组是 some 语义，与前端 `useAppAuth().auth()` 保持一致。
+ */
+export function filterMenuRoutes(items: MenuRouteItem[], granted: ReadonlySet<string>): MenuRouteItem[] {
+  const satisfied = (auth: MenuRouteMeta['auth']): boolean => {
+    if (!auth) {
+      return true
+    }
+    const keys = Array.isArray(auth) ? auth : [auth]
+    return keys.length === 0 || keys.some(key => granted.has(key))
+  }
+
+  const result: MenuRouteItem[] = []
+  for (const item of items) {
+    if (!satisfied(item.meta.auth)) {
+      continue
+    }
+    if (!item.children || item.children.length === 0) {
+      result.push(item)
+      continue
+    }
+    const children = filterMenuRoutes(item.children, granted)
+    if (children.length === 0) {
+      continue
+    }
+    result.push({ ...item, children })
+  }
+  return result
 }
 
 export interface MenuRouteItem {
@@ -59,6 +108,7 @@ export const menuRouteList: MenuRouteItem[] = [
     meta: {
       title: '监控台',
       icon: 'ri:pulse-line',
+      auth: 'console.monitor:read',
     },
     children: [
       {
@@ -69,6 +119,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '监控台',
           icon: 'ri:pulse-line',
+          auth: 'console.monitor:read',
         },
         children: [
           {
@@ -78,6 +129,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '监控台',
               icon: 'ri:pulse-line',
+              auth: 'console.monitor:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.consoleMonitor,
@@ -102,7 +154,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '实例管理',
           icon: 'ri:stack-line',
-          auth: NODE_INSTANCE_MANAGE_PERMISSION,
+          auth: 'instance:read',
         },
         children: [
           {
@@ -112,7 +164,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '实例管理',
               icon: 'ri:stack-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'instance:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.nodeInstance,
@@ -125,7 +177,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '实例详情',
               icon: 'ri:stack-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'instance:read',
               activeMenu: FRONTEND_ROUTE_PATHS.nodeInstance,
               menu: false,
               keepAlive: true,
@@ -138,7 +190,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '实例控制台',
               icon: 'ri:terminal-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'instance.console:read',
               activeMenu: FRONTEND_ROUTE_PATHS.nodeInstance,
               menu: false,
               keepAlive: true,
@@ -161,7 +213,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '房间管理',
           icon: 'ri:home-wifi-line',
-          auth: NODE_INSTANCE_MANAGE_PERMISSION,
+          auth: 'room:read',
         },
         children: [
           {
@@ -171,7 +223,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '房间管理',
               icon: 'ri:home-wifi-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'room:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.dstRooms,
@@ -184,7 +236,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '房间设置',
               icon: 'ri:settings-3-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'room:read',
               activeMenu: FRONTEND_ROUTE_PATHS.dstRooms,
               menu: false,
             },
@@ -206,7 +258,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '世界管理',
           icon: 'ri:earth-line',
-          auth: NODE_INSTANCE_MANAGE_PERMISSION,
+          auth: 'world:read',
         },
         children: [
           {
@@ -216,7 +268,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '世界管理',
               icon: 'ri:earth-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'world:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.dstWorlds,
@@ -229,7 +281,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '世界设置',
               icon: 'ri:landscape-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'world:read',
               activeMenu: FRONTEND_ROUTE_PATHS.dstWorlds,
               menu: false,
             },
@@ -251,7 +303,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '玩家管理',
           icon: 'ri:user-star-line',
-          auth: NODE_INSTANCE_MANAGE_PERMISSION,
+          auth: 'player:read',
         },
         children: [
           {
@@ -261,7 +313,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '玩家管理',
               icon: 'ri:user-star-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'player:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.dstPlayers,
@@ -275,7 +327,7 @@ export const menuRouteList: MenuRouteItem[] = [
               // 与列表页「玩家管理」区分开：面包屑与标签页才不会出现两个同名层级
               title: '房间玩家',
               icon: 'ri:user-settings-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'player:read',
               activeMenu: FRONTEND_ROUTE_PATHS.dstPlayers,
               menu: false,
             },
@@ -297,7 +349,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '模组管理',
           icon: 'ri:puzzle-line',
-          auth: NODE_INSTANCE_MANAGE_PERMISSION,
+          auth: 'mod:read',
         },
         children: [
           {
@@ -307,7 +359,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '模组管理',
               icon: 'ri:puzzle-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'mod:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.dstMods,
@@ -320,7 +372,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: 'Mod 详情',
               icon: 'ri:puzzle-line',
-              auth: NODE_INSTANCE_MANAGE_PERMISSION,
+              auth: 'mod:read',
               activeMenu: FRONTEND_ROUTE_PATHS.dstMods,
               menu: false,
             },
@@ -343,7 +395,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '备份与恢复',
           icon: 'ri:archive-line',
-          auth: OPS_READ_PERMISSION,
+          auth: 'backup:read',
         },
         children: [
           {
@@ -353,7 +405,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '备份与恢复',
               icon: 'ri:archive-line',
-              auth: OPS_READ_PERMISSION,
+              auth: 'backup:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.opsBackups,
@@ -378,7 +430,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '计划任务',
           icon: 'ri:timer-line',
-          auth: OPS_READ_PERMISSION,
+          auth: 'schedule:read',
         },
         children: [
           {
@@ -388,7 +440,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '计划任务',
               icon: 'ri:timer-line',
-              auth: OPS_READ_PERMISSION,
+              auth: 'schedule:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.opsSchedules,
@@ -425,7 +477,7 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '插件',
           icon: 'ri:plug-line',
-          auth: SYSTEM_MANAGE_PERMISSION,
+          auth: 'plugin:read',
         },
         children: [
           {
@@ -435,7 +487,7 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '插件',
               icon: 'ri:plug-line',
-              auth: SYSTEM_MANAGE_PERMISSION,
+              auth: 'plugin:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.plugins,
@@ -459,9 +511,9 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '商业支持与 Pro',
           icon: 'ri:shield-star-line',
-          // 授权状态与人工服务说明本身是只读信息，与详情接口的 system:read 对齐：
+          // 授权状态与人工服务说明本身是只读信息，与详情接口的 license:read 对齐：
           // 有只读权限的账号也该看得到「我买的授权还有多久到期」
-          auth: SYSTEM_READ_PERMISSION,
+          auth: 'license:read',
         },
         children: [
           {
@@ -471,10 +523,59 @@ export const menuRouteList: MenuRouteItem[] = [
             meta: {
               title: '商业支持与 Pro',
               icon: 'ri:shield-star-line',
-              auth: SYSTEM_READ_PERMISSION,
+              auth: 'license:read',
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.commercial,
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    meta: {
+      title: '成员与角色',
+      icon: 'ri:team-line',
+    },
+    children: [
+      {
+        path: FRONTEND_ROUTE_PATHS.members,
+        component: 'Layout',
+        name: 'members',
+        redirect: FRONTEND_ROUTE_PATHS.membersList,
+        meta: {
+          title: '成员与角色',
+          icon: 'ri:team-line',
+          // 数组是 some 语义：只给「角色管理」权限的账号也该看到这个模块入口，
+          // 否则它只能靠直接输地址到达角色页——那是个没有入口的死页面。
+          auth: ['member:read', 'role:read'],
+        },
+        children: [
+          {
+            path: 'list',
+            name: 'membersList',
+            component: 'system/members.vue',
+            meta: {
+              title: '成员管理',
+              icon: 'ri:user-settings-line',
+              auth: 'member:read',
+              menu: false,
+              breadcrumb: false,
+              activeMenu: FRONTEND_ROUTE_PATHS.membersList,
+            },
+          },
+          {
+            path: 'roles',
+            name: 'membersRoles',
+            component: 'system/roles.vue',
+            meta: {
+              title: '角色管理',
+              icon: 'ri:shield-user-line',
+              auth: 'role:read',
+              menu: false,
+              breadcrumb: false,
+              activeMenu: FRONTEND_ROUTE_PATHS.roles,
             },
           },
         ],
@@ -497,7 +598,9 @@ export const menuRouteList: MenuRouteItem[] = [
         meta: {
           title: '系统设置',
           icon: 'ri:settings-3-line',
-          auth: SYSTEM_MANAGE_PERMISSION,
+          // 这一页含三个 tab（面板设置 / 通知渠道 / 操作记录），权限要求不同：
+          // 只给「操作记录」权限的账号也该进得来，页内 tab 再按各自的权限点隐藏。
+          auth: ['settings:read', 'audit:read'],
           breadcrumb: false,
           activeMenu: FRONTEND_ROUTE_PATHS.systemSettings,
           // 单页模块的页面在菜单里保持隐藏：容器已经没有了，若让它可见，

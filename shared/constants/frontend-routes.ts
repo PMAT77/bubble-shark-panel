@@ -18,4 +18,8 @@ export const FRONTEND_ROUTE_PATHS = {
   plugins: '/plugins',
   /** 「商业支持与 Pro」主导航模块 */
   commercial: '/commercial',
+  /** 「成员与角色」主导航模块下的两个页面 */
+  members: '/members',
+  membersList: '/members/list',
+  roles: '/members/roles',
 } as const

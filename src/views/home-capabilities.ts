@@ -1,8 +1,5 @@
 import type { RouteLocationRaw } from 'vue-router'
-import {
-  NODE_INSTANCE_MANAGE_PERMISSION,
-  OPS_READ_PERMISSION,
-} from '../../shared/constants/permissions'
+import type { PermissionKey } from '../../shared/constants/permissions'
 import {
   routeToConsoleMonitor,
   routeToDstModList,
@@ -33,8 +30,8 @@ export interface CapabilityCard {
   name: string
   tagline: string
   route: RouteLocationRaw
-  /** 访问该页面需要的权限点；留空表示登录即可 */
-  permission?: string
+  /** 访问该页面需要的权限点，与菜单里该页面的 `auth` 一致；无权时卡片置灰并说明原因 */
+  permission: PermissionKey
   features: string[]
 }
 
@@ -43,6 +40,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     name: '监控台',
     tagline: '机器负载一目了然，不用登录服务器查',
     route: routeToConsoleMonitor(),
+    permission: 'console.monitor:read',
     features: [
       'CPU、内存、磁盘占用',
       '游戏服务运行状态',
@@ -54,7 +52,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     name: '实例管理',
     tagline: '从开服到日常管理，一个页面搞定',
     route: routeToNodeInstance(),
-    permission: NODE_INSTANCE_MANAGE_PERMISSION,
+    permission: 'instance:read',
     features: [
       '一键安装与更新游戏服务端',
       '创建、启动、停止实例，随时看运行状态',
@@ -67,7 +65,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     name: '房间管理',
     tagline: '房间参数在这里配，改完不用登服务器',
     route: routeToDstRoomList(),
-    permission: NODE_INSTANCE_MANAGE_PERMISSION,
+    permission: 'room:read',
     features: [
       '房间名称、密码与联网方式',
       '玩家人数上限与游戏模式',
@@ -79,7 +77,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     name: '世界管理',
     tagline: '可视化编辑地上与洞穴世界',
     route: routeToDstWorldList(),
-    permission: NODE_INSTANCE_MANAGE_PERMISSION,
+    permission: 'world:read',
     features: [
       '地上与洞穴两个世界分别配置',
       '地图与规则可视化调整',
@@ -91,7 +89,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     name: '玩家管理',
     tagline: '名单、在线玩家与踢人封禁，一个页面办完',
     route: routeToDstPlayerList(),
-    permission: NODE_INSTANCE_MANAGE_PERMISSION,
+    permission: 'player:read',
     features: [
       '管理员、白名单、黑名单按游戏名维护',
       '查看地上与洞穴的在线玩家',
@@ -103,7 +101,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     name: '模组管理',
     tagline: '工坊 Mod 在线订阅，不用手改配置',
     route: routeToDstModList(),
-    permission: NODE_INSTANCE_MANAGE_PERMISSION,
+    permission: 'mod:read',
     features: [
       '创意工坊搜索与订阅',
       '启用、停用与加载顺序调整',
@@ -115,7 +113,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     name: '备份与恢复',
     tagline: '存档随时能找回',
     route: routeToOpsBackups(),
-    permission: OPS_READ_PERMISSION,
+    permission: 'backup:read',
     features: [
       '存档一键备份与恢复',
       '更新、删除、回档前自动备份',
@@ -127,7 +125,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     name: '计划任务',
     tagline: '定时重启、备份与更新检查，不用守着点',
     route: routeToOpsSchedules(),
-    permission: OPS_READ_PERMISSION,
+    permission: 'schedule:read',
     features: [
       '定时重启、定时备份',
       '定时检查服务端更新',

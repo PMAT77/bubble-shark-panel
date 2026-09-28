@@ -4,11 +4,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import { FRONTEND_ROUTE_PATHS } from '../../../shared/constants/frontend-routes'
-import {
-  menuRouteList,
-  SYSTEM_MANAGE_PERMISSION,
-  SYSTEM_READ_PERMISSION,
-} from './menu-routes'
+import { ALL_PERMISSIONS, isKnownPermission } from '../../../shared/constants/permissions'
+import { filterMenuRoutes, menuRouteList } from './menu-routes'
 import type { MenuRouteItem } from './menu-routes'
 
 /**
@@ -61,6 +58,41 @@ function collectPages(): MenuRouteItem[] {
 }
 
 describe('菜单与路由一致性', () => {
+  /**
+   * 权限体系的两条结构性护栏。
+   *
+   * 本项目的鉴权是**逐路由手写**的，没有任何全局兜底：忘写权限点即默认公开。
+   * 菜单侧同样是手写的，所以这里用测试补上门禁——新增页面时若忘了声明权限点，
+   * 或写了一个清单里没有的权限点，测试立刻失败，而不是等到某个账号登录后
+   * 发现「他居然能进这一页」。
+   */
+  it('每个业务页面都声明了权限点，没有「登录即可访问」的页面', () => {
+    const missing = collectPages()
+      .filter(item => !item.meta.auth)
+      .map(item => item.meta.title)
+    assert.deepEqual(
+      missing,
+      [],
+      `这些页面没有声明 auth，任何登录账号都能访问：${missing.join('、')}`,
+    )
+  })
+
+  it('菜单里每一处 auth 都是权限点清单里的权限点', () => {
+    const unknown: string[] = []
+    for (const item of flatten(menuRouteList)) {
+      const auth = item.meta.auth
+      if (!auth) {
+        continue
+      }
+      for (const key of Array.isArray(auth) ? auth : [auth]) {
+        if (!isKnownPermission(key)) {
+          unknown.push(`${item.meta.title} → ${key}`)
+        }
+      }
+    }
+    assert.deepEqual(unknown, [], `这些菜单项的权限点不在 shared/constants/permissions.ts 的清单里：\n${unknown.join('\n')}`)
+  })
+
   it('每个菜单页面组件都真实存在', () => {
     const missing: string[] = []
     for (const { component, title } of collectViewComponents(menuRouteList)) {
@@ -184,10 +216,12 @@ describe('菜单与路由一致性', () => {
       false,
       '单页模块的页面必须保持 menu: false，否则二级导航会画出第二个「系统设置」',
     )
-    assert.equal(
+    // 这一页含三个 tab（面板设置 / 通知渠道 / 操作记录）：数组是 some 语义，
+    // 只给「操作记录」权限的账号也应当进得来，页内 tab 再各自按权限隐藏
+    assert.deepEqual(
       entries[0]!.meta.auth,
-      SYSTEM_MANAGE_PERMISSION,
-      '系统设置承载端口、更新与自检，应当是管理权限',
+      ['settings:read', 'audit:read'],
+      '系统设置承载端口、更新与自检，应当是只读即可进入；操作记录另有独立权限点',
     )
     assert.equal(
       entries[0]!.meta.activeMenu,
@@ -226,12 +260,12 @@ describe('菜单与路由一致性', () => {
     const pages = collectPages()
     const plugins = pages.find(item => item.meta.title === '插件')
     assert.ok(plugins, '应当存在「插件」页面')
-    assert.equal(plugins.meta.auth, SYSTEM_MANAGE_PERMISSION, '启停插件是管理动作，应当是管理权限')
+    assert.equal(plugins.meta.auth, 'plugin:read', '插件列表是只读信息；启停与导入另有 plugin:manage')
 
     const commercial = pages.find(item => item.meta.title === '商业支持与 Pro')
     assert.ok(commercial, '应当存在「商业支持与 Pro」页面')
-    // 详情接口只要 system:read，菜单若要求管理权限，只读账号就会看不到自己的授权状态
-    assert.equal(commercial.meta.auth, SYSTEM_READ_PERMISSION, '授权状态是只读信息，应当是只读权限')
+    // 详情接口只要 license:read，菜单若要求管理权限，只读账号就会看不到自己的授权状态
+    assert.equal(commercial.meta.auth, 'license:read', '授权状态是只读信息，应当是只读权限')
   })
 
   it('独立模块的路由路径与前端常量一致', () => {
@@ -244,5 +278,76 @@ describe('菜单与路由一致性', () => {
     assert.equal(FRONTEND_ROUTE_PATHS.commercial, '/commercial')
     // 旧路径仍在常量表里：前端静态重定向拿它把 /system/notify 引到设置页的通知渠道 tab
     assert.equal(FRONTEND_ROUTE_PATHS.systemNotify, '/system/notify')
+  })
+})
+
+describe('按权限过滤菜单', () => {
+  /** 收集过滤结果里所有页面的标题（不含 Layout 容器） */
+  function visiblePageTitles(items: MenuRouteItem[]): string[] {
+    return flatten(items)
+      .filter(item => item.component && item.component !== 'Layout')
+      .map(item => item.meta.title)
+  }
+
+  function moduleTitles(items: MenuRouteItem[]): string[] {
+    return items.map(item => item.meta.title)
+  }
+
+  it('权限齐全时原样返回，一个模块都不少', () => {
+    const filtered = filterMenuRoutes(menuRouteList, new Set(ALL_PERMISSIONS))
+    assert.deepEqual(
+      moduleTitles(filtered),
+      moduleTitles(menuRouteList),
+      '管理员视角下菜单应当与定义完全一致',
+    )
+    assert.deepEqual(visiblePageTitles(filtered), visiblePageTitles(menuRouteList))
+  })
+
+  it('没有任何权限时，一个模块都不返回', () => {
+    // 关键性质：模块的入口也有权限点，所以无权账号拿到的是空菜单，
+    // 前端据此连路由都不会注册（routeBaseOn: 'backend'）
+    assert.deepEqual(filterMenuRoutes(menuRouteList, new Set()), [])
+  })
+
+  it('只给房间权限时，只剩房间管理模块', () => {
+    const filtered = filterMenuRoutes(menuRouteList, new Set(['room:read']))
+    assert.deepEqual(moduleTitles(filtered), ['房间管理'])
+    assert.deepEqual(visiblePageTitles(filtered), ['房间管理', '房间设置'])
+  })
+
+  it('模块入口的权限是数组时按 some 判定：只给操作记录权限也能进系统设置', () => {
+    const filtered = filterMenuRoutes(menuRouteList, new Set(['audit:read']))
+    assert.deepEqual(
+      moduleTitles(filtered),
+      ['系统设置'],
+      'audit:read 单独存在时系统设置模块必须可见，否则只有操作记录权限的账号无处可去',
+    )
+  })
+
+  it('子页面的权限互不相同时，只出现该账号真正能进的那一页', () => {
+    const filtered = filterMenuRoutes(menuRouteList, new Set(['member:read']))
+    const titles = visiblePageTitles(filtered)
+    assert.ok(titles.includes('成员管理'), '有 member:read 就应当看到成员管理')
+    assert.equal(titles.includes('角色管理'), false, '没有 role:read 就不该出现角色管理')
+    assert.equal(
+      moduleTitles(filtered).includes('成员与角色'),
+      true,
+      '模块入口是 some 语义，任一子页面可见时模块就要在',
+    )
+  })
+
+  it('过滤结果里每一个页面的权限点都被满足（不变式）', () => {
+    const granted = new Set(['room:read', 'backup:read'])
+    for (const item of flatten(filterMenuRoutes(menuRouteList, granted))) {
+      const auth = item.meta.auth
+      if (!auth) {
+        continue
+      }
+      const keys = Array.isArray(auth) ? auth : [auth]
+      assert.ok(
+        keys.some(key => granted.has(key)),
+        `${item.meta.title} 的权限点 ${keys.join('/')} 都不在授予集合里，但它出现在过滤结果中`,
+      )
+    }
   })
 })

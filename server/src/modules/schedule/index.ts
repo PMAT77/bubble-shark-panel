@@ -11,7 +11,7 @@ import {
   scheduleTaskIdRequestSchema,
   scheduleUpdateRequestSchema,
 } from '../../../../shared/contracts/schedule'
-import { OPS_MANAGE_PERMISSION, OPS_READ_PERMISSION } from '../../shared/menu-routes'
+import type { PermissionKey } from '../../../../shared/constants/permissions'
 import {
   countEnabledTasksByKind,
   createScheduleTask,
@@ -24,7 +24,7 @@ import {
 } from '../../shared/db/index'
 import type { DbScheduledTask } from '../../shared/db/index'
 import { businessError, success } from '../../shared/http/response'
-import { resolveAuthorizedContext } from '../system/auth'
+import { authorizeInstance, requirePermission, resolveAuthorizedContext, resolveInstanceScope } from '../system/auth'
 import { DB_BACKUP_INSTANCE_ID } from '../system/db-snapshot-service'
 import { computeNextRunAtIso, describeSchedule } from './next-run'
 import { executeScheduleAction } from './schedule-actions'
@@ -52,12 +52,37 @@ interface ScheduleAuth {
   operatorAccount: string
 }
 
-async function authorize(request: FastifyRequest): Promise<ScheduleAuth> {
-  const auth = await resolveAuthorizedContext(request, { permissions: OPS_MANAGE_PERMISSION })
+async function authorize(
+  request: FastifyRequest,
+  permission: PermissionKey = 'schedule:write',
+): Promise<ScheduleAuth> {
+  const auth = await resolveAuthorizedContext(request, { permissions: permission })
   if (auth.error || !auth.context) {
     return { error: auth.error ?? businessError('登录状态失效，请重新登录', request), operatorAccount: '' }
   }
   return { operatorAccount: auth.context.user.account }
+}
+
+/**
+ * 计划任务的实例归属校验。
+ *
+ * 计划任务分两种归属：绑定某个实例的（重启/备份/更新检查），以及**面板全局**的
+ * 数据库快照——后者用哨兵实例 id 存在同一个表里，不属于任何实例，因此跳过实例授权，
+ * 只要求 `schedule:write` 权限点。
+ *
+ * 三种调用形态都要过这里：create 用请求体里的实例 id；update / delete / run-now
+ * 用**任务自身**的实例 id（先查任务再校验——只凭 taskId 执行是原先的越权缺口）。
+ */
+async function authorizeTaskInstance(
+  request: FastifyRequest,
+  instanceId: string,
+  permission: PermissionKey = 'schedule:write',
+): Promise<ApiErrorResponse | undefined> {
+  if (instanceId === DB_BACKUP_INSTANCE_ID) {
+    return requirePermission(request, permission)
+  }
+  const authorized = await authorizeInstance(request, instanceId, permission)
+  return authorized.error
 }
 
 /**
@@ -66,16 +91,23 @@ async function authorize(request: FastifyRequest): Promise<ScheduleAuth> {
  */
 export function registerScheduleModule(app: FastifyInstance) {
   app.post('/app/schedule/list', async (request): Promise<ApiSuccessResponse<ScheduleTaskItem[]> | ApiErrorResponse> => {
-    const auth = await resolveAuthorizedContext(request, { permissions: OPS_READ_PERMISSION })
-    if (auth.error || !auth.context) {
-      return auth.error ?? businessError('登录状态失效，请重新登录', request)
+    const scope = await resolveInstanceScope(request, 'schedule:read')
+    if (scope.error || !scope.instanceIds) {
+      return scope.error ?? businessError('无法确定可见实例范围', request)
     }
     const body = scheduleListRequestSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const tasks = await listScheduleTasks(body.data.instanceId)
-    return success(tasks.map(toTaskItem), request)
+    // 数据库快照任务不属于任何实例（哨兵 id），不参与实例范围过滤
+    const visible = new Set(scope.instanceIds)
+    return success(
+      tasks
+        .filter(task => task.instanceId === DB_BACKUP_INSTANCE_ID || visible.has(task.instanceId))
+        .map(toTaskItem),
+      request,
+    )
   })
 
   app.post('/app/schedule/create', async (request): Promise<ApiSuccessResponse<ScheduleMutationResult> | ApiErrorResponse> => {
@@ -100,6 +132,10 @@ export function registerScheduleModule(app: FastifyInstance) {
     else {
       if (instanceId === DB_BACKUP_INSTANCE_ID) {
         return businessError('该任务类型必须绑定具体实例', request)
+      }
+      const authorized = await authorizeTaskInstance(request, instanceId)
+      if (authorized) {
+        return authorized
       }
       const instance = await getGameInstanceById(instanceId)
       if (!instance) {
@@ -140,6 +176,12 @@ export function registerScheduleModule(app: FastifyInstance) {
     if (!task) {
       return businessError('计划任务不存在', request)
     }
+    // 先查任务、再按**它自己的实例归属**校验：此前只凭 taskId 就改，
+    // 等于任何持有该权限点的账号都能改别的实例的定时重启
+    const authorized = await authorizeTaskInstance(request, task.instanceId)
+    if (authorized) {
+      return authorized
+    }
 
     const finalType = body.data.scheduleType ?? task.scheduleType
     const finalValue = body.data.scheduleValue ?? task.scheduleValue
@@ -174,6 +216,14 @@ export function registerScheduleModule(app: FastifyInstance) {
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
+    const target = await getScheduleTaskById(body.data.taskId)
+    if (!target) {
+      return businessError('计划任务不存在', request)
+    }
+    const authorized = await authorizeTaskInstance(request, target.instanceId)
+    if (authorized) {
+      return authorized
+    }
     const removed = await deleteScheduleTask(body.data.taskId)
     if (!removed) {
       return businessError('计划任务不存在', request)
@@ -193,6 +243,11 @@ export function registerScheduleModule(app: FastifyInstance) {
     const task = await getScheduleTaskById(body.data.taskId)
     if (!task) {
       return businessError('计划任务不存在', request)
+    }
+    // 手动触发会真的跑一次动作（重启世界、建备份），所以同样按任务的实例归属校验
+    const authorized = await authorizeTaskInstance(request, task.instanceId)
+    if (authorized) {
+      return authorized
     }
     if (!task.enabled) {
       return businessError('任务已停用，请先启用再执行', request)

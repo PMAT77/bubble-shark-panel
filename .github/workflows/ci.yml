@@ -64,6 +64,12 @@ jobs:
       - name: Page transition guard
         run: pnpm run check:transition
 
+      # 路由鉴权护栏：本项目鉴权逐路由手写、没有全局兜底，漏写一条就是匿名接口。
+      # RBAC 改造时它抓到过四条路由被误删鉴权（补丁脚本的解构 bug），
+      # 那种错误肉眼几乎看不出来，只有这类机械检查拦得住。
+      - name: Route permission guard
+        run: pnpm run check:routes
+
       - name: Unit tests
         env:
           GSH_UNIT_TEST: '1'

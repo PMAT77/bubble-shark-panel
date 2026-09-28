@@ -38,12 +38,13 @@
     "check:presets": "node scripts/check-panel-env-presets.mjs",
     "check:installer": "node scripts/check-installer-smoke.mjs",
     "check:transition": "node scripts/check-page-transition.mjs",
+    "check:routes": "node scripts/check-route-permissions.mjs",
     "test:server": "node scripts/run-server-tests.mjs",
     "test:unit": "node scripts/run-unit-tests.mjs",
     "test:map-smoke": "tsx server/scripts/map-http-smoke.ts",
     "release:verify": "node scripts/check-release-consistency.mjs",
     "docs:check": "node scripts/check-docs.mjs",
-    "release:check": "pnpm run release:verify && pnpm run docs:check && pnpm run check:gsh && pnpm run check:presets && pnpm run lint && pnpm run lint:ox && pnpm run lint:copy && pnpm run check:transition && pnpm test:unit && pnpm run check:installer && pnpm run build"
+    "release:check": "pnpm run release:verify && pnpm run docs:check && pnpm run check:gsh && pnpm run check:presets && pnpm run lint && pnpm run lint:ox && pnpm run lint:copy && pnpm run check:transition && pnpm run check:routes && pnpm test:unit && pnpm run check:installer && pnpm run build"
   },
   "dependencies": {
     "@fantastic-admin/components": "workspace:*",

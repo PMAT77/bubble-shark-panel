@@ -795,6 +795,10 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (!id) {
       return businessError('实例 ID 不能为空', request)
     }
+    const authorized = await authorizeInstance(request, id, 'instance:update')
+    if (authorized.error) {
+      return authorized.error
+    }
     const runtimeError = await requireContainerRuntime(request)
     if (runtimeError) {
       return runtimeError
@@ -937,6 +941,10 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     const id = body.data.id
     if (!id) {
       return businessError('实例 ID 不能为空', request)
+    }
+    const authorized = await authorizeInstance(request, id, 'instance:ports')
+    if (authorized.error) {
+      return authorized.error
     }
     const current = await getGameInstanceById(id)
     if (!current) {
@@ -1228,6 +1236,10 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (!id) {
       return businessError('实例 ID 不能为空', request)
     }
+    const authorized = await authorizeInstance(request, id, 'instance:lifecycle')
+    if (authorized.error) {
+      return authorized.error
+    }
     const current = await getGameInstanceById(id)
     if (!current) {
       return businessError('实例不存在', request)
@@ -1401,6 +1413,10 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     const id = body.data.id
     if (!id) {
       return businessError('实例 ID 不能为空', request)
+    }
+    const authorized = await authorizeInstance(request, id, 'instance:delete')
+    if (authorized.error) {
+      return authorized.error
     }
     const current = await getGameInstanceById(id)
     if (!current) {

@@ -64,6 +64,19 @@ export async function bootstrap() {
     onAdminCredentialOutcome: (outcome) => {
       adminCredentialOutcome = outcome
     },
+    onRbacMigrationOutcome: (outcome) => {
+      // 只在真正跑过迁移的那一次启动里打印：老账号被映射成什么角色、补了多少条实例授权，
+      // 都写进日志，便于升级后排查「为什么这个账号看不到菜单」。
+      app.log.info(
+        `权限体系迁移完成：新建角色 ${outcome.rolesCreated} 个（${outcome.guestRoleCreated ? '含内置游客角色' : '未新建游客角色'}），`
+        + `为 ${outcome.usersAssigned} 个账号分配了角色，补充实例授权 ${outcome.grantsCreated} 条`,
+      )
+      if (outcome.usersWithoutPermission.length > 0) {
+        app.log.warn(
+          `以下账号在迁移后没有任何权限点，登录后看不到菜单（如果本来就不需要它们登录，可忽略；否则请在「成员与角色」里分配角色）：${outcome.usersWithoutPermission.join('、')}`,
+        )
+      }
+    },
   })
   if (config.adminPasswordGenerated) {
     if (shouldWriteAdminCredentialsFile(adminCredentialOutcome)) {

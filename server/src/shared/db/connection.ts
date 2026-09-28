@@ -8,7 +8,9 @@ import { readMigrationFiles } from 'drizzle-orm/migrator'
 import { drizzle } from 'drizzle-orm/sqlite-proxy'
 import { migrate } from 'drizzle-orm/sqlite-proxy/migrator'
 import type { AdminCredentialOutcome } from '../config/credentials-file'
+import { ALL_PERMISSIONS } from '../../../../shared/constants/permissions'
 import { OPS_MANAGE_PERMISSION, OPS_READ_PERMISSION, SYSTEM_MANAGE_PERMISSION, SYSTEM_READ_PERMISSION } from '../menu-routes'
+import type { RbacMigrationOutcome } from './rbac-migration'
 import {
   systemSettings,
   userPermissions,
@@ -25,6 +27,8 @@ interface InitDatabaseOptions {
   seedDevelopmentUsers?: boolean
   /** 管理员凭证落库结果回调；调用方据此决定是否落盘初始凭据文件 */
   onAdminCredentialOutcome?: (outcome: AdminCredentialOutcome) => void
+  /** RBAC 迁移结果回调；只在真的跑过迁移时触发（第二次启动起不再触发） */
+  onRbacMigrationOutcome?: (outcome: RbacMigrationOutcome) => void
 }
 
 interface AuthForcePasswordChangeState {
@@ -261,6 +265,17 @@ async function applyMigrations(migrationsFolder: string) {
 }
 
 const MIGRATION_0008_MOD_FILES_SYNCED_KEY = 'migration.0008_mod_files_synced'
+
+/**
+ * 跑一次 RBAC 迁移（老权限点 → 细粒度 RBAC）。
+ *
+ * 用动态 import：`rbac-migration.ts` 顶部静态依赖本模块的 `ensureDb`/`nowIso`，
+ * 在本模块加载期间静态引用它会形成循环导入。
+ */
+async function runRbacMigration(): Promise<RbacMigrationOutcome> {
+  const { migrateRbacFromLegacy } = await import('./rbac-migration')
+  return migrateRbacFromLegacy({ allPermissions: ALL_PERMISSIONS })
+}
 
 async function runPostMigration0008ModFileSync() {
   const { drizzleDb } = ensureDb()
@@ -558,5 +573,10 @@ export async function initDatabase(
   }
   await seedAdminUserFromEnv(options)
   await applyForcePasswordChangePolicy(options)
+  // 必须排在用户播种之后：新装环境的管理员还没建出来时迁移会空转，而且没有第二次机会
+  const rbacOutcome = await runRbacMigration()
+  if (rbacOutcome.ran) {
+    options.onRbacMigrationOutcome?.(rbacOutcome)
+  }
   return absolutePath
 }

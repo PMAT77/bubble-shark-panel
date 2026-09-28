@@ -359,16 +359,37 @@ interface InstanceRowAction {
   onClick: () => void
 }
 
+/** 拿当前账号的权限判定；自动导入，无需显式 import */
+const { auth: hasPermission } = useAppAuth()
+
+/**
+ * 行操作 → 所需权限点。
+ *
+ * 详情与控制台只要"能读这个实例"，所以用 instance:read —— 它们不改变任何状态；
+ * 启停与重启归 instance:lifecycle，更新归 instance:update，删除归 instance:delete。
+ */
+const INSTANCE_ACTION_PERMISSIONS: Record<InstanceRowAction['key'], string> = {
+  detail: 'instance:read',
+  console: 'instance:console:read',
+  update: 'instance:update',
+  start: 'instance:lifecycle',
+  stop: 'instance:lifecycle',
+  restart: 'instance:lifecycle',
+  delete: 'instance:delete',
+}
+
 /**
  * 行操作全集：详情/控制台/启停在操作列内联展示，
  * 更新/重启/删除收进「更多」下拉；房间设置入口已移入实例详情页。
+ *
+ * **没有权限的动作直接不生成**：给一个点了必然失败的按钮，比不给更让人困惑。
  */
 function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
   const stopAction = row.status === 'installing' || row.status === 'pending_install' ? 'cancel_install' : 'stop'
   const stopLabel = stopAction === 'cancel_install' ? '取消安装' : '停止'
   const instanceActionRunning = isInstanceActionRunning(row.id)
   const installFailed = getInstanceState(row).key === 'install_failed'
-  return [
+  const actions: InstanceRowAction[] = [
     {
       key: 'detail',
       label: '详情',
@@ -424,6 +445,7 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
       onClick: () => confirmDangerousInstanceAction(row, 'delete'),
     },
   ]
+  return actions.filter(action => hasPermission(INSTANCE_ACTION_PERMISSIONS[action.key]))
 }
 
 function actionToDropdownOption(action: InstanceRowAction): DropdownOption {
@@ -1206,26 +1228,31 @@ onBeforeUnmount(() => {
           />
         </template>
         <template #actions>
-          <NButton
-            class="flex-1 min-w-0 md:flex-none"
-            type="warning"
-            strong
-            secondary
-            :loading="updateCheckLoading"
+          <!-- 检查更新只是查询，但后端这条接口也要 instance:update（结果只对"能更新的人"有意义） -->
+          <AppAuth value="instance:update">
+            <NButton
+              class="flex-1 min-w-0 md:flex-none"
+              type="warning"
+              strong
+              secondary
+              :loading="updateCheckLoading"
             :disabled="!steamcmdInstalled || instances.length === 0"
             @click="checkAllInstanceUpdates"
           >
             <template #icon>
               <FaIcon name="i-ri:refresh-line" />
             </template>
-            检查更新
-          </NButton>
-          <NButton class="flex-1 min-w-0 md:flex-none" type="primary" @click="openCreateModal">
-            <template #icon>
-              <FaIcon name="i-ri:add-line" />
-            </template>
-            创建实例
-          </NButton>
+              检查更新
+            </NButton>
+          </AppAuth>
+          <AppAuth value="instance:create">
+            <NButton class="flex-1 min-w-0 md:flex-none" type="primary" @click="openCreateModal">
+              <template #icon>
+                <FaIcon name="i-ri:add-line" />
+              </template>
+              创建实例
+            </NButton>
+          </AppAuth>
         </template>
       </AdminListToolbar>
 
@@ -1239,9 +1266,11 @@ onBeforeUnmount(() => {
             <li>配置房间与世界 —— 服务器名、密码、地图</li>
             <li>启动实例 —— 把服务器名告诉朋友即可加入</li>
           </ol>
-          <NButton type="primary" @click="openCreateModal">
-            创建第一个实例
-          </NButton>
+          <AppAuth value="instance:create">
+            <NButton type="primary" @click="openCreateModal">
+                创建第一个实例
+            </NButton>
+          </AppAuth>
         </div>
         <article
           v-for="instance in instances"

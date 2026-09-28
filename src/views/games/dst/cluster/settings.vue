@@ -739,18 +739,26 @@ onActivated(() => {
           </NCard>
         </NForm>
 
-        <ConfigActionBar
-          :dirty="formDirty"
-          :busy="isSaving || resetting"
-          :saving="activeSaveOperation === 'save'"
-          :restarting="activeSaveOperation === 'restart'"
-          :resetting="resetting"
-          :restart-disabled="saveAndRestartDisabled"
-          :restart-disabled-title="saveAndRestartDisabledTitle"
-          @reset="resetConfig"
-          @save="saveConfig(false)"
-          @save-and-restart="confirmSaveAndRestart"
-        />
+        <AppAuth value="room:write">
+          <ConfigActionBar
+            :dirty="formDirty"
+            :busy="isSaving || resetting"
+            :saving="activeSaveOperation === 'save'"
+            :restarting="activeSaveOperation === 'restart'"
+            :resetting="resetting"
+            :restart-disabled="saveAndRestartDisabled"
+            :restart-disabled-title="saveAndRestartDisabledTitle"
+            @reset="resetConfig"
+            @save="saveConfig(false)"
+            @save-and-restart="confirmSaveAndRestart"
+          />
+        </AppAuth>
+        <!-- 只有 room:read 的角色：配置照常可看，但不给保存入口，也不留一堆点了报错的按钮 -->
+        <AppAuth value="room:write" #no-auth>
+          <div class="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+            你可以查看这份房间配置，但没有修改权限，保存与重置入口已隐藏。需要修改请联系管理员。
+          </div>
+        </AppAuth>
       </div>
     </div>
   </FaPageMain>

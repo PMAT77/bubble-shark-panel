@@ -57,7 +57,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/app/system/commercial` | 返回版本形态（`edition`）、核心是否免费、Pro 状态与能力清单、可选的付费人工服务（名称、交付内容、参考价区间）、不含项、联系方式与仓库地址。需 `system:read` 权限 |
+| `GET` | `/app/system/commercial` | 返回版本形态（`edition`）、核心是否免费、Pro 状态与能力清单、可选的付费人工服务（名称、交付内容、参考价区间）、不含项、联系方式与仓库地址。需 `license:read` 权限 |
 
 契约见 `shared/contracts/commercial.ts`。两点口径需要注意：
 
@@ -76,7 +76,7 @@
 
 约定与边界：
 
-- 三个接口都要求 `pages.node.instance:manage` 权限；
+- 三个接口都要求实例级授权：报告用 `instance.migration:read`，导出与重下用 `instance.migration:export`，且调用者必须被授权该实例；
 - **包内顶层就是集群目录**（含 `cluster.ini`），这是面板「导入存档」的识别口径；包内**不含游戏本体与 Mod 文件**，导入后由目标机器自行下载；
 - 导出目录默认在面板数据目录下的 `migration-exports/`（可用 `GSH_MIGRATION_EXPORT_ROOT` 覆盖），按实例保留 24 小时；
 - 实例**没开过服**（缺 `cluster.ini`）时明确拒绝，不会创建空集群目录；
@@ -89,12 +89,12 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/app/system/plugins` | 返回宿主接口版本、插件根目录、**商店货架说明**与插件列表（状态、进程状态、来源、申请的权限）。列表里既有本机已装的插件（`installed: true`），也有官方目录里尚未安装的条目（`installed: false`，版本为 `-`、目录为空串）。需 `system:read` |
-| `POST` | `/app/system/plugins/toggle` | 启用或停用：body `{ pluginId, enabled, acknowledgeDangerous? }`；启用/停用会同步拉起或终止插件进程。需 `system:manage` |
-| `GET` | `/app/system/plugins/audit` | 插件调用审计（最近的在前）：query `{ pluginId?, limit? }`（limit ≤ 500）。需 `system:read` |
-| `POST` | `/app/system/plugins/import/inspect` | **导入第一步**：以专属内容类型 `application/x-gsh-plugin-package` 直接上传包体，服务端解压到临时目录并做装载校验（清单 / 入口 / 接口版本 / 签名），返回 `{ uploadId, analysis }`。**此步不写插件目录**。体积上限 64 MB。需 `system:manage` |
-| `POST` | `/app/system/plugins/import` | **导入第二步**：body `{ uploadId }`，凭第一步的记录落位。写入前会**重跑一次校验**，导入后插件默认停用。需 `system:manage` |
-| `GET` | `/app/system/audit/operations` | **用户操作审计**（谁在什么时候对面板做了什么，含被拒的写操作）：query `{ account?, limit? }`。需 `system:read` |
+| `GET` | `/app/system/plugins` | 返回宿主接口版本、插件根目录、**商店货架说明**与插件列表（状态、进程状态、来源、申请的权限）。列表里既有本机已装的插件（`installed: true`），也有官方目录里尚未安装的条目（`installed: false`，版本为 `-`、目录为空串）。需 `plugin:read` |
+| `POST` | `/app/system/plugins/toggle` | 启用或停用：body `{ pluginId, enabled, acknowledgeDangerous? }`；启用/停用会同步拉起或终止插件进程。需 `plugin:manage` |
+| `GET` | `/app/system/plugins/audit` | 插件调用审计（最近的在前）：query `{ pluginId?, limit? }`（limit ≤ 500）。需 `plugin:read` |
+| `POST` | `/app/system/plugins/import/inspect` | **导入第一步**：以专属内容类型 `application/x-gsh-plugin-package` 直接上传包体，服务端解压到临时目录并做装载校验（清单 / 入口 / 接口版本 / 签名），返回 `{ uploadId, analysis }`。**此步不写插件目录**。体积上限 64 MB。需 `plugin:manage` |
+| `POST` | `/app/system/plugins/import` | **导入第二步**：body `{ uploadId }`，凭第一步的记录落位。写入前会**重跑一次校验**，导入后插件默认停用。需 `plugin:manage` |
+| `GET` | `/app/system/audit/operations` | **用户操作审计**（谁在什么时候对面板做了什么，含被拒的写操作）：query `{ account?, limit? }`。需 `audit:read` |
 
 ### 商店字段怎么读
 
@@ -167,6 +167,31 @@ const { ok, data, error } = await response.json()
 - 插件状态：`ready` / `disabled` / `invalid`（清单、签名或版本不通过，`message` 说明原因）/ `missing_license`（商业插件但当前授权不含对应能力）；
 - 进程状态单独给出（`stopped` / `starting` / `running` / `finished` / `crashed`）：**退出码 0 记为 `finished` 且不重启**，非零退出按退避重启、连续 5 次后停在 `crashed`；插件输出见其目录下的 `plugin.log`；
 - 插件装载失败**不会**让接口报错，坏插件会以 `invalid` 出现在列表里并给出原因——否则一个坏插件会让管理员连"停用"都点不到。
+
+## 成员与角色接口
+
+管理面板自己的账号与权限。**能力与范围是两层**：角色的权限点决定账号能做什么，实例授权决定它能在哪些实例上做，两者同时满足才生效。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/app/system/roles` | 角色列表（含每个角色的权限点与成员数）。需 `role:read` |
+| `POST` | `/app/system/roles/create` | 新建角色：body `{ name, description?, permissions[] }`。权限点必须是清单里有的（唯一真源：`shared/constants/permissions.ts`）。需 `role:write` |
+| `POST` | `/app/system/roles/update` | 修改角色：body `{ roleId, name, description?, permissions[] }`。改动会**立即物化**到该角色全部成员的生效权限。需 `role:write` |
+| `POST` | `/app/system/roles/delete` | 删除角色：body `{ roleId }`。内置游客角色、以及仍有成员在用的角色会被拒绝。需 `role:write` |
+| `GET` | `/app/system/members` | 成员列表（含角色与实例授权）。需 `member:read` |
+| `POST` | `/app/system/members/create` | 建子账号：body `{ account, password, roleId, instanceIds?, mustChangePassword? }`。密码须过强度校验（与改密同一套规则）；`mustChangePassword` 默认 `true`。需 `member:write` |
+| `POST` | `/app/system/members/update` | 改角色或启停：body `{ userId, roleId?, status? }`。需 `member:write` |
+| `POST` | `/app/system/members/password` | 重置密码：body `{ userId, password, mustChangePassword? }`。会吊销该账号现有会话。需 `member:write` |
+| `POST` | `/app/system/members/instances` | 设置可见实例：body `{ userId, instanceIds[] }`，**整表替换**。需 `member:write` |
+| `POST` | `/app/system/members/delete` | 删除成员：body `{ userId }`，连带清掉它的角色关联与实例授权。需 `member:write` |
+
+**三条防锁死约束**（违反时返回业务错误，消息里写明原因）：
+
+1. 不能停用、删除或降权**当前登录的账号**；不能把自己的角色换成没有「管理角色」权限的；
+2. 不能让**最后一个能管理角色或面板设置的启用账号**消失——停用、降权、删角色三条路径都拦。判定依据是**生效权限点**而不是角色（鉴权读的就是它）；
+3. 内置**游客角色**不可改权限点、不可删除。
+
+权限点清单**不通过接口下发**：前端直接引用 `shared/constants/permissions.ts` 的 `PERMISSION_SPECS`，少一份传输就少一个漂移点。
 
 ## 新增或修改接口
 

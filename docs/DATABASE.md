@@ -17,13 +17,30 @@ schema 定义在 `server/src/shared/db/schema/`，统一从 `index.ts` 导出：
 
 | 文件 | 内容 |
 | --- | --- |
-| `auth.ts` | 用户与权限点 |
+| `auth.ts` | 用户与权限点（`users` / `user_permissions` / 会话与限流） |
+| `rbac.ts` | 角色与实例授权（`roles` / `role_permissions` / `user_roles` / `instance_grants`） |
 | `instance.ts` | 游戏实例 |
 | `node.ts` | 节点信息 |
 | `player.ts` | 玩家档案（Klei 用户 ID ↔ 游戏名、手工备注） |
 | `schedule.ts` | 计划任务 |
 | `notify.ts` | 通知渠道与事件 |
 | `system.ts` | 面板设置与系统状态 |
+
+## 权限模型（四个表怎么配合）
+
+| 表 | 作用 |
+| --- | --- |
+| `roles` | 角色。`kind` 为 `guest` 的是内置游客角色（零写权限、不可改不可删） |
+| `role_permissions` | 角色 → 权限点。**角色是权限的唯一编辑入口** |
+| `user_roles` | 用户 → 角色（主键就是 `userId`，即一个用户一个角色） |
+| `instance_grants` | 用户 → 实例。**范围**：没有这一行，该用户看不到这个实例 |
+
+两条容易踩的规则：
+
+- **`user_permissions` 仍然是最终生效表**。角色是编辑入口，改完在 service 层把结果**物化**回 `user_permissions`；登录、菜单判定、接口鉴权读的都是它。所以**不要直接写 `user_permissions`**——绕过角色会让「角色管理页显示的权限」与「实际生效的权限」对不上，而且下次改角色就被覆盖。
+- **能力与范围是两层**：权限点决定"能做什么"，`instance_grants` 决定"能在哪些实例上做"，两者相交生效。新建实例时会给创建者自动补一条授权（否则连建它的人都看不到）。
+
+升级迁移见 `server/src/shared/db/rbac-migration.ts`：它把旧的粗粒度权限点映射成细粒度权限点，为老账号建角色、补上"升级时刻已存在的实例"的授权，只跑一次。
 
 ## 迁移流程
 

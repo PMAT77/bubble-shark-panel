@@ -18,6 +18,16 @@ const FORCE_PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
   '/app/account/password/edit',
   '/app/account/logout',
   '/app/account/permission',
+  /**
+   * 菜单必须在待改密时也能拿到。
+   *
+   * 前端要先用它注册动态路由，才渲染得出改密页所在的布局；拿不到时路由守卫会失败，
+   * 再与"强制改密跳转"互相抢导航，页面就会反复重试（曾实测几百次请求）。
+   *
+   * 放行它不削弱限制：返回的只是这个账号有权进入的模块，不含任何操作能力 ——
+   * 待改密账号调任何写接口仍会被这条规则拦住。
+   */
+  '/app/route/list',
 ])
 
 function getTokenByRequest(request: FastifyRequest): string | undefined {

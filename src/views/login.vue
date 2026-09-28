@@ -3,7 +3,7 @@ import { diffTwoObj } from '@fantastic-admin/settings'
 import Login from '@/components/AppAccountForm/login.vue'
 import ResetPassword from '@/components/AppAccountForm/reset-password.vue'
 import ColorScheme from '@/layouts/components/Topbar/Toolbar/ColorScheme/index.vue'
-import { ensureDynamicRoutes } from '@/router/ensure-dynamic-routes'
+import { ensureDynamicRoutes, resetEnsureDynamicRoutes } from '@/router/ensure-dynamic-routes'
 import { FRONTEND_ROUTE_PATHS } from '../../shared/constants/frontend-routes'
 import settingsDefault from '@/settings'
 
@@ -41,6 +41,7 @@ async function handleLogin() {
   }
 
   try {
+    resetEnsureDynamicRoutes()
     await ensureDynamicRoutes(router)
   }
   catch (error) {

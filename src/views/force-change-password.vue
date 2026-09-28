@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NAlert } from 'naive-ui'
 import EditPassword from '@/components/AppAccountForm/edit-password.vue'
-import { ensureDynamicRoutes } from '@/router/ensure-dynamic-routes'
+import { ensureDynamicRoutes, resetEnsureDynamicRoutes } from '@/router/ensure-dynamic-routes'
 
 defineOptions({
   name: 'ForceChangePassword',
@@ -12,6 +12,7 @@ const appSettingsStore = useAppSettingsStore()
 
 async function handlePasswordChanged() {
   try {
+    resetEnsureDynamicRoutes()
     await ensureDynamicRoutes(router)
   }
   catch {

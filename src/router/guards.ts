@@ -56,6 +56,13 @@ function setupRoutes(router: Router) {
           if (import.meta.env.DEV) {
             console.error('[router] ensureDynamicRoutes failed:', error)
           }
+          /**
+           * 待改密时不要跳登录页：用户是登录着的，而 api 层已经在往
+           * /force-change-password 跳。两边各跳各的会让每次导航都重新尝试拉菜单。
+           */
+          if (appAccountStore.mustChangePassword) {
+            return { path: '/force-change-password', replace: true }
+          }
           return {
             name: 'login',
             query: {

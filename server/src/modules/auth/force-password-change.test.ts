@@ -75,6 +75,25 @@ describe('force password change flow', () => {
     assert.equal(blockedBody.status, 1)
     assert.equal(blockedBody.code, 'AUTH_FORCE_PASSWORD_CHANGE')
 
+    /**
+     * 菜单必须在待改密时也能拿到。
+     *
+     * 前端要先用它注册动态路由，才渲染得出改密页所在的布局；拿不到时路由守卫会失败，
+     * 再与"强制改密跳转"互相抢导航，页面就反复重试——实测连续发了几百次请求。
+     * 这条断言钉住的就是那个回归（当时把 /app/route/list 改成要求登录，却忘了加入白名单）。
+     */
+    const menuResponse = await app.inject({
+      method: 'GET',
+      url: '/app/route/list',
+      headers: {
+        token: loginBody.data.token,
+      },
+    })
+    const menuBody = parseBody<Array<{ name: string }>>(menuResponse.body)
+    assert.equal(menuBody.status, 1)
+    assert.equal(menuBody.error, '', '待改密账号也要能拿到菜单，否则前端会陷入请求风暴')
+    assert.ok(Array.isArray(menuBody.data) && menuBody.data.length > 0, '菜单不该是空的')
+
     const permissionResponse = await app.inject({
       method: 'GET',
       url: '/app/account/permission',

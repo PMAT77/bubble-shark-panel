@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
@@ -21,7 +21,6 @@ import type {
   InstanceKeyFileListDto,
 } from '../../../../shared/contracts/instance-file'
 import { instanceKeyFileListQuerySchema } from '../../../../shared/contracts/instance-file'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { resolveLocalDstInstance } from '../../shared/dst/local-dst-instance'
 import {
   deleteInstancePath,
@@ -38,26 +37,13 @@ import {
 } from '../../infra/game-adapter/dst/instance-files'
 import { sendFileDownload } from '../../shared/http/file-download'
 import { businessError, success } from '../../shared/http/response'
-import { resolveAuthorizedContext } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 
 const FILE_RESOLVE_MESSAGES = {
   wrongNode: '当前仅支持本地节点实例的文件管理',
   wrongGame: '当前仅支持 DST 实例的文件管理',
   missingInstallPath: '实例安装目录不存在，请先在实例管理中完成安装',
   clusterDirFailed: '无法创建房间配置目录',
-}
-
-interface FileAuth {
-  error?: ApiErrorResponse
-  operatorAccount: string
-}
-
-async function authorize(request: FastifyRequest): Promise<FileAuth> {
-  const auth = await resolveAuthorizedContext(request, { permissions: NODE_INSTANCE_MANAGE_PERMISSION })
-  if (auth.error || !auth.context) {
-    return { error: auth.error ?? businessError('登录状态失效，请重新登录', request), operatorAccount: '' }
-  }
-  return { operatorAccount: auth.context.user.account }
 }
 
 /**
@@ -75,13 +61,13 @@ export function registerFilesModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/files', async (request): Promise<ApiSuccessResponse<InstanceFileListDto> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const query = instanceFileListQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'file:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: FILE_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -103,13 +89,13 @@ export function registerFilesModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/files/key-files', async (request): Promise<ApiSuccessResponse<InstanceKeyFileListDto> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const query = instanceKeyFileListQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'file:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: FILE_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -122,13 +108,13 @@ export function registerFilesModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/files/content', async (request): Promise<ApiSuccessResponse<InstanceFileContentDto> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const query = instanceFileContentQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'file:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: FILE_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -152,15 +138,15 @@ export function registerFilesModule(app: FastifyInstance) {
   })
 
   app.put('/app/instance/files/content', async (request): Promise<ApiSuccessResponse<InstanceFileWriteResult> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const body = instanceFileWritePayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const payload = body.data
+    const authorized = await authorizeInstance(request, payload.instanceId, 'file:write')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(payload.instanceId, request, { messages: FILE_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -171,7 +157,7 @@ export function registerFilesModule(app: FastifyInstance) {
         instanceId: resolved.instance.id,
         path: payload.path,
         sizeBytes: result.sizeBytes,
-        operator: auth.operatorAccount,
+        operator: authorized.context?.user.account ?? '',
       }, '实例文件已写入')
       return success({
         saved: true,
@@ -186,15 +172,15 @@ export function registerFilesModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/files/delete', async (request): Promise<ApiSuccessResponse<InstanceFileDeleteResult> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const body = instanceFileDeletePayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const payload = body.data
+    const authorized = await authorizeInstance(request, payload.instanceId, 'file:delete')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(payload.instanceId, request, { messages: FILE_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -205,7 +191,7 @@ export function registerFilesModule(app: FastifyInstance) {
         instanceId: resolved.instance.id,
         path: payload.path,
         removed: result.removed,
-        operator: auth.operatorAccount,
+        operator: authorized.context?.user.account ?? '',
       }, '实例文件已删除')
       return success({
         removed: result.removed,
@@ -219,14 +205,14 @@ export function registerFilesModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/files/download', async (request, reply): Promise<void | FastifyReply> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      reply.status(401).send(auth.error)
-      return
-    }
     const query = instanceFileDownloadQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       reply.status(400).send(businessError('请求参数无效', request))
+      return
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'file:download')
+    if (authorized.error) {
+      reply.status(403).send(authorized.error)
       return
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: FILE_RESOLVE_MESSAGES })
@@ -248,16 +234,16 @@ export function registerFilesModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/files/upload', { bodyLimit: maxUploadBytes }, async (request): Promise<ApiSuccessResponse<InstanceFileUploadResult> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const query = instanceFileUploadQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
     }
     const { instanceId, fileName } = query.data
     const overwrite = query.data.overwrite === '1'
+    const authorized = await authorizeInstance(request, instanceId, 'file:upload')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: FILE_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -282,7 +268,7 @@ export function registerFilesModule(app: FastifyInstance) {
         path: target.relativePath,
         sizeBytes,
         overwritten: backup.overwritten,
-        operator: auth.operatorAccount,
+        operator: authorized.context?.user.account ?? '',
       }, '实例文件已上传')
       return success({
         path: target.relativePath,
@@ -297,15 +283,15 @@ export function registerFilesModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/files/rename', async (request): Promise<ApiSuccessResponse<InstanceFileRenameResult> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const body = instanceFileRenamePayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const payload = body.data
+    const authorized = await authorizeInstance(request, payload.instanceId, 'file:write')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(payload.instanceId, request, { messages: FILE_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -316,7 +302,7 @@ export function registerFilesModule(app: FastifyInstance) {
         instanceId: resolved.instance.id,
         path: payload.path,
         nextPath: result.path,
-        operator: auth.operatorAccount,
+        operator: authorized.context?.user.account ?? '',
       }, '实例文件已重命名')
       return success({ path: result.path }, request)
     }

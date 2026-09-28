@@ -17,7 +17,7 @@ import type { Readable } from 'node:stream'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ErrorCode } from '../../../../shared/constants/error-code'
-import { OPS_MANAGE_PERMISSION } from '../../shared/menu-routes'
+import type { PermissionKey } from '../../../../shared/constants/permissions'
 import {
   createBackupRecord,
   deleteBackupRecord,
@@ -31,7 +31,7 @@ import type { DbBackup } from '../../shared/db/index'
 import { loadServerConfig } from '../../shared/config'
 import { sendFileDownload } from '../../shared/http/file-download'
 import { businessError, success } from '../../shared/http/response'
-import { resolveAuthorizedContext } from '../system/auth'
+import { authorizeInstance, requirePermission, resolveAuthorizedContext, resolveInstanceScope } from '../system/auth'
 import { DB_BACKUP_INSTANCE_ID, formatTimestampForFile } from '../system/db-snapshot-service'
 import { resolveMigrationsFolder } from '../system/db-restore-service'
 import { verifyPanelDatabaseFile } from '../system/db-snapshot-verify'
@@ -71,12 +71,37 @@ interface BackupAuth {
   operatorAccount: string
 }
 
-async function authorize(request: FastifyRequest): Promise<BackupAuth> {
-  const auth = await resolveAuthorizedContext(request, { permissions: OPS_MANAGE_PERMISSION })
+async function authorize(
+  request: FastifyRequest,
+  permission: PermissionKey = 'backup:read',
+): Promise<BackupAuth> {
+  const auth = await resolveAuthorizedContext(request, { permissions: permission })
   if (auth.error || !auth.context) {
     return { error: auth.error ?? businessError('登录状态失效，请重新登录', request), operatorAccount: '' }
   }
   return { operatorAccount: auth.context.user.account }
+}
+
+/**
+ * 备份资源的实例归属校验。
+ *
+ * 面板数据库快照（哨兵实例 id）是面板全局资源、不属于任何实例，因此跳过实例授权，
+ * 只要求权限点——它本来就该由拥有面板管理权限的人操作。
+ *
+ * download / delete / restore 都是**先按 backupId 查到记录、再用记录里的 instanceId
+ * 校验**：这三个接口原先只看"有没有 ops:manage"，等于任何持有该权限的账号都能下载、
+ * 删除、恢复别人实例的存档。
+ */
+async function authorizeBackupInstance(
+  request: FastifyRequest,
+  instanceId: string,
+  permission: PermissionKey,
+): Promise<ApiErrorResponse | undefined> {
+  if (instanceId === DB_BACKUP_INSTANCE_ID) {
+    return requirePermission(request, permission)
+  }
+  const authorized = await authorizeInstance(request, instanceId, permission)
+  return authorized.error
 }
 
 /**
@@ -94,13 +119,17 @@ export function registerBackupModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/backup/create', async (request): Promise<ApiSuccessResponse<BackupMutationResult> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const body = backupCreateRequestSchema.safeParse(request.body)
     if (!body.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, body.data.instanceId, 'backup:create')
+    if (authorized.error) {
+      return authorized.error
+    }
+    const auth = await authorize(request, 'backup:create')
+    if (auth.error) {
+      return auth.error
     }
     const result = await createInstanceBackup({
       app,
@@ -116,9 +145,9 @@ export function registerBackupModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/backup/list', async (request): Promise<ApiSuccessResponse<BackupItem[]> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
+    const scope = await resolveInstanceScope(request, 'backup:read')
+    if (scope.error || !scope.instanceIds) {
+      return scope.error ?? businessError('无法确定可见实例范围', request)
     }
     const body = backupListRequestSchema.safeParse(request.body ?? {})
     if (!body.success) {
@@ -129,8 +158,10 @@ export function registerBackupModule(app: FastifyInstance) {
      * 这里必须排除：否则「备份与恢复」页上方那张实例存档表会把同一条快照再列一遍，
      * 用户看到的是「面板快照」混在一堆实例存档里、且与下方区块重复。
      */
+    const visible = new Set(scope.instanceIds)
     const records = (await listBackups(body.data.instanceId))
       .filter(record => record.instanceId !== DB_BACKUP_INSTANCE_ID)
+      .filter(record => visible.has(record.instanceId))
     const items: BackupItem[] = []
     for (const record of records) {
       // 磁盘对账：文件丢失的已完成备份标记 stale
@@ -145,11 +176,6 @@ export function registerBackupModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/backup/download', async (request, reply): Promise<void | FastifyReply> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      reply.status(401).send(auth.error)
-      return
-    }
     const body = backupIdRequestSchema.safeParse(request.body)
     if (!body.success) {
       reply.status(400).send(businessError('请求参数无效', request))
@@ -158,6 +184,11 @@ export function registerBackupModule(app: FastifyInstance) {
     const record = await getBackupById(body.data.backupId)
     if (!record) {
       reply.status(404).send(businessError('备份记录不存在', request, ErrorCode.BACKUP_NOT_FOUND))
+      return
+    }
+    const authorized = await authorizeBackupInstance(request, record.instanceId, 'backup:read')
+    if (authorized) {
+      reply.status(403).send(authorized)
       return
     }
     if (!isInsideBackupsRoot(record.filePath)) {
@@ -178,10 +209,6 @@ export function registerBackupModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/backup/delete', async (request): Promise<ApiSuccessResponse<BackupMutationResult> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const body = backupIdRequestSchema.safeParse(request.body)
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -189,6 +216,10 @@ export function registerBackupModule(app: FastifyInstance) {
     const record = await getBackupById(body.data.backupId)
     if (!record) {
       return businessError('备份记录不存在', request, ErrorCode.BACKUP_NOT_FOUND)
+    }
+    const authorized = await authorizeBackupInstance(request, record.instanceId, 'backup:delete')
+    if (authorized) {
+      return authorized
     }
     // 与实例删除同序：先删记录再删文件，文件删除失败仅告警（记录已删，下次列表自然消失）
     await deleteBackupRecord(record.id)
@@ -205,10 +236,6 @@ export function registerBackupModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/backup/restore', async (request): Promise<ApiSuccessResponse<BackupRestoreResult> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const body = backupRestoreRequestSchema.safeParse(request.body)
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -216,6 +243,10 @@ export function registerBackupModule(app: FastifyInstance) {
     const record = await getBackupById(body.data.backupId)
     if (!record) {
       return businessError('备份记录不存在', request, ErrorCode.BACKUP_NOT_FOUND)
+    }
+    const authorized = await authorizeBackupInstance(request, record.instanceId, 'backup:restore')
+    if (authorized) {
+      return authorized
     }
     const instance = await getGameInstanceById(record.instanceId)
     if (!instance) {
@@ -235,7 +266,8 @@ export function registerBackupModule(app: FastifyInstance) {
   })
   /** 接收本地上传的存档压缩包（zip / tar.gz），解压后识别集群候选（只读识别，不导入） */
   app.post('/app/instance/backup/import/upload', { bodyLimit: maxUploadBytes }, async (request, reply): Promise<void> => {
-    const auth = await authorize(request)
+    // 上传阶段还没有目标实例（先上传识别、再选实例导入），所以只校验权限点
+    const auth = await authorize(request, 'backup:import')
     if (auth.error) {
       reply.status(401).send(auth.error)
       return
@@ -277,13 +309,17 @@ export function registerBackupModule(app: FastifyInstance) {
   })
   /** 导入上传的外部 Klei 集群存档到指定实例（要求实例已停止且已完成游戏安装） */
   app.post('/app/instance/backup/import', async (request): Promise<ApiSuccessResponse<SaveImportResult> | ApiErrorResponse> => {
-    const auth = await authorize(request)
-    if (auth.error) {
-      return auth.error
-    }
     const body = saveImportRequestSchema.safeParse(request.body)
     if (!body.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, body.data.instanceId, 'backup:import')
+    if (authorized.error) {
+      return authorized.error
+    }
+    const auth = await authorize(request, 'backup:import')
+    if (auth.error) {
+      return auth.error
     }
     // 源目录必须来自本会话上传的解压产物（防路径穿越与伪造源路径）
     const validated = validateUploadClusterPath(body.data.uploadId, body.data.sourceClusterPath)
@@ -315,7 +351,8 @@ export function registerBackupModule(app: FastifyInstance) {
    * 临时目录，另起一套只会多出一份相似但细节不同的上传实现。
    */
   app.post('/app/system/db/backup/import', { bodyLimit: maxUploadBytes }, async (request, reply): Promise<void> => {
-    const auth = await authorize(request)
+    // 面板数据库快照是全局资源（不属于任何实例），只需权限点
+    const auth = await authorize(request, 'backup:import')
     if (auth.error) {
       reply.status(401).send(auth.error)
       return

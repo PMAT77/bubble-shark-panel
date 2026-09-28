@@ -19,7 +19,6 @@ import type {
   ShardSnapshotsDto,
   ShardWorldSeedProbe,
 } from '../../../../shared/contracts/shard'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { resolveLocalDstInstance } from '../../shared/dst/local-dst-instance'
 import {
   getShardList,
@@ -33,7 +32,7 @@ import { resetShardWorld, resetShardWorldWithSeed, rollbackShard } from './world
 import { injectRestartInstance } from '../instance/inject-restart'
 import { isInstanceContainerRunning } from '../instance/container-lifecycle'
 import { businessError, success } from '../../shared/http/response'
-import { requirePermission } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 
 const SHARD_RESOLVE_MESSAGES = {
   wrongNode: '当前仅支持本地节点实例世界配置',
@@ -56,15 +55,15 @@ async function restartInstance(
  */
 export function registerShardModule(app: FastifyInstance) {
   app.get('/app/instance/shards', async (request): Promise<ApiSuccessResponse<ShardListDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = shardInstanceQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = query.data.instanceId
+    const authorized = await authorizeInstance(request, instanceId, 'world:read')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: SHARD_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -86,15 +85,15 @@ export function registerShardModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/shards/init-caves', async (request): Promise<ApiSuccessResponse<ShardInitCavesResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = shardInstanceQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = query.data.instanceId
+    const authorized = await authorizeInstance(request, instanceId, 'world:write')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: SHARD_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -110,16 +109,16 @@ export function registerShardModule(app: FastifyInstance) {
   })
 
   app.put('/app/instance/shards', async (request): Promise<ApiSuccessResponse<ShardSaveResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = shardSavePayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const payload: ShardSavePayload = body.data
     const instanceId = payload.instanceId
+    const authorized = await authorizeInstance(request, instanceId, 'world:write')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: SHARD_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -159,13 +158,13 @@ export function registerShardModule(app: FastifyInstance) {
    * 读到后写进面板元数据，因此实例停服后页面依然显示得到。
    */
   app.post('/app/instance/shards/read-world-seed', async (request): Promise<ApiSuccessResponse<ShardWorldSeedProbe> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = shardReadWorldSeedPayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, body.data.instanceId, 'world:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(body.data.instanceId, request, { messages: SHARD_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -186,13 +185,13 @@ export function registerShardModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/shards/snapshots', async (request): Promise<ApiSuccessResponse<ShardSnapshotsDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = shardSnapshotsQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'world:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: SHARD_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -223,15 +222,15 @@ export function registerShardModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/shards/rollback', async (request): Promise<ApiSuccessResponse<ShardMaintenanceResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = shardRollbackPayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const payload = body.data
+    const authorized = await authorizeInstance(request, payload.instanceId, 'world:rollback')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(payload.instanceId, request, { messages: SHARD_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -259,13 +258,13 @@ export function registerShardModule(app: FastifyInstance) {
    * 由面板清掉该分片存档，再启动实例让游戏按新种子生成地图。
    */
   app.post('/app/instance/shards/reset-world-with-seed', async (request): Promise<ApiSuccessResponse<ShardResetWorldWithSeedResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = shardResetWorldWithSeedPayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, body.data.instanceId, 'world:reset')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(body.data.instanceId, request, { messages: SHARD_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -291,15 +290,15 @@ export function registerShardModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/shards/reset-world', async (request): Promise<ApiSuccessResponse<ShardMaintenanceResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = shardResetWorldPayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const payload = body.data
+    const authorized = await authorizeInstance(request, payload.instanceId, 'world:reset')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(payload.instanceId, request, { messages: SHARD_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error

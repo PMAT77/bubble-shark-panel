@@ -16,7 +16,7 @@ import {
   listMaintenancePushLogs,
   upsertMaintenanceDraft,
 } from '../../shared/db/index'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
+import type { PermissionKey } from '../../../../shared/constants/permissions'
 import {
   ensureContainerRuntimeReady,
   isInstanceContainerRunning,
@@ -29,19 +29,26 @@ import {
   validateMaintenanceMessage,
 } from './maintenance-announce'
 import { toMaintenanceAnnounceStateDto, toMaintenancePushLogDto } from './maintenance-mapper'
-import { resolveAuthorizedContext } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 
 const LOCAL_NODE_ID = 'local-node'
 
-async function verifyAuthorizedUser(request: FastifyRequest) {
-  const auth = await resolveAuthorizedContext(request, {
-    permissions: NODE_INSTANCE_MANAGE_PERMISSION,
-    allowQueryToken: true,
-  })
-  if (auth.error || !auth.context) {
-    return { error: auth.error as ApiErrorResponse }
+/**
+ * 维护公告的鉴权。
+ *
+ * `allowQueryToken` 是这三个接口特有的：公告里的图片与链接由浏览器直接发起请求，
+ * 带不上自定义头，只能把令牌放进查询参数。例外仅限这三条，别扩散到别的接口。
+ */
+async function verifyAuthorizedUser(
+  request: FastifyRequest,
+  instanceId: string,
+  permission: PermissionKey,
+) {
+  const authorized = await authorizeInstance(request, instanceId, permission, { allowQueryToken: true })
+  if (authorized.error || !authorized.context) {
+    return { error: authorized.error as ApiErrorResponse }
   }
-  return { user: auth.context.user }
+  return { user: authorized.context.user }
 }
 
 async function resolveLocalInstance(instanceId: string, request: FastifyRequest) {
@@ -60,15 +67,15 @@ async function resolveLocalInstance(instanceId: string, request: FastifyRequest)
 
 export function registerMaintenanceAnnounceRoutes(app: FastifyInstance) {
   app.get('/app/instance/maintenance/announce', async (request): Promise<ApiSuccessResponse<InstanceMaintenanceAnnounceStateDto> | ApiErrorResponse> => {
-    const auth = await verifyAuthorizedUser(request)
-    if (auth.error) {
-      return auth.error
-    }
     const parsedQuery = maintenanceInstanceQuerySchema.safeParse(request.query)
     if (!parsedQuery.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = parsedQuery.data.instanceId
+    const auth = await verifyAuthorizedUser(request, instanceId, 'instance.console:read')
+    if (auth.error) {
+      return auth.error
+    }
     const resolved = await resolveLocalInstance(instanceId, request)
     if (!resolved.ok) {
       return resolved.error
@@ -79,15 +86,15 @@ export function registerMaintenanceAnnounceRoutes(app: FastifyInstance) {
   })
 
   app.put('/app/instance/maintenance/announce', async (request): Promise<ApiSuccessResponse<InstanceMaintenanceAnnounceStateDto> | ApiErrorResponse> => {
-    const auth = await verifyAuthorizedUser(request)
-    if (auth.error) {
-      return auth.error
-    }
     const parsedBody = maintenanceDraftPayloadSchema.safeParse(request.body ?? {})
     if (!parsedBody.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = parsedBody.data.instanceId
+    const auth = await verifyAuthorizedUser(request, instanceId, 'maintenance:write')
+    if (auth.error) {
+      return auth.error
+    }
     const message = normalizeMaintenanceMessage(parsedBody.data.message)
     const validationError = validateMaintenanceMessage(message)
     if (validationError) {
@@ -103,15 +110,15 @@ export function registerMaintenanceAnnounceRoutes(app: FastifyInstance) {
   })
 
   app.post('/app/instance/maintenance/announce/push', async (request): Promise<ApiSuccessResponse<InstanceMaintenancePushResultDto> | ApiErrorResponse> => {
-    const auth = await verifyAuthorizedUser(request)
-    if (auth.error || !auth.user) {
-      return auth.error!
-    }
     const parsedBody = maintenancePushPayloadSchema.safeParse(request.body ?? {})
     if (!parsedBody.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = parsedBody.data.instanceId
+    const auth = await verifyAuthorizedUser(request, instanceId, 'maintenance:write')
+    if (auth.error || !auth.user) {
+      return auth.error!
+    }
     const resolved = await resolveLocalInstance(instanceId, request)
     if (!resolved.ok) {
       return resolved.error

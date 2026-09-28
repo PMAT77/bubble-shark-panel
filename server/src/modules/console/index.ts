@@ -17,7 +17,6 @@ import {
 } from '../../../../shared/contracts/console'
 import type { ConsoleLogLine } from '../../shared/instance-runtime/console-log-store'
 import type { DbGameInstance } from '../../shared/db/index'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { getGameInstanceById } from '../../shared/db/index'
 import { DST_APP_ID } from '../../infra/game-adapter/dst/constants'
 import { buildDstConnectInfo } from '../../infra/game-adapter/dst/direct-connect'
@@ -33,7 +32,7 @@ import {
 import { isCavesShardConfigured, readClusterShardEnabledFromInstall } from '../../infra/game-adapter/dst/shard-service'
 import { sendFileDownload } from '../../shared/http/file-download'
 import { businessError, success } from '../../shared/http/response'
-import { requirePermission, resolveAuthorizedContext } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 import { consoleStreamTicketStore } from './stream-ticket'
 
 const LOCAL_NODE_ID = 'local-node'
@@ -83,15 +82,15 @@ import { registerWorldStateRoutes } from './world-state-routes'
  */
 export function registerConsoleModule(app: FastifyInstance) {
   app.get('/app/instance/connect-info', async (request): Promise<ApiSuccessResponse<InstanceConnectInfoDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = consoleInstanceQuerySchema.safeParse(request.query)
     if (!query.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = query.data.instanceId
+    const authorized = await authorizeInstance(request, instanceId, 'instance.console:read')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalInstance(instanceId, request)
     if (!resolved.ok) {
       return resolved.error
@@ -120,15 +119,15 @@ export function registerConsoleModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/console/logs', async (request): Promise<ApiSuccessResponse<InstanceConsoleLogsPayload> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = consoleLogsQuerySchema.safeParse(request.query)
     if (!query.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = query.data.instanceId
+    const authorized = await authorizeInstance(request, instanceId, 'instance.console:read')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalInstance(instanceId, request)
     if (!resolved.ok) {
       return resolved.error
@@ -145,13 +144,13 @@ export function registerConsoleModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/console/logs/history', async (request): Promise<ApiSuccessResponse<ConsoleLogHistoryDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = consoleInstanceQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'instance.console:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalInstance(query.data.instanceId, request)
     if (!resolved.ok) {
@@ -166,14 +165,14 @@ export function registerConsoleModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/console/logs/download', async (request, reply): Promise<void | FastifyReply> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      reply.status(401).send(authError)
-      return
-    }
     const query = consoleInstanceQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       reply.status(400).send(businessError('请求参数无效', request))
+      return
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'instance.console:read')
+    if (authorized.error) {
+      reply.status(403).send(authorized.error)
       return
     }
     const resolved = await resolveLocalInstance(query.data.instanceId, request)
@@ -194,15 +193,15 @@ export function registerConsoleModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/console/logs/clear', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = consoleInstanceQuerySchema.safeParse(request.body)
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = body.data.instanceId
+    const authorized = await authorizeInstance(request, instanceId, 'console:clear')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalInstance(instanceId, request)
     if (!resolved.ok) {
       return resolved.error
@@ -212,15 +211,15 @@ export function registerConsoleModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/console/command', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = consoleCommandBodySchema.safeParse(request.body)
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const { instanceId, command, shard } = body.data
+    const authorized = await authorizeInstance(request, instanceId, 'console:command')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalInstance(instanceId, request)
     if (!resolved.ok) {
       return resolved.error
@@ -240,17 +239,19 @@ export function registerConsoleModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/console/stream-ticket', async (request): Promise<ApiSuccessResponse<InstanceConsoleStreamTicketDto> | ApiErrorResponse> => {
-    const auth = await resolveAuthorizedContext(request, {
-      permissions: NODE_INSTANCE_MANAGE_PERMISSION,
-    })
-    if (auth.error || !auth.context) {
-      return auth.error ?? businessError('Unable to issue console stream authorization', request)
-    }
     const body = consoleStreamTicketRequestSchema.safeParse(request.body)
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = body.data.instanceId
+    /**
+     * 鉴权在这一步完成：签出去的票据只绑定 instanceId，`/stream` 那边不再校验权限
+     * （票据是一次性的、60 秒过期）。所以这里是唯一的关口。
+     */
+    const auth = await authorizeInstance(request, instanceId, 'instance.console:read')
+    if (auth.error || !auth.context) {
+      return auth.error ?? businessError('Unable to issue console stream authorization', request)
+    }
     const resolved = await resolveLocalInstance(instanceId, request)
     if (!resolved.ok) {
       return resolved.error

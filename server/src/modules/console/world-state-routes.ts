@@ -2,7 +2,6 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import type { InstanceWorldStateDto } from '../../../../shared/contracts/instance'
 import { instanceWorldStateQuerySchema } from '../../../../shared/contracts/instance'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { getGameInstanceById } from '../../shared/db/index'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 import {
@@ -12,7 +11,7 @@ import {
   sendInstanceContainerCommand,
 } from '../instance/container-lifecycle'
 import { businessError, success } from '../../shared/http/response'
-import { requirePermission } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 import { buildWorldStateQueryCommand, parseWorldStateLogLine } from './world-state-parser'
 
 const LOCAL_NODE_ID = 'local-node'
@@ -50,15 +49,19 @@ function sleep(ms: number) {
  */
 export function registerWorldStateRoutes(app: FastifyInstance) {
   app.get('/app/instance/world-state', async (request): Promise<ApiSuccessResponse<InstanceWorldStateDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = instanceWorldStateQuerySchema.safeParse(request.query)
     if (!query.success) {
       return businessError('请求参数无效', request)
     }
     const { instanceId, shard } = query.data
+    /**
+     * 这个接口名为"读世界状态"，实际会向运行中的游戏下发一条 `print` 指令，
+     * 所以它同时需要读权限与实例授权，不能被当成纯查询放行。
+     */
+    const authorized = await authorizeInstance(request, instanceId, 'instance.console:read')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveRunningInstance(instanceId, request)
     if (!resolved.ok) {
       return resolved.error

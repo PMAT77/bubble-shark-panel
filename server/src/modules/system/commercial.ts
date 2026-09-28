@@ -21,7 +21,7 @@ const PRO_CAPABILITIES: CommercialSupport['proCapabilities'] = [
   { id: 'multi-node', name: '多节点统一管理', detail: '一个面板管多台服务器的实例、日志与批量操作（开发中）' },
   { id: 'audit-log', name: '操作审计日志', detail: '谁在什么时候改了房间、重启了世界，可查询可导出（待随包发布）' },
   { id: 'remote-backup', name: '异地与云备份', detail: '把存档备份到对象存储或另一台服务器，支持定时与保留策略（待随包发布）' },
-  { id: 'advanced-rbac', name: '高级权限与角色', detail: '按角色分配权限点、按实例归属隔离，供小团队协作（开发中）' },
+  { id: 'advanced-rbac', name: '高级权限与角色', detail: '角色模板、组织与租户、按实例归属隔离，供托管商与多团队场景（开发中）' },
 ]
 
 /** 付费服务清单：与仓库 README「赞助与商业合作」一节同源，改一处必须同步另一处 */
@@ -42,13 +42,7 @@ const SERVICES: CommercialSupport['services'] = [
     id: 'private-deploy',
     name: '私有化部署',
     detail: '内网、代理受限或无公网环境的部署与反向代理，含离线安装包与校验流程',
-    priceRange: '600～2000 元/次',
-  },
-  {
-    id: 'maintenance',
-    name: '批量部署与年度运维',
-    detail: '多台服务器统一部署规范、升级与回滚演练、季度检查报告',
-    priceRange: '2000～5000 元/年',
+    priceRange: '500～1000 元/次',
   },
   {
     id: 'custom',

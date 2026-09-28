@@ -15,6 +15,7 @@ import {
   deleteRole,
   listMemberItems,
   listRoleItems,
+  resetMemberPassword,
   setMemberInstanceGrants,
   updateMember,
   updateRole,
@@ -60,6 +61,39 @@ describe('成员与角色服务', () => {
     }
   })
 
+  it('建号与重置密码都要求强密码，不允许出现"用户自己改不回来"的初始密码', async () => {
+    const role = await createRole({ name: '弱密码用例角色', permissions: ['room:read'] })
+    assert.equal(role.ok, true)
+    if (!role.ok) {
+      return
+    }
+
+    const weak = await createMember({
+      account: `weak-${randomUUID().slice(0, 8)}`,
+      password: '123456',
+      roleId: role.data.roleId,
+    })
+    assert.equal(weak.ok, false, '初始密码必须过与改密同一套强度校验')
+    if (!weak.ok) {
+      assert.match(weak.message, /不符合要求/)
+    }
+
+    const okMember = await createMember({
+      account: `strong-${randomUUID().slice(0, 8)}`,
+      password: 'Init-Password#2026',
+      roleId: role.data.roleId,
+    })
+    assert.equal(okMember.ok, true)
+    if (!okMember.ok) {
+      return
+    }
+    const reset = await resetMemberPassword(
+      { userId: okMember.data.userId, password: 'weak' },
+      adminUserId,
+    )
+    assert.equal(reset.ok, false, '重置成弱密码同样要拦')
+  })
+
   it('新角色可以被创建，并出现在列表里', async () => {
     const created = await createRole({
       name: '只读看板',
@@ -90,7 +124,7 @@ describe('成员与角色服务', () => {
 
     const member = await createMember({
       account: `room-admin-${randomUUID().slice(0, 8)}`,
-      password: 'init-password',
+      password: 'Init-Password#2026',
       roleId: role.data.roleId,
       instanceIds: ['inst-a', 'inst-b'],
     })
@@ -120,7 +154,7 @@ describe('成员与角色服务', () => {
     }
     const member = await createMember({
       account: `shrink-${randomUUID().slice(0, 8)}`,
-      password: 'init-password',
+      password: 'Init-Password#2026',
       roleId: role.data.roleId,
     })
     assert.equal(member.ok, true)
@@ -167,7 +201,7 @@ describe('成员与角色服务', () => {
     }
     await createMember({
       account: `inuse-${randomUUID().slice(0, 8)}`,
-      password: 'init-password',
+      password: 'Init-Password#2026',
       roleId: role.data.roleId,
     })
     const removed = await deleteRole(role.data.roleId)
@@ -210,7 +244,7 @@ describe('成员与角色服务', () => {
     }
     const member = await createMember({
       account: `solo-admin-${randomUUID().slice(0, 8)}`,
-      password: 'init-password',
+      password: 'Init-Password#2026',
       roleId: role.data.roleId,
     })
     assert.equal(member.ok, true)
@@ -267,7 +301,7 @@ describe('成员与角色服务', () => {
     }
     const member = await createMember({
       account: `todelete-${randomUUID().slice(0, 8)}`,
-      password: 'init-password',
+      password: 'Init-Password#2026',
       roleId: role.data.roleId,
       instanceIds: ['inst-x'],
     })

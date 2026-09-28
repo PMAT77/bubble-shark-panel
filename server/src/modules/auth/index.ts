@@ -17,6 +17,7 @@ import type {
   SuccessResponse,
 } from '../../../../shared/contracts/auth'
 import { ErrorCode } from '../../../../shared/constants/error-code'
+import { isStrongPassword, PASSWORD_POLICY_HINT } from '../../../../shared/constants/password'
 import { deleteAdminCredentialsFile } from '../../shared/config/credentials-file'
 import { loadServerConfig } from '../../shared/config'
 import { resolveClientIp } from '../../shared/http/client-ip'
@@ -124,11 +125,6 @@ function buildCaptchaRequiredResponse(
     challengeQuestion: challenge.question,
     challengeExpiresInSec: challenge.expiresInSec,
   })
-}
-
-function isStrongPassword(password: string): boolean {
-  // 至少 8 位，且包含大小写字母、数字与特殊字符。
-  return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,64}$/.test(password)
 }
 
 function verifyRecoveryToken(expected: string, provided: string): boolean {
@@ -412,7 +408,7 @@ export function registerAuthModule(app: FastifyInstance) {
       return businessError('原密码和新密码不能为空', request)
     }
     if (!isStrongPassword(newPassword)) {
-      return businessError('新密码必须为 8-64 位，且包含大小写字母、数字和特殊字符', request)
+      return businessError(`新密码必须为 ${PASSWORD_POLICY_HINT}`, request)
     }
     if (newPassword === password) {
       return businessError('新密码不能与原密码相同', request)
@@ -480,7 +476,7 @@ export function registerAuthModule(app: FastifyInstance) {
       return businessError('账号、找回口令和新密码不能为空', request)
     }
     if (!isStrongPassword(newPassword)) {
-      return businessError('新密码必须为 8-64 位，且包含大小写字母、数字和特殊字符', request)
+      return businessError(`新密码必须为 ${PASSWORD_POLICY_HINT}`, request)
     }
     // token 维度封锁：同一找回口令在窗口内失败超限后临时拒绝（与错误文案一致，不暴露封锁状态）
     if (isRecoveryTokenLocked(recoveryToken)) {

@@ -9,6 +9,7 @@ import type {
   RoleListItem,
   RoleUpdatePayload,
 } from '../../../../shared/contracts/rbac'
+import { isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../../../../shared/constants/password'
 import { isKnownPermission } from '../../../../shared/constants/permissions'
 import {
   createUserRecord,
@@ -235,6 +236,16 @@ export async function createMember(
   if (await findUserIdByAccount(payload.account)) {
     return { ok: false, message: '这个账号已存在，请换一个' }
   }
+  /**
+   * 初始密码也要过强度校验。
+   *
+   * 否则会出现这种组合：管理员给子账号设一个弱密码、并关掉"首次登录须改密"，
+   * 于是这个弱密码长期有效——而用户自己想改成弱密码反而被拦住。
+   * 两条路径必须是同一把尺子。
+   */
+  if (!isStrongPassword(payload.password)) {
+    return { ok: false, message: `初始密码不符合要求：${PASSWORD_POLICY_MESSAGE}` }
+  }
   const role = await findRoleById(payload.roleId)
   if (!role) {
     return { ok: false, message: '选择的角色不存在' }
@@ -313,6 +324,9 @@ export async function resetMemberPassword(
   }
   if (payload.userId === operatorUserId && payload.mustChangePassword === false) {
     return { ok: false, message: '给自己重置密码时不能关闭「下次登录须改密」' }
+  }
+  if (!isStrongPassword(payload.password)) {
+    return { ok: false, message: `新密码不符合要求：${PASSWORD_POLICY_MESSAGE}` }
   }
   await updateUserPassword(member.id, payload.password, { keepSessions: false })
   // 重置密码同时要求对方下次登录改密：管理员给的初始密码不该成为长期凭据。

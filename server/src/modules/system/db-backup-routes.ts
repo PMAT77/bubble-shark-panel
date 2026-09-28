@@ -8,7 +8,6 @@ import {
   dbSnapshotRestoreRequestSchema,
 } from '../../../../shared/contracts/backup'
 import { ErrorCode } from '../../../../shared/constants/error-code'
-import { OPS_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { listBackupsByKindAsc } from '../../shared/db/index'
 import { businessError, success } from '../../shared/http/response'
 import { resolveAuthorizedContext } from './auth'
@@ -21,7 +20,8 @@ import { requestDatabaseRestore } from './db-restore-service'
  */
 export function registerDatabaseBackupRoutes(app: FastifyInstance) {
   app.post('/app/system/db/backup', async (request): Promise<ApiSuccessResponse<BackupMutationResult> | ApiErrorResponse> => {
-    const auth = await resolveAuthorizedContext(request, { permissions: OPS_MANAGE_PERMISSION })
+    // 面板数据库快照是全局资源（不属于任何实例），所以只要权限点、不要实例授权
+    const auth = await resolveAuthorizedContext(request, { permissions: 'backup:create' })
     if (auth.error || !auth.context) {
       return auth.error ?? businessError('登录状态失效，请重新登录', request)
     }
@@ -34,7 +34,7 @@ export function registerDatabaseBackupRoutes(app: FastifyInstance) {
   })
 
   app.get('/app/system/db/backup', async (request): Promise<ApiSuccessResponse<BackupItem[]> | ApiErrorResponse> => {
-    const auth = await resolveAuthorizedContext(request, { permissions: OPS_MANAGE_PERMISSION })
+    const auth = await resolveAuthorizedContext(request, { permissions: 'backup:read' })
     if (auth.error || !auth.context) {
       return auth.error ?? businessError('登录状态失效，请重新登录', request)
     }
@@ -60,7 +60,8 @@ export function registerDatabaseBackupRoutes(app: FastifyInstance) {
    * 手工输入一次，避免误点。
    */
   app.post('/app/system/db/backup/restore', async (request, reply): Promise<ApiSuccessResponse<BackupMutationResult> | ApiErrorResponse> => {
-    const auth = await resolveAuthorizedContext(request, { permissions: OPS_MANAGE_PERMISSION })
+    // 恢复会把整套面板数据回退，是这里最有破坏力的动作，所以单给 backup:restore
+    const auth = await resolveAuthorizedContext(request, { permissions: 'backup:restore' })
     if (auth.error || !auth.context) {
       return auth.error ?? businessError('登录状态失效，请重新登录', request)
     }

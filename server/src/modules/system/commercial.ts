@@ -4,7 +4,6 @@ import type { CommercialSupport } from '../../../../shared/contracts/commercial'
 import process from 'node:process'
 import { loadServerConfig } from '../../shared/config'
 import { readLicenseState } from '../../shared/license'
-import { SYSTEM_READ_PERMISSION } from '../../shared/menu-routes'
 import { success } from '../../shared/http/response'
 import { requirePermission } from './auth'
 
@@ -94,7 +93,7 @@ function resolveContact(): CommercialSupportOptions {
 /** 只读的商业支持与 Pro 说明，任何已登录且具备只读权限的账号都能看 */
 export function registerCommercialSupportRoutes(app: FastifyInstance): void {
   app.get('/app/system/commercial', async (request): Promise<ApiSuccessResponse<CommercialSupport> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'license:read')
     if (authError) {
       return authError
     }

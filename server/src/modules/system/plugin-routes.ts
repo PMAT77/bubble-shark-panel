@@ -15,7 +15,6 @@ import {
 } from '../../../../shared/contracts/plugin'
 import type { OperationAuditResult } from '../../../../shared/contracts/audit'
 import { operationAuditQuerySchema } from '../../../../shared/contracts/audit'
-import { SYSTEM_MANAGE_PERMISSION, SYSTEM_READ_PERMISSION } from '../../shared/menu-routes'
 import { businessError, success } from '../../shared/http/response'
 import { scanPlugins, setPluginEnabled } from '../../plugins/registry'
 import { mergePluginStore } from '../../plugins/store-merge'
@@ -57,7 +56,7 @@ export function registerPluginRoutes(app: FastifyInstance, getRuntime: () => Plu
   })
 
   app.get('/app/system/plugins', async (request): Promise<ApiSuccessResponse<PluginListResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'plugin:read')
     if (authError) {
       return authError
     }
@@ -70,7 +69,7 @@ export function registerPluginRoutes(app: FastifyInstance, getRuntime: () => Plu
   })
 
   app.post('/app/system/plugins/toggle', async (request): Promise<ApiSuccessResponse<{ message: string }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'plugin:manage')
     if (authError) {
       return authError
     }
@@ -112,7 +111,7 @@ export function registerPluginRoutes(app: FastifyInstance, getRuntime: () => Plu
    * 不做成存档导入那样的 2 GB——留一个没人会用到的巨大入口，只会扩大攻击面。
    */
   app.post('/app/system/plugins/import/inspect', { bodyLimit: resolvePluginPackageLimitBytes() }, async (request): Promise<ApiSuccessResponse<PluginImportInspectResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'plugin:manage')
     if (authError) {
       return authError
     }
@@ -138,7 +137,7 @@ export function registerPluginRoutes(app: FastifyInstance, getRuntime: () => Plu
    * 导入后**默认停用**——要不要让它跑起来由管理员决定，与启停开关保持同一套语义。
    */
   app.post('/app/system/plugins/import', async (request): Promise<ApiSuccessResponse<PluginImportResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'plugin:manage')
     if (authError) {
       return authError
     }
@@ -175,7 +174,7 @@ export function registerPluginRoutes(app: FastifyInstance, getRuntime: () => Plu
    * 这是插件可信度的唯一客观依据——插件自己的日志由它自己写，宿主侧的记录才不受它控制。
    */
   app.get('/app/system/plugins/audit', async (request): Promise<ApiSuccessResponse<PluginAuditResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'plugin:read')
     if (authError) {
       return authError
     }
@@ -195,7 +194,9 @@ export function registerPluginRoutes(app: FastifyInstance, getRuntime: () => Plu
    * 这条能力此前只存在于「应用日志」里——README 长期写着「查不到谁在什么时候重启了世界」。
    */
   app.get('/app/system/audit/operations', async (request): Promise<ApiSuccessResponse<OperationAuditResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    // 操作记录是独立的权限点：能读面板设置的人不一定该看到"谁改了什么"，
+    // 而审计的价值恰恰在于它的可见范围更小
+    const authError = await requirePermission(request, 'audit:read')
     if (authError) {
       return authError
     }

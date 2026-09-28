@@ -58,7 +58,6 @@ import {
   saveSystemPanelSettings,
   saveSystemSteamcmdConfig,
 } from '../../shared/db/index'
-import { SYSTEM_MANAGE_PERMISSION, SYSTEM_READ_PERMISSION } from '../../shared/menu-routes'
 import { businessError, success } from '../../shared/http/response'
 import { requirePermission } from './auth'
 import {
@@ -145,7 +144,7 @@ export function registerSystemModule(app: FastifyInstance) {
     apiPort: number
     isProduction: boolean
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -160,7 +159,7 @@ export function registerSystemModule(app: FastifyInstance) {
   })
 
   app.post('/app/system/settings', async (request): Promise<ApiSuccessResponse<PanelSettingsSaveResponse> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -225,7 +224,7 @@ export function registerSystemModule(app: FastifyInstance) {
   })
 
   app.get('/app/system/self-check', async (request): Promise<ApiSuccessResponse<SelfCheckReport> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -240,7 +239,7 @@ export function registerSystemModule(app: FastifyInstance) {
   })
 
   app.get('/app/system/filesystem/directories', async (request): Promise<ApiSuccessResponse<DirectoryItem[]> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -270,7 +269,7 @@ export function registerSystemModule(app: FastifyInstance) {
   })
 
   app.get('/app/system/filesystem/search', async (request): Promise<ApiSuccessResponse<DirectoryItem[]> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -307,7 +306,7 @@ export function registerSystemModule(app: FastifyInstance) {
     httpProxyConfigured: boolean
     httpsProxyConfigured: boolean
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -351,7 +350,7 @@ export function registerSystemModule(app: FastifyInstance) {
   })
 
   app.get('/app/system/steamcmd/diagnostics', async (request): Promise<ApiSuccessResponse<Awaited<ReturnType<typeof runSteamcmdDiagnostics>>> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -362,7 +361,7 @@ export function registerSystemModule(app: FastifyInstance) {
   app.post('/app/system/steamcmd/config', async (request): Promise<ApiSuccessResponse<{
     isSuccess: boolean
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -404,7 +403,7 @@ export function registerSystemModule(app: FastifyInstance) {
     isSuccess: boolean
     message: string
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -437,7 +436,7 @@ export function registerSystemModule(app: FastifyInstance) {
     isSuccess: boolean
     message: string
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -471,7 +470,7 @@ export function registerSystemModule(app: FastifyInstance) {
   })
 
   app.get('/app/system/panel-update/status', async (request): Promise<ApiSuccessResponse<ReturnType<typeof getCachedPanelUpdateStatus>> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -479,7 +478,7 @@ export function registerSystemModule(app: FastifyInstance) {
   })
 
   app.post('/app/system/panel-update/check', async (request): Promise<ApiSuccessResponse<ReturnType<typeof getCachedPanelUpdateStatus>> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -494,7 +493,7 @@ export function registerSystemModule(app: FastifyInstance) {
     status: 'updating' | 'completed' | 'ready'
     message: string
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -574,7 +573,7 @@ export function registerSystemModule(app: FastifyInstance) {
     runtimeStatus: 'running' | 'stopped'
     dockerStatus: 'running' | 'stopped'
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -678,7 +677,7 @@ export function registerSystemModule(app: FastifyInstance) {
       totalReceivedBytes: number
     }>
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -688,7 +687,7 @@ export function registerSystemModule(app: FastifyInstance) {
   })
 
   app.get('/app/system/network/config', async (request): Promise<ApiSuccessResponse<ReturnType<typeof getDefaultNetworkConfig>> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -700,7 +699,7 @@ export function registerSystemModule(app: FastifyInstance) {
   app.post('/app/system/network/config', async (request): Promise<ApiSuccessResponse<{
     isSuccess: boolean
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -732,7 +731,7 @@ export function registerSystemModule(app: FastifyInstance) {
     isValid: boolean
     message: string
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, SYSTEM_READ_PERMISSION)
+    const authError = await requirePermission(request, 'settings:read')
     if (authError) {
       return authError
     }

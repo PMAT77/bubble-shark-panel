@@ -12,7 +12,6 @@ import {
   notifyChannelUpdateRequestSchema,
   notifySettingsSaveRequestSchema,
 } from '../../../../shared/contracts/notify'
-import { SYSTEM_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import {
   createNotifyChannel,
   deleteNotifyChannel,
@@ -49,7 +48,7 @@ function maskPreview(configJson: string): NotifyChannelItem['configPreview'] {
 }
 
 async function authorize(request: FastifyRequest): Promise<ApiErrorResponse | undefined> {
-  const auth = await resolveAuthorizedContext(request, { permissions: SYSTEM_MANAGE_PERMISSION })
+  const auth = await resolveAuthorizedContext(request, { permissions: 'settings:write' })
   if (auth.error || !auth.context) {
     return auth.error ?? businessError('登录状态失效，请重新登录', request)
   }

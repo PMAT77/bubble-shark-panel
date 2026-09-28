@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NDataTable, NEmpty, NForm, NFormItem, NInput, NModal, NPopconfirm, NSelect, NSpace, NSpin, NSwitch, NTag, useMessage } from 'naive-ui'
+import { NButton, NCard, NDataTable, NEmpty, NForm, NFormItem, NInput, NModal, NPopconfirm, NSelect, NSpace, NSpin, NSwitch, NTag, useMessage } from 'naive-ui'
 import { h, onMounted, reactive, ref } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiRbac from '@/api/modules/rbac'
@@ -250,11 +250,6 @@ onMounted(loadAll)
         新建成员
       </NButton>
     </template>
-
-    <NAlert type="info" :bordered="false" class="mb-3">
-      角色决定能做什么，实例授权决定能在哪些实例上做，两者同时满足才生效。
-      没有授权任何实例的账号，登录后看不到实例列表 —— 这是正常的，不是故障。
-    </NAlert>
 
     <NSpin :show="loading">
       <NDataTable

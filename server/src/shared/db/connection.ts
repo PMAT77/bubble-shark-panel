@@ -22,8 +22,15 @@ interface InitDatabaseOptions {
   adminPassword?: string
   /** 为 true 时，每次启动用 env 中的 ADMIN_PASSWORD 覆盖已有管理员密码（用于 panel.env 找回） */
   syncAdminPasswordFromEnv?: boolean
-  /** 开发/测试环境种子账号（superadmin/test）；生产环境应关闭 */
+  /** 开发环境种子账号（只有 superadmin）；生产环境应关闭 */
   seedDevelopmentUsers?: boolean
+  /**
+   * 额外播种的账号（仅测试用）。
+   *
+   * 有些测试需要特定形态的存量账号（例如"只持有母仓遗留权限点"），
+   * 这种样本应当由**需要它的测试**声明，而不是挂在默认种子里让所有部署都多一个弱口令账号。
+   */
+  extraSeedUsers?: DbDefaultUserSeed[]
   /** 管理员凭证落库结果回调；调用方据此决定是否落盘初始凭据文件 */
   onAdminCredentialOutcome?: (outcome: AdminCredentialOutcome) => void
   /** RBAC 迁移结果回调；只在真的跑过迁移时触发（第二次启动起不再触发） */
@@ -35,7 +42,7 @@ interface AuthForcePasswordChangeState {
   completed: boolean
 }
 
-interface DbDefaultUserSeed {
+export interface DbDefaultUserSeed {
   account: string
   password: string
   email: string
@@ -61,16 +68,14 @@ const defaultUserSeeds: DbDefaultUserSeed[] = [
     avatar: 'https://api.dicebear.com/9.x/bottts-neutral/svg?seed=superadmin',
     permissions: [...ADMIN_DEFAULT_PERMISSIONS],
   },
-  {
-    account: 'test',
-    password: '123456',
-    email: 'test@game.com',
-    avatar: 'https://api.dicebear.com/9.x/bottts-neutral/svg?seed=test',
-    // 故意只留一个母仓遗留权限点：它是「迁移必须把无效权限点清干净」的真实样本，
-    // 对应的断言在 rbac-migration.test.ts 的「只持有母仓遗留权限点的账号」一条
-    permissions: ['pages.general:browse'],
-  },
 ]
+/**
+ * 默认只播种 superadmin 一个账号。
+ *
+ * 这里曾经还有一个 test 账号（密码同样是 123456），用来当「迁移必须把无效权限点清干净」
+ * 的样本。样本本身有价值，但**不该长在默认部署里** —— 它等于给每台机器的开发模式
+ * 都留一个固定弱口令账号。现在那个样本由需要它的测试通过 `extraSeedUsers` 自己声明。
+ */
 
 let sqliteDb: DatabaseSync | undefined
 let drizzleDb: ReturnType<typeof drizzle> | undefined
@@ -339,11 +344,11 @@ function bootstrapLegacyMigrationBaseline(database: DatabaseSync, migrationsFold
   `).run(baselineMigration.hash, baselineMigration.folderMillis)
 }
 
-async function seedDefaultUsers() {
+async function seedDefaultUsers(extraSeeds: DbDefaultUserSeed[] = []) {
   const { drizzleDb } = ensureDb()
   const now = nowIso()
 
-  for (const user of defaultUserSeeds) {
+  for (const user of [...defaultUserSeeds, ...extraSeeds]) {
     const existing = await drizzleDb
       .select({ id: users.id })
       .from(users)
@@ -558,7 +563,11 @@ export async function initDatabase(
   })
   await applyMigrations(path.resolve(migrationsFolder))
   if (options.seedDevelopmentUsers !== false) {
-    await seedDefaultUsers()
+    await seedDefaultUsers(options.extraSeedUsers)
+  }
+  else if (options.extraSeedUsers?.length) {
+    // 显式关掉开发种子但又要造测试样本时，额外种子仍应生效
+    await seedDefaultUsers(options.extraSeedUsers)
   }
   await seedAdminUserFromEnv(options)
   await applyForcePasswordChangePolicy(options)

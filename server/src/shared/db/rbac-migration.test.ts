@@ -52,6 +52,20 @@ describe('RBAC 迁移：全新库', () => {
       onRbacMigrationOutcome: (value) => {
         outcome = value
       },
+      /**
+       * 「只持有母仓遗留权限点的账号」这个样本。
+       *
+       * 它原本挂在默认种子里（账号 test），但那意味着每台机器的开发模式都多一个
+       * 固定弱口令账号。样本由需要它的测试声明更合适，也让"这个账号为什么存在"
+       * 在测试里一眼可见。
+       */
+      extraSeedUsers: [{
+        account: 'test',
+        password: '123456',
+        email: 'test@game.com',
+        avatar: 'https://api.dicebear.com/9.x/bottts-neutral/svg?seed=test',
+        permissions: ['pages.general:browse'],
+      }],
     })
   })
 

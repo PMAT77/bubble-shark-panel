@@ -3,7 +3,6 @@ import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/co
 import type { NodeListItem } from '../../../../shared/contracts/node'
 import os from 'node:os'
 import { collectHostResourceSnapshot } from '../../shared/host-metrics'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { listServerNodes, saveServerNode } from '../../shared/db/index'
 import { success } from '../../shared/http/response'
 import { requirePermission } from '../system/auth'
@@ -78,7 +77,11 @@ export function registerNodeModule(app: FastifyInstance) {
   })
 
   app.post('/app/node/local/register', async (request): Promise<ApiSuccessResponse<NodeListItem> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
+    /**
+     * 幂等地确保本地节点记录存在。它写库，但没有任何用户可见的语义
+     * （单节点架构下节点不是独立权限维度），所以归入监控读权限。
+     */
+    const authError = await requirePermission(request, 'console.monitor:read')
     if (authError) {
       return authError
     }
@@ -86,7 +89,7 @@ export function registerNodeModule(app: FastifyInstance) {
   })
 
   app.post('/app/node/list', async (request): Promise<ApiSuccessResponse<NodeListItem[]> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
+    const authError = await requirePermission(request, 'console.monitor:read')
     if (authError) {
       return authError
     }

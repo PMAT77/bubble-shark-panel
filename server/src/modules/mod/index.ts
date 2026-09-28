@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import type {
   ModConfigDto,
@@ -61,8 +61,8 @@ import {
   updateInstanceModByWorkshopId,
 } from '../../shared/db/index'
 import { businessError, success } from '../../shared/http/response'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
-import { requirePermission } from '../system/auth'
+import type { PermissionKey } from '../../../../shared/constants/permissions'
+import { authorizeInstance } from '../system/auth'
 import {
   enqueueModDownload,
   ensurePendingModDownloadsRecovered,
@@ -412,6 +412,18 @@ function logModReadinessResult(app: FastifyInstance, instanceId: string, result:
  * mod 模块注册入口
  * 负责创意工坊安装、启停与排序，并维护 modoverrides.lua。
  */
+/**
+ * mod 模块的实例级鉴权。
+ *
+ * 这个模块的实例 ID 走**路径参数**（`/app/instances/:instanceId/mods...`），
+ * 所以统一在这里取参数——**不要用正则去切 URL**：`.../mods/install-jobs` 这类
+ * 固定段会被误当成实例 ID，那样鉴权就查了一个不存在的实例。
+ */
+function authorizeModInstance(request: FastifyRequest, permission: PermissionKey) {
+  const params = request.params as { instanceId?: string } | undefined
+  return authorizeInstance(request, params?.instanceId?.trim() ?? '', permission)
+}
+
 export function registerModModule(app: FastifyInstance) {
   app.addHook('onReady', async () => {
     scheduleWarmSteamWorkshopModCache()
@@ -450,9 +462,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.get('/app/instances/:instanceId/mods', async (request): Promise<ApiSuccessResponse<ModListDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modInstanceParamsSchema.safeParse(request.params)
     const parsedQuery = modListQuerySchema.safeParse(request.query)
@@ -492,9 +504,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.get('/app/instances/:instanceId/mods/steam', async (request): Promise<ApiSuccessResponse<SteamModListQueryResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modInstanceParamsSchema.safeParse(request.params)
     const parsedQuery = steamModListQuerySchema.safeParse(request.query)
@@ -534,9 +546,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.get('/app/instances/:instanceId/mods/steam/:workshopId', async (request): Promise<ApiSuccessResponse<SteamModDetailDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modWorkshopParamsSchema.safeParse(request.params)
     const parsedQuery = steamModDetailQuerySchema.safeParse(request.query)
@@ -579,9 +591,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.post('/app/instances/:instanceId/mods/check-updates', async (request): Promise<ApiSuccessResponse<ModUpdateCheckResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modInstanceParamsSchema.safeParse(request.params)
     const parsedBody = modUpdateCheckPayloadSchema.safeParse(request.body ?? {})
@@ -622,9 +634,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.post('/app/instances/:instanceId/mods/install', async (request): Promise<ApiSuccessResponse<ModInstallJobDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:install')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modInstanceParamsSchema.safeParse(request.params)
     const parsedBody = modInstallPayloadSchema.safeParse(request.body ?? {})
@@ -661,9 +673,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.post('/app/instances/:instanceId/mods/batch-update', async (request): Promise<ApiSuccessResponse<ModInstallJobDto[]> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:install')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modInstanceParamsSchema.safeParse(request.params)
     const parsedBody = modBatchUpdatePayloadSchema.safeParse(request.body ?? {})
@@ -713,9 +725,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.get('/app/instances/:instanceId/mods/install-jobs/:workshopId', async (request): Promise<ApiSuccessResponse<ModInstallJobDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modWorkshopParamsSchema.safeParse(request.params)
     if (!parsedParams.success) {
@@ -741,9 +753,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.get('/app/instances/:instanceId/mods/install-jobs', async (request): Promise<ApiSuccessResponse<ModInstallJobDto[]> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modInstanceParamsSchema.safeParse(request.params)
     const parsedQuery = modInstallJobsQuerySchema.safeParse(request.query)
@@ -773,9 +785,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.put('/app/instances/:instanceId/mods/:modId', async (request): Promise<ApiSuccessResponse<ModMutationResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:toggle')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modItemParamsSchema.safeParse(request.params)
     const parsedBody = modUpdatePayloadSchema.safeParse(request.body ?? {})
@@ -829,9 +841,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.put('/app/instances/:instanceId/mods/reorder', async (request): Promise<ApiSuccessResponse<ModReorderResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:toggle')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modInstanceParamsSchema.safeParse(request.params)
     const parsedBody = modReorderPayloadSchema.safeParse(request.body ?? {})
@@ -875,9 +887,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.get('/app/instances/:instanceId/mods/:modId/config', async (request): Promise<ApiSuccessResponse<ModConfigDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modItemParamsSchema.safeParse(request.params)
     if (!parsedParams.success) {
@@ -917,9 +929,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.put('/app/instances/:instanceId/mods/:modId/config', async (request): Promise<ApiSuccessResponse<ModConfigSaveResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:config')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modItemParamsSchema.safeParse(request.params)
     const parsedBody = modConfigPayloadSchema.safeParse(request.body ?? {})
@@ -963,9 +975,9 @@ export function registerModModule(app: FastifyInstance) {
   })
 
   app.delete('/app/instances/:instanceId/mods/:modId', async (request): Promise<ApiSuccessResponse<ModDeleteResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
+    const authorized = await authorizeModInstance(request, 'mod:install')
+    if (authorized.error) {
+      return authorized.error
     }
     const parsedParams = modItemParamsSchema.safeParse(request.params)
     if (!parsedParams.success) {

@@ -8,12 +8,11 @@ import {
   type MapDto,
 } from '../../../../shared/contracts/map'
 import type { ShardId } from '../../../../shared/contracts/shard'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { resolveLocalDstInstance } from '../../shared/dst/local-dst-instance'
 import { loadServerConfig } from '../../shared/config'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 import { businessError, success } from '../../shared/http/response'
-import { requirePermission } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 import {
   ensureContainerRuntimeReady,
   isCavesContainerRunning,
@@ -69,13 +68,13 @@ function createMapService(): MapService {
 
 export function registerMapModule(app: FastifyInstance) {
   app.get('/app/instance/map', async (request): Promise<ApiSuccessResponse<MapDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = mapQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'world.map:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -86,15 +85,16 @@ export function registerMapModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/map/refresh', async (request): Promise<ApiSuccessResponse<MapDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = mapRefreshPayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const { instanceId, shard, force } = body.data
+    // 生成地图会向运行中的世界下发导出命令（游戏要跑一遍 RLE 编码），属于写操作
+    const authorized = await authorizeInstance(request, instanceId, 'world.map:generate')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -135,16 +135,15 @@ export function registerMapModule(app: FastifyInstance) {
      * 取图走 `allowQueryToken`：这张图是给 `<img src>` 用的，浏览器不会给图片请求带自定义头，
      * 只能把令牌放在查询参数里。授权逻辑与其余接口共用同一套，没有额外放宽。
      */
-    const authError = await requirePermission(request, {
-      permissions: NODE_INSTANCE_MANAGE_PERMISSION,
-      allowQueryToken: true,
-    })
-    if (authError) {
-      return reply.send(authError)
-    }
     const query = mapImageQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return reply.status(400).send({ status: 1, error: '请求参数无效' })
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'world.map:read', {
+      allowQueryToken: true,
+    })
+    if (authorized.error) {
+      return reply.send(authorized.error)
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: RESOLVE_MESSAGES })
     if (!resolved.ok) {

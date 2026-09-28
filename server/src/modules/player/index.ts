@@ -19,7 +19,6 @@ import type {
   PlayerProfileSyncResult,
   PlayerShard,
 } from '../../../../shared/contracts/player'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { resolveLocalDstInstance, type ResolvedLocalDstInstance } from '../../shared/dst/local-dst-instance'
 import { getPlayerList, savePlayerListForInstance } from '../../infra/game-adapter/dst/player-service'
 import {
@@ -63,7 +62,7 @@ import {
   upsertPlayerProfiles,
 } from '../../shared/db/index'
 import { businessError, success } from '../../shared/http/response'
-import { requirePermission } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 import {
   isInstanceContainerRunning,
   sendInstanceContainerCommand,
@@ -154,13 +153,13 @@ export async function queryInstanceOnlineRoster(instance: ResolvedLocalDstInstan
  */
 export function registerPlayerModule(app: FastifyInstance) {
   app.get('/app/instance/players', async (request): Promise<ApiSuccessResponse<PlayerListDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = playerListQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'player:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: PLAYER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -184,15 +183,15 @@ export function registerPlayerModule(app: FastifyInstance) {
   })
 
   app.put('/app/instance/players', async (request): Promise<ApiSuccessResponse<PlayerListSaveResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = playerListSavePayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const payload = body.data
+    const authorized = await authorizeInstance(request, payload.instanceId, 'player:write')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(payload.instanceId, request, { messages: PLAYER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -217,13 +216,13 @@ export function registerPlayerModule(app: FastifyInstance) {
    * 名单以后就能按名字显示。
    */
   app.get('/app/instance/players/online', async (request): Promise<ApiSuccessResponse<PlayerOnlineRosterDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = playerProfileQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'player:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: PLAYER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -240,13 +239,13 @@ export function registerPlayerModule(app: FastifyInstance) {
 
   /** 按名字 / ID 搜索玩家档案，供「按游戏名加入名单」使用 */
   app.get('/app/instance/players/profiles', async (request): Promise<ApiSuccessResponse<PlayerProfileSearchResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = playerProfileQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, query.data.instanceId, 'player:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(query.data.instanceId, request, { messages: PLAYER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -280,13 +279,13 @@ export function registerPlayerModule(app: FastifyInstance) {
    * 面板采集的控制台日志里，管理员点一下就把它们捞回档案，老名单也能显示名字。
    */
   app.post('/app/instance/players/profiles/sync', async (request): Promise<ApiSuccessResponse<PlayerProfileSyncResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = playerProfileQuerySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, body.data.instanceId, 'player.profile:write')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(body.data.instanceId, request, { messages: PLAYER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -304,13 +303,13 @@ export function registerPlayerModule(app: FastifyInstance) {
 
   /** 设置玩家备注名（只存在面板里，不写进游戏名单文件） */
   app.put('/app/instance/players/profiles/note', async (request): Promise<ApiSuccessResponse<PlayerProfileSearchResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = playerProfileNotePayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
+    }
+    const authorized = await authorizeInstance(request, body.data.instanceId, 'player.profile:write')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(body.data.instanceId, request, { messages: PLAYER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
@@ -339,15 +338,15 @@ export function registerPlayerModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/players/kick', async (request): Promise<ApiSuccessResponse<PlayerKickResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = playerKickPayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const { instanceId, kuId } = body.data
+    const authorized = await authorizeInstance(request, instanceId, 'player:kick')
+    if (authorized.error) {
+      return authorized.error
+    }
     /**
      * 踢出比封禁宽松：离线 / 局域网进来的路人没有 Klei 账号，ID 形状不受面板控制，
      * 但清场同样需要踢得掉他。所以这里只要求「能安全拼进 Lua 命令」——
@@ -459,10 +458,6 @@ export function registerPlayerModule(app: FastifyInstance) {
   })
 
   app.post('/app/instance/players/ban', async (request): Promise<ApiSuccessResponse<PlayerBanResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = playerActionPayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       // 封禁要写进黑名单长期生效，只有稳定的 Klei ID 才有意义；
@@ -474,6 +469,10 @@ export function registerPlayerModule(app: FastifyInstance) {
       return businessError('请求参数无效', request)
     }
     const { instanceId, kuId } = body.data
+    const authorized = await authorizeInstance(request, instanceId, 'player:ban')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: PLAYER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error

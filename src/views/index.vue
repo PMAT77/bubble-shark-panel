@@ -51,6 +51,21 @@ function openCapability(card: CapabilityCard) {
   router.push(card.route)
 }
 
+const appMenuStore = useAppMenuStore()
+
+/**
+ * 已登录、但一个可见模块都没有。
+ *
+ * 判据是「全部可见模块为空」。不要用 `sidebarMenus` —— 那是"当前选中主菜单的子菜单"，
+ * 有权限的账号在某些情况下也会为空，用它会把正常账号也判成零权限。
+ * 未登录时不提示（主页对匿名访客本来就是落地页）。
+ */
+const hasNoVisibleModule = computed(() => appAccountStore.isLogin && appMenuStore.allMenus.length === 0)
+
+function logout() {
+  appAccountStore.logout()
+}
+
 function goLogin() {
   // 已登录时原跳 /login 会被守卫弹回主页，直接进入实例管理
   if (appAccountStore.isLogin) {
@@ -78,6 +93,32 @@ function goLogin() {
             Community · MIT
           </span>
         </div>
+      </div>
+
+      <!--
+        已登录却一个模块都看不到：多半是还没分配角色。
+        这里必须给一个**看得见**的退出入口——侧边栏在菜单为空时整个不渲染，
+        而退出按钮原本就在那条侧边栏里，只剩顶栏一个小头像可点。
+      -->
+      <div
+        v-if="hasNoVisibleModule"
+        class="mb-6 flex flex-wrap items-center justify-between gap-3 border border-dashed rounded-xl p-4"
+      >
+        <div class="space-y-1">
+          <div class="text-sm font-medium">
+            当前账号还没有被分配任何模块权限
+          </div>
+          <div class="text-sm text-muted-foreground">
+            所以左侧没有菜单可显示。请联系管理员为你分配角色与可见实例。
+          </div>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 border rounded-md px-3 py-1.5 text-sm hover-bg-accent"
+          @click="logout"
+        >
+          退出登录
+        </button>
       </div>
 
       <!-- Hero: Asymmetric split -->

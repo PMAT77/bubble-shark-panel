@@ -57,6 +57,8 @@ const isHeaderEnable = computed(() => {
     && appSettingsStore.settings.menu.mode === 'head'
 })
 
+const appAccountStore = useAppAccountStore()
+
 // 侧边栏主导航是否显示
 const isMainSidebarEnable = computed(() => {
   return appSettingsStore.settings.menu.mode === 'side'
@@ -65,6 +67,21 @@ const isMainSidebarEnable = computed(() => {
 
 // 侧边栏次导航是否显示
 const isSubSidebarEnable = computed(() => {
+  /**
+   * 零权限账号的兜底。
+   *
+   * single 模式下主侧边栏（要求 mode === 'side'）与顶栏（要求 mode === 'head'）都不显示，
+   * 次侧边栏又要满足 sidebarMenus 非空才显示 —— 于是还没被分配角色的账号
+   * 在页面上**没有任何账号入口**，连退出登录都找不到。
+   *
+   * 判据用 `allMenus`（全部可见模块）而不是 `sidebarMenus`：后者是"当前选中主菜单的子菜单"，
+   * 有权限的账号在某些情况下也会为空，用它会把正常账号也判成零权限。
+   */
+  const hasNoMenu = appAccountStore.isLogin && appMenuStore.allMenus.length === 0
+  if (hasNoMenu && appSettingsStore.mode !== 'mobile' && appSettingsStore.settings.menu.mode === 'single') {
+    return true
+  }
+
   return appSettingsStore.mode === 'mobile'
     || (
       ['side', 'head'].includes(appSettingsStore.settings.menu.mode)

@@ -9,6 +9,7 @@ import Fastify from 'fastify'
 import type { FastifyInstance } from 'fastify'
 import { registerAuthModule } from '../auth/index'
 import { registerDatabaseBackupRoutes } from '../system/db-backup-routes'
+import { addUserInstanceGrants, findUserByAccount } from '../../shared/db/index'
 import { closeDatabase, createBackupRecord, getBackupById, initDatabase, listBackups, newBackupId } from '../../shared/db/index'
 import { registerBackupModule } from './index'
 
@@ -84,6 +85,15 @@ describe('database snapshot import route', () => {
     const body = JSON.parse(login.body) as ApiEnvelope<{ token: string }>
     assert.equal(body.status, 1, `登录失败：${login.body}`)
     token = body.data.token
+
+    /**
+     * 实例级隔离生效后，「看得到某个实例的存档备份」以该实例的授权为前提：
+     * 备份列表会按可见实例过滤。生产环境里实例由创建接口建立、创建者自动获得授权，
+     * 而这个测试直接造备份记录、跳过了那一步，所以这里补一条授权。
+     */
+    const admin = await findUserByAccount('superadmin')
+    assert.ok(admin, '前置条件：管理员账号存在')
+    await addUserInstanceGrants(admin.id, ['inst-1'], null)
   })
 
   after(async () => {

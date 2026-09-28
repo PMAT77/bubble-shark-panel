@@ -412,13 +412,21 @@ const columns = computed<DataTableColumns<ScheduleTaskItem>>(() => {
       title: '操作',
       key: 'actions',
       width: 200,
-      render: row => h(NSpace, { size: 8, wrap: false }, {
-        default: () => [
-          h(NButton, { size: 'small', secondary: true, disabled: !row.enabled, onClick: () => runNow(row) }, { default: () => '立即执行' }),
-          h(NButton, { size: 'small', secondary: true, onClick: () => openEditDialog(row) }, { default: () => '编辑' }),
-          h(NButton, { size: 'small', secondary: true, type: 'error', onClick: () => removeTask(row) }, { default: () => '删除' }),
-        ],
-      }),
+      render: (row) => {
+        /**
+         * 按权限**构建**按钮数组，而不是渲染出来再禁用：
+         * 任务归属的实例看不到时，这些按钮本来也不该出现。
+         */
+        const actions: ReturnType<typeof h>[] = []
+        // 三个按钮同属一个权限点：后端 run-now / update / delete 都是 schedule:write
+        // （最初这里写成 schedule:run，那个点位并不存在——类型收紧后才会编译报错）
+        if (hasPermission('schedule:write')) {
+          actions.push(h(NButton, { size: 'small', secondary: true, disabled: !row.enabled, onClick: () => runNow(row) }, { default: () => '立即执行' }))
+          actions.push(h(NButton, { size: 'small', secondary: true, onClick: () => openEditDialog(row) }, { default: () => '编辑' }))
+          actions.push(h(NButton, { size: 'small', secondary: true, type: 'error', onClick: () => removeTask(row) }, { default: () => '删除' }))
+        }
+        return h(NSpace, { size: 8, wrap: false }, { default: () => actions })
+      },
     },
   ]
   return base

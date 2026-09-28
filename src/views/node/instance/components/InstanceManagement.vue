@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PermissionKey } from '../../../../../shared/constants/permissions'
 import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
 import type { CreateInstancePayload, InstallableGameItem, InstanceItem, InstanceStatus, InstanceStatusCounts, InstanceUpdateCheckJobPayload } from '@/api/modules/instance'
 import type { NodeListItem } from '@/api/modules/node'
@@ -368,9 +369,9 @@ const { auth: hasPermission } = useAppAuth()
  * 详情与控制台只要"能读这个实例"，所以用 instance:read —— 它们不改变任何状态；
  * 启停与重启归 instance:lifecycle，更新归 instance:update，删除归 instance:delete。
  */
-const INSTANCE_ACTION_PERMISSIONS: Record<InstanceRowAction['key'], string> = {
+const INSTANCE_ACTION_PERMISSIONS: Record<InstanceRowAction['key'], PermissionKey> = {
   detail: 'instance:read',
-  console: 'instance:console:read',
+  console: 'instance.console:read',
   update: 'instance:update',
   start: 'instance:lifecycle',
   stop: 'instance:lifecycle',

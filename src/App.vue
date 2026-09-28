@@ -3,6 +3,7 @@ import dayjs from '@/utils/dayjs'
 import { APP_TITLE } from '@/utils/app-title'
 import Provider from './ui/provider/index.vue'
 import 'dayjs/locale/zh-cn'
+import type { PermissionKey } from '../shared/constants/permissions'
 
 const route = useRoute()
 
@@ -26,9 +27,14 @@ function resolveDynamicPageTitle() {
   return normalizedTitle
 }
 
+/** 路由 meta 上权限点的形态；空串 = 无需权限 */
+type RouteAuth = PermissionKey | PermissionKey[] | ''
+
 const isAuth = computed(() => {
   return route.matched.every((item) => {
-    return auth(item.meta.auth ?? '')
+    // 路由 meta 的权限点由服务端菜单决定（menu-routes 侧已收窄到 PermissionKey）；
+    // vue-router 的 meta 是松散类型，这里断言一次。空串表示"这项不需要权限"。
+    return auth((item.meta.auth ?? '') as RouteAuth)
   })
 })
 

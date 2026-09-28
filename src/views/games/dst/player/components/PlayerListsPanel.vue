@@ -531,6 +531,7 @@ defineExpose({ loadAll })
                   size="small"
                   :disabled="lists[item.kind].saving"
                   @click="confirmRemove(item.kind, entry)"
+                  v-if="hasPermission('player:write')"
                 >
                   移出
                 </NButton>

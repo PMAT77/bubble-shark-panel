@@ -4,7 +4,6 @@ import { computed, ref } from 'vue'
 import apiBackup from '@/api/modules/backup'
 import { routeToOpsBackups } from '@/navigation/game-routes'
 import { copyTextToClipboard } from '@/utils/copyToClipboard'
-import { OPS_READ_PERMISSION } from '../../../../../../shared/constants/permissions'
 
 defineOptions({
   name: 'InstanceMigrationCard',
@@ -18,8 +17,13 @@ const message = useMessage()
 const router = useRouter()
 const { auth: hasPermission } = useAppAuth()
 
-/** 备份页需要 ops:read 才注册路由，没权限时不给这个入口，避免点进找不到的页面 */
-const canViewBackups = computed(() => hasPermission(OPS_READ_PERMISSION))
+/**
+ * 备份页需要 `backup:read` 才注册路由，没权限时不给这个入口，避免点进找不到的页面。
+ *
+ * 这里原来写的是 `OPS_READ_PERMISSION`（废弃别名，值为已不存在的 `ops:read`），
+ * 判断因此恒为 false、入口一直不显示——把参数类型收紧到 PermissionKey 之后才暴露。
+ */
+const canViewBackups = computed(() => hasPermission('backup:read'))
 
 function goBackups() {
   router.push(routeToOpsBackups(props.instanceId))

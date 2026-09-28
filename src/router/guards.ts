@@ -1,3 +1,4 @@
+import type { PermissionKey } from '../../shared/constants/permissions'
 import type { Router } from 'vue-router'
 import { useNProgress } from '@vueuse/integrations/useNProgress'
 import { warnKeepAliveComponentNameMissing } from 'virtual:fantastic-admin/turbo-console'
@@ -89,7 +90,7 @@ function setupRedirectAuthChildrenRoute(router: Router) {
     const { auth } = useAppAuth()
     const currentRoute = router.getRoutes().find(route => route.path === (to.matched.at(-1)?.path ?? ''))
     if (!currentRoute?.redirect) {
-      const findAuthRoute = currentRoute?.children?.find(route => route.meta?.menu !== false && auth(route.meta?.auth ?? ''))
+      const findAuthRoute = currentRoute?.children?.find(route => route.meta?.menu !== false && auth((route.meta?.auth ?? '') as PermissionKey | PermissionKey[] | ''))
       if (findAuthRoute) {
         return findAuthRoute
       }

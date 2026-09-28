@@ -1,3 +1,4 @@
+import type { PermissionKey } from '../../../../shared/constants/permissions'
 import type { MenuRecordMainRaw, MenuRecordRaw, RouteRecordMainRaw } from '@fantastic-admin/types'
 import { cloneDeep } from 'es-toolkit'
 import type { MenuRouteItemLike } from './route-layout'
@@ -181,7 +182,7 @@ export const useAppMenuStore = defineStore(
     function filterAsyncMenus<T extends MenuRecordMainRaw[] | MenuRecordRaw[]>(menus: T): T {
       const res: any = []
       menus.forEach((menu) => {
-        if (auth.auth(menu.meta?.auth ?? '')) {
+        if (auth.auth((menu.meta?.auth ?? '') as PermissionKey | PermissionKey[] | '')) {
           const tmpMenu = cloneDeep(menu)
           if (tmpMenu.children && tmpMenu.children.length > 0) {
             tmpMenu.children = filterAsyncMenus(tmpMenu.children) as MenuRecordRaw[]

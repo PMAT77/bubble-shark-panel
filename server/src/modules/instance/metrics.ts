@@ -6,7 +6,6 @@ import type {
   InstanceMetricsPayload,
   InstanceRuntimeMetrics,
 } from '../../../../shared/contracts/instance'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import type { DbGameInstance } from '../../shared/db/index'
 import {
   listGameInstances,
@@ -14,7 +13,8 @@ import {
 import { getContainerRuntime } from '../../infra/container'
 import { businessError, success } from '../../shared/http/response'
 import { ensureContainerRuntimeReady, isInstanceContainerRunning, resolveInstanceContainerRef } from './container-lifecycle'
-import { requirePermission } from '../system/auth'
+import { ErrorCode } from '../../../../shared/constants/error-code'
+import { resolveInstanceScope } from '../system/auth'
 
 const LOCAL_NODE_ID = 'local-node'
 
@@ -64,10 +64,11 @@ export async function handleInstanceMetrics(
   request: FastifyRequest,
   body: InstanceIdsBody,
 ): Promise<ApiSuccessResponse<InstanceMetricsResponse> | ApiErrorResponse> {
-  const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-  if (authError) {
-    return authError
+  const scope = await resolveInstanceScope(request, 'instance:read')
+  if (scope.error || !scope.instanceIds) {
+    return scope.error ?? businessError('无法确定可见实例范围', request)
   }
+  const visibleInstanceIds = new Set(scope.instanceIds)
 
   const runtimeReady = await ensureContainerRuntimeReady()
   if (!runtimeReady.ok) {
@@ -81,9 +82,19 @@ export async function handleInstanceMetrics(
   )
   const hasIdFilter = idFilter.size > 0
 
+  if (hasIdFilter && [...idFilter].some(id => !visibleInstanceIds.has(id))) {
+    // 与批量更新检查同一口径：不做部分执行，也不告诉调用方"哪几个 ID 是存在的"
+    return businessError('没有该实例的访问权限', request, ErrorCode.FORBIDDEN)
+  }
+
   const instances = await listGameInstances({ status: 'running' })
   const targets = instances.filter((item) => {
     if (item.nodeId !== LOCAL_NODE_ID) {
+      return false
+    }
+    // 缺省（不传 ids）时此前是「本机全部运行中实例」，那会让只被授权两个实例的账号
+    // 拿到别人实例的 CPU / 内存曲线。缺省范围改为「全部可见实例」。
+    if (!visibleInstanceIds.has(item.id)) {
       return false
     }
     if (hasIdFilter && !idFilter.has(item.id)) {

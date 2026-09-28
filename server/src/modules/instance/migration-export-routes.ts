@@ -7,12 +7,11 @@ import { ErrorCode } from '../../../../shared/constants/error-code'
 import {
   migrationExportRequestSchema,
 } from '../../../../shared/contracts/backup'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { getGameInstanceById } from '../../shared/db/index'
 import { sendFileDownload } from '../../shared/http/file-download'
 import { businessError, success } from '../../shared/http/response'
 import { resolveLocalDstInstance } from '../../shared/dst/local-dst-instance'
-import { requirePermission } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 import {
   exportInstanceMigrationPack,
   resolveMigrationExportRoot,
@@ -47,14 +46,15 @@ export function registerMigrationExportRoutes(app: FastifyInstance): void {
    * 实例必须存在、属于本地节点且已完成游戏安装；打包耗时取决于存档大小，前端需关掉请求超时。
    */
   app.post('/app/instance/migration/export', async (request, reply): Promise<void | FastifyReply> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      reply.status(403).send(authError)
-      return
-    }
     const parsed = migrationExportRequestSchema.safeParse(request.body ?? {})
     if (!parsed.success) {
       reply.status(400).send(businessError('请求参数无效', request))
+      return
+    }
+    // 迁移包会把存档整体带走，所以它算"导出"而不只是"读"
+    const authorized = await authorizeInstance(request, parsed.data.instanceId, 'instance.migration:export')
+    if (authorized.error) {
+      reply.status(403).send(authorized.error)
       return
     }
     const resolved = await resolveLocalDstInstance(parsed.data.instanceId, request, {
@@ -91,13 +91,14 @@ export function registerMigrationExportRoutes(app: FastifyInstance): void {
 
   /** 迁移报告（不打包）：界面先展示风险项，用户确认后再触发导出 */
   app.post('/app/instance/migration/report', async (request): Promise<ApiSuccessResponse<MigrationExportResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const parsed = migrationExportRequestSchema.safeParse(request.body ?? {})
     if (!parsed.success) {
       return businessError('请求参数无效', request)
+    }
+    // 报告只读：只给"查看迁移报告"权限的账号也能看风险项
+    const authorized = await authorizeInstance(request, parsed.data.instanceId, 'instance.migration:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const resolved = await resolveLocalDstInstance(parsed.data.instanceId, request, {
       ensureClusterDirectory: false,
@@ -124,16 +125,17 @@ export function registerMigrationExportRoutes(app: FastifyInstance): void {
 
   /** 下载已生成的迁移包（导出接口已回传文件流，这里用于失败后重试下载） */
   app.post('/app/instance/migration/download', async (request, reply): Promise<void | FastifyReply> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      reply.status(403).send(authError)
-      return
-    }
     const body = request.body as { instanceId?: string, fileName?: string } | undefined
     const instanceId = typeof body?.instanceId === 'string' ? body.instanceId.trim() : ''
     const fileName = typeof body?.fileName === 'string' ? body.fileName.trim() : ''
     if (!instanceId || !fileName) {
       reply.status(400).send(businessError('请求参数无效', request))
+      return
+    }
+    // 能重下迁移包 = 能拿到整份存档，按导出对待
+    const authorized = await authorizeInstance(request, instanceId, 'instance.migration:export')
+    if (authorized.error) {
+      reply.status(403).send(authorized.error)
       return
     }
     const instance = await getGameInstanceById(instanceId)

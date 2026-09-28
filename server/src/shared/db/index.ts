@@ -32,6 +32,7 @@ import type {
 export * from './types'
 export { closeDatabase, initDatabase, verifyPassword } from './connection'
 export * from './instance-repository'
+export * from './rbac-repository'
 export * from './backup-repository'
 export * from './schedule-repository'
 export * from './notify-repository'

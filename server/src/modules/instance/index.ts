@@ -19,7 +19,6 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import {
   createGameInstance,
   deleteGameInstanceById,
@@ -46,11 +45,12 @@ import { DST_APP_ID } from '../../infra/game-adapter/dst/constants'
 import { ensureDstLayout } from '../../infra/game-adapter/dst/cluster-config'
 import { syncInstanceModFilesFromDb } from '../mod/mod-file-sync-service'
 import { createInstanceBackup } from '../backup/backup-service'
-import { getSystemBackupSettings } from '../../shared/db/index'
+import { addUserInstanceGrants, deleteInstanceGrantsByInstanceId, getSystemBackupSettings } from '../../shared/db/index'
 import { allocateDstGamePort } from './dst-port-service'
 import { registerDstContainerCommandPort } from '../../shared/instance/dst-container-command-port'
 import { applyDstPortAutoAllocate, probeDstPortConflictForStart, resolveDstGamePortForStart } from './dst-port-sync'
 import { ErrorCode } from '../../../../shared/constants/error-code'
+import type { PermissionKey } from '../../../../shared/constants/permissions'
 import type { ContainerInspect } from '../../infra/container/types'
 import {
   ensureContainerRuntimeReady,
@@ -84,7 +84,7 @@ import { prepareInstallPathForRuntime, prepareInstallPathForSteamcmd } from './i
 import { registerInstanceScheduledOps } from './scheduled-entry'
 import { buildInternalInstanceRequest, registerPluginInstanceOps } from './instance-plugin-ops'
 import { startInstanceExitWatch } from './exit-watch'
-import { businessError, success } from '../../shared/http/response'
+import { businessError, success, unauthorized } from '../../shared/http/response'
 import { hostMemoryPressureError } from '../../shared/http/host-memory-pressure-error'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 import { registerInstanceMetricsRoute } from './metrics'
@@ -102,7 +102,7 @@ import {
   resolveSteamcmdCommandForUpdateCheck,
   scheduleInstanceUpdateChecks,
 } from './update-check'
-import { requirePermission } from '../system/auth'
+import { authorizeInstance, requirePermission, resolveAuthorizedContext, resolveInstanceScope } from '../system/auth'
 import { loadServerConfig } from '../../shared/config'
 
 const LOCAL_NODE_ID = 'local-node'
@@ -128,8 +128,18 @@ const INSTALLABLE_GAMES: InstallableGameItem[] = [
   },
 ]
 
-async function verifyAuthorized(request: FastifyRequest): Promise<ApiErrorResponse | undefined> {
-  return requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
+/**
+ * 实例模块的鉴权入口（**不带实例维度**）。
+ *
+ * 默认 `instance:read`：列表、可安装游戏清单、状态计数这类「聚合读」用它。
+ * **针对某个实例的操作不要用它**，改用 `authorizeInstance`——
+ * 后者在权限点之外还会校验该账号对这个实例的授权，并拒绝游客角色的写操作。
+ */
+async function verifyAuthorized(
+  request: FastifyRequest,
+  permission: PermissionKey = 'instance:read',
+): Promise<ApiErrorResponse | undefined> {
+  return requirePermission(request, permission)
 }
 
 function normalizePort(value: number | undefined): number | null {
@@ -404,9 +414,9 @@ async function handleListInstances(
   request: FastifyRequest,
   payload: InstanceListQuery,
 ): Promise<ApiSuccessResponse<Awaited<ReturnType<typeof listGameInstances>>> | ApiErrorResponse> {
-  const authError = await verifyAuthorized(request)
-  if (authError) {
-    return authError
+  const scope = await resolveInstanceScope(request, 'instance:read')
+  if (scope.error || !scope.instanceIds) {
+    return scope.error ?? businessError('无法确定可见实例范围', request)
   }
   await reconcileInstanceRuntimeState(app)
   const status = payload.status
@@ -417,7 +427,9 @@ async function handleListInstances(
       : undefined,
     keyword: payload.keyword?.trim() || undefined,
   })
-  return success(instances, request)
+  // 可见范围是**过滤条件**而不是提示：没被授权的实例，连"存在过"都不该出现
+  const visible = new Set(scope.instanceIds)
+  return success(instances.filter(item => visible.has(item.id)), request)
 }
 
 /** 单次遍历统计各状态实例数（全量口径，供统计卡使用） */
@@ -486,16 +498,18 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
+    const scope = await resolveInstanceScope(request, 'instance:read')
+    if (scope.error || !scope.instanceIds) {
+      return scope.error ?? businessError('无法确定可见实例范围', request)
     }
     await reconcileInstanceRuntimeState(app)
     const instances = await listGameInstances({
       nodeId: body.data.nodeId?.trim() || undefined,
       keyword: body.data.keyword?.trim() || undefined,
     })
-    return success(countInstanceStatus(instances), request)
+    // 计数也要过滤：否则无权账号能从"共 5 个实例"这类数字里推断出别的实例存在
+    const visible = new Set(scope.instanceIds)
+    return success(countInstanceStatus(instances.filter(item => visible.has(item.id))), request)
   })
 
   app.post('/app/instance/dst-summaries', async (request): Promise<ApiSuccessResponse<DstInstanceSummariesDto> | ApiErrorResponse> => {
@@ -503,9 +517,9 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
+    const scope = await resolveInstanceScope(request, 'instance:read')
+    if (scope.error || !scope.instanceIds) {
+      return scope.error ?? businessError('无法确定可见实例范围', request)
     }
     await reconcileInstanceRuntimeState(app)
     const instances = await listGameInstances({
@@ -513,7 +527,8 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       status: body.data.status,
       keyword: body.data.keyword?.trim() || undefined,
     })
-    return success(await getDstInstanceSummaries(instances), request)
+    const visible = new Set(scope.instanceIds)
+    return success(await getDstInstanceSummaries(instances.filter(item => visible.has(item.id))), request)
   })
 
   app.get('/app/instance/games', async (request): Promise<ApiSuccessResponse<InstallableGameItem[]> | ApiErrorResponse> => {
@@ -525,10 +540,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   })
 
   app.get('/app/instance/install-log', async (request): Promise<ApiSuccessResponse<InstanceInstallLogPayload> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
-    }
     const query = instanceInstallLogQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
@@ -536,6 +547,10 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     const id = query.data.id
     if (!id) {
       return businessError('实例 ID 不能为空', request)
+    }
+    const authorized = await authorizeInstance(request, id, 'instance.install-log:read')
+    if (authorized.error) {
+      return authorized.error
     }
     const instance = await getGameInstanceById(id)
     if (!instance) {
@@ -583,10 +598,12 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   })
 
   app.post('/app/instance/create', async (request): Promise<ApiSuccessResponse<Awaited<ReturnType<typeof createGameInstance>>> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
+    // 创建不针对已有实例，所以不需要实例授权；但要用到创建者身份去补授权，因此取完整上下文
+    const createAuth = await resolveAuthorizedContext(request, { permissions: 'instance:create' })
+    if (createAuth.error || !createAuth.context) {
+      return createAuth.error ?? unauthorized(request)
     }
+    const creatorUserId = createAuth.context.user.id
     const parsed = createInstanceBodySchema.safeParse(request.body ?? {})
     if (!parsed.success) {
       return businessError('请求参数无效', request)
@@ -704,20 +721,40 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       }
       return businessError('宿主机内存不足，无法启动安装', request)
     }
+    /**
+     * 创建者自动获得这个实例的授权。
+     *
+     * 少了这一步，新建的实例**连创建它的人都看不到**——实例授权是唯一的可见性判据，
+     * 它不会因为「这个实例是我建的」而自动成立。放在安装任务起来之后：
+     * 上面几个失败分支都会回收实例记录，授权也跟着没必要存在。
+     */
+    await addUserInstanceGrants(creatorUserId, [instance.id], creatorUserId)
     return success(instance, request)
   })
 
   app.post('/app/instance/check-updates', async (request): Promise<ApiSuccessResponse<InstanceUpdateCheckJobStatus> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
-    }
     const body = instanceIdsBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
+    const scope = await resolveInstanceScope(request, 'instance:update')
+    if (scope.error || !scope.instanceIds) {
+      return scope.error ?? businessError('无法确定可见实例范围', request)
+    }
+    const requested = body.data.ids
+    if (requested && requested.length > 0) {
+      // 批量接口不做部分执行：只更新其中几个会让用户以为漏选了实例
+      const visible = new Set(scope.instanceIds)
+      if (requested.some(id => !visible.has(id))) {
+        return businessError('没有该实例的访问权限', request, ErrorCode.FORBIDDEN)
+      }
+    }
     const steamcmdCommand = await resolveSteamcmdCommandForUpdateCheck()
-    const instanceIds = body.data.ids
+    /**
+     * 缺省（不传 ids）此前表示「**全部实例**」——对一个只能看到两个实例的账号来说，
+     * 那等于让它批量更新别人机器上的实例。现在缺省是「全部**可见**实例」。
+     */
+    const instanceIds = requested && requested.length > 0 ? requested : [...scope.instanceIds]
     const status = enqueueInstanceUpdateCheck({
       steamcmdCommand,
       instanceIds,
@@ -728,18 +765,28 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   })
 
   app.get('/app/instance/check-updates/status', async (request): Promise<ApiSuccessResponse<InstanceUpdateCheckJobStatus> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
+    const scope = await resolveInstanceScope(request, 'instance:read')
+    if (scope.error || !scope.instanceIds) {
+      return scope.error ?? businessError('无法确定可见实例范围', request)
     }
-    return success(getInstanceUpdateCheckJobStatus(), request)
+    const status = getInstanceUpdateCheckJobStatus()
+    if (!status.result) {
+      return success(status, request)
+    }
+    // 结果里逐条带实例名与版本，不过滤就等于把别人的实例清单一并交了
+    const visible = new Set(scope.instanceIds)
+    const items = status.result.items.filter(item => visible.has(item.id))
+    return success({
+      ...status,
+      result: {
+        ...status.result,
+        items,
+        updateAvailableCount: items.filter(item => item.updateAvailable).length,
+      },
+    }, request)
   })
 
   app.post('/app/instance/update', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
-    }
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -883,10 +930,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   })
 
   app.post('/app/instance/allocate-ports', async (request): Promise<ApiSuccessResponse<{ gamePort: number }> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
-    }
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -942,17 +985,19 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   })
 
   async function handleInstanceStart(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> {
-    if (!options?.skipAuth) {
-      const authError = await verifyAuthorized(request)
-      if (authError) {
-        return authError
-      }
-    }
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const id = body.data.id
+    // skipAuth 是**内部调用**通道（计划任务、插件生命周期）：它们的授权由调用方保证，
+    // 不走用户鉴权。这条分支的存在正是为什么它需要被显式写出来，而不是靠请求头绕。
+    if (!options?.skipAuth) {
+      const authorized = await authorizeInstance(request, id, 'instance:lifecycle')
+      if (authorized.error) {
+        return authorized.error
+      }
+    }
     if (!id) {
       return businessError('实例 ID 不能为空', request)
     }
@@ -1175,10 +1220,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   }
 
   app.post('/app/instance/stop', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
-    }
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -1237,15 +1278,15 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   })
 
   app.post('/app/instance/restart', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
-    }
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const id = body.data.id
+    const authorized = await authorizeInstance(request, id, 'instance:lifecycle')
+    if (authorized.error) {
+      return authorized.error
+    }
     const { restartInstanceCore } = await import('./restart-instance-core.ts')
     return restartInstanceCore(app, request, id, {
       autoAllocatePorts: body.data.autoAllocatePorts === true,
@@ -1353,10 +1394,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   })
 
   app.post('/app/instance/delete', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> => {
-    const authError = await verifyAuthorized(request)
-    if (authError) {
-      return authError
-    }
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -1442,6 +1479,11 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     // 玩家档案属于这个实例：实例没了就一起清掉，免得面板里留下一堆再也用不到的名字
     await removePlayerProfilesByInstance(id).catch((error) => {
       app.log.warn({ instanceId: id, error }, '清理实例玩家档案失败')
+    })
+    // 实例授权同理：实例没了，指向它的授权行就是孤儿。留着不会造成越权
+    // （鉴权是先查实例再查授权，或反过来都查不到），但成员管理页会显示一个不存在的实例
+    await deleteInstanceGrantsByInstanceId(id).catch((error) => {
+      app.log.warn({ instanceId: id, error }, '清理实例授权失败')
     })
     return success({ isSuccess: true }, request)
   })

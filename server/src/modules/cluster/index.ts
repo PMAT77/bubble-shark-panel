@@ -10,7 +10,6 @@ import type {
   ClusterSavePayload,
   ClusterSaveResult,
 } from '../../../../shared/contracts/cluster'
-import { NODE_INSTANCE_MANAGE_PERMISSION } from '../../shared/menu-routes'
 import { resolveLocalDstInstance } from '../../shared/dst/local-dst-instance'
 import {
   getClusterConfig,
@@ -19,7 +18,7 @@ import {
 import { injectRestartInstance } from '../instance/inject-restart'
 import { queryInstanceOnlineRoster } from '../player'
 import { businessError, success } from '../../shared/http/response'
-import { requirePermission } from '../system/auth'
+import { authorizeInstance } from '../system/auth'
 
 async function restartInstance(
   app: FastifyInstance,
@@ -42,15 +41,16 @@ const CLUSTER_RESOLVE_MESSAGES = {
  */
 export function registerClusterModule(app: FastifyInstance) {
   app.get('/app/instance/cluster', async (request): Promise<ApiSuccessResponse<ClusterConfigDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = clusterInstanceQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = query.data.instanceId
+    // 权限点 + 实例授权：只要 room:read 的账号只能读，且只能读被授权的那几个实例
+    const authorized = await authorizeInstance(request, instanceId, 'room:read')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: CLUSTER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -66,15 +66,16 @@ export function registerClusterModule(app: FastifyInstance) {
   })
 
   app.get('/app/instance/cluster/online-players', async (request): Promise<ApiSuccessResponse<ClusterOnlinePlayersDto> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const query = clusterInstanceQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
       return businessError('请求参数无效', request)
     }
     const instanceId = query.data.instanceId
+    // 在线玩家属于玩家视图，读名单与在线状态用 player:read；踢人与封禁另有更细的权限点
+    const authorized = await authorizeInstance(request, instanceId, 'player:read')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: CLUSTER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -112,16 +113,16 @@ export function registerClusterModule(app: FastifyInstance) {
   })
 
   app.put('/app/instance/cluster', async (request): Promise<ApiSuccessResponse<ClusterSaveResult> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, NODE_INSTANCE_MANAGE_PERMISSION)
-    if (authError) {
-      return authError
-    }
     const body = clusterSavePayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
     const payload: ClusterSavePayload = body.data
     const instanceId = payload.instanceId
+    const authorized = await authorizeInstance(request, instanceId, 'room:write')
+    if (authorized.error) {
+      return authorized.error
+    }
     const resolved = await resolveLocalDstInstance(instanceId, request, { messages: CLUSTER_RESOLVE_MESSAGES })
     if (!resolved.ok) {
       return resolved.error
@@ -129,6 +130,15 @@ export function registerClusterModule(app: FastifyInstance) {
     try {
       const result = saveClusterConfig(resolved.instance, payload)
       if (payload.restart) {
+        /**
+         * 「保存并重启」里的重启是**另一项能力**，不能借 `room:write` 顺带拿到。
+         * 只给改房间配置权限的账号可以把配置存下去，但重启那一步会被拒——
+         * 否则「能改房间配置」等于隐含「能重启实例」，细粒度就白拆了。
+         */
+        const restartAuth = await authorizeInstance(request, instanceId, 'instance:lifecycle')
+        if (restartAuth.error) {
+          return restartAuth.error
+        }
         const restartError = await restartInstance(app, request, instanceId)
         if (restartError) {
           return restartError

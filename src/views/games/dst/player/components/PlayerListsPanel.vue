@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { PlayerListEntry, PlayerListKind, PlayerProfileDto } from '@/api/modules/player'
 import {
   NAlert,
@@ -403,7 +406,7 @@ defineExpose({ loadAll })
 <template>
   <NCard title="玩家名单" size="small">
     <template #header-extra>
-      <NButton size="tiny" :loading="syncing" @click="syncFromLogs">
+      <NButton size="tiny" :loading="syncing" @click="syncFromLogs" v-if="hasPermission('player:write')">
         从日志补全玩家名
       </NButton>
     </template>
@@ -452,7 +455,7 @@ defineExpose({ loadAll })
             :loading="searching"
             :disabled="!keyword.trim() || lists[item.kind].saving || whitelistBlocked(item.kind)"
             @click="handleAdd"
-          >
+           v-if="hasPermission('player:write')">
             加入名单
           </NButton>
         </div>
@@ -557,7 +560,7 @@ defineExpose({ loadAll })
           <NButton @click="noteTarget = null">
             取消
           </NButton>
-          <NButton type="primary" :loading="savingNote" @click="saveNote">
+          <NButton type="primary" :loading="savingNote" @click="saveNote" v-if="hasPermission('player.profile:write')">
             保存
           </NButton>
         </div>

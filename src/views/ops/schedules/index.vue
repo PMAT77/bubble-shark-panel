@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { DataTableColumns, FormRules, SelectOption } from 'naive-ui'
 import type { ScheduleCreateRequest, ScheduleTaskItem } from '@/api/modules/schedule'
 import type { InstanceItem } from '@/api/modules/instance'
@@ -434,7 +437,7 @@ const columns = computed<DataTableColumns<ScheduleTaskItem>>(() => {
     </div>
 
     <div class="flex flex-wrap items-center justify-start gap-3"> 
-      <NButton type="primary" @click="openCreateDialog">
+      <NButton type="primary" @click="openCreateDialog" v-if="hasPermission('schedule:write')">
         新建任务
       </NButton>
     </div>

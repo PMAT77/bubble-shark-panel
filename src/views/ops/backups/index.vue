@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { DataTableColumns, SelectOption } from 'naive-ui'
 import type { BackupItem } from '@/api/modules/backup'
 import type { InstanceItem } from '@/api/modules/instance'
@@ -625,7 +628,7 @@ onActivated(() => {
         :loading="creatingBackup"
         :disabled="!selectedInstanceId || selectedInstanceId === 'panel-db'"
         @click="openCreateBackupDialog"
-      >
+       v-if="hasPermission('backup:create')">
         创建存档备份
       </NButton>
       <NButton
@@ -672,10 +675,10 @@ onActivated(() => {
           由「创建面板数据库快照」生成，包含面板账号与设置，不属于任何游戏实例。
         </p>
         <div class="mt-3 flex flex-wrap items-center gap-2">
-          <NButton type="warning" strong secondary @click="handleCreateDbBackup">
+          <NButton type="warning" strong secondary @click="handleCreateDbBackup" v-if="hasPermission('backup:create')">
             创建面板数据库快照
           </NButton>
-          <NButton :loading="importingSnapshot" @click="openSnapshotPicker">
+          <NButton :loading="importingSnapshot" @click="openSnapshotPicker" v-if="hasPermission('backup:import')">
             导入快照
           </NButton>
           <span v-if="importingSnapshot" class="text-xs text-muted-foreground">已上传 {{ uploadPercent }}%</span>

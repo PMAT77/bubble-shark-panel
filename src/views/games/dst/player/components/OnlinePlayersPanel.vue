@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { PlayerListKind, PlayerOnlineEntry, PlayerOnlineRosterDto, PlayerShard } from '@/api/modules/player'
 import { NButton, NCard, NEmpty, NSpace, NSpin, NTag } from 'naive-ui'
 import { computed } from 'vue'
@@ -129,16 +132,16 @@ function displayId(player: PlayerOnlineEntry): string {
                 </p>
               </div>
               <NSpace :size="8" class="flex-wrap">
-                <NButton size="small" :disabled="acting" @click="emit('kick', player)">
+                <NButton size="small" :disabled="acting" @click="emit('kick', player)" v-if="hasPermission('player:kick')">
                   踢出
                 </NButton>
-                <NButton size="small" type="error" secondary :disabled="acting || !player.kleiAccount" @click="emit('ban', player)">
+                <NButton size="small" type="error" secondary :disabled="acting || !player.kleiAccount" @click="emit('ban', player)" v-if="hasPermission('player:ban')">
                   封禁
                 </NButton>
-                <NButton size="small" quaternary :disabled="acting || !player.kleiAccount" @click="emit('addToList', { player, kind: 'whitelist' })">
+                <NButton size="small" quaternary :disabled="acting || !player.kleiAccount" @click="emit('addToList', { player, kind: 'whitelist' })" v-if="hasPermission('player:write')">
                   加入白名单
                 </NButton>
-                <NButton size="small" quaternary :disabled="acting || !player.kleiAccount" @click="emit('addToList', { player, kind: 'admin' })">
+                <NButton size="small" quaternary :disabled="acting || !player.kleiAccount" @click="emit('addToList', { player, kind: 'admin' })" v-if="hasPermission('player:write')">
                   设为管理员
                 </NButton>
               </NSpace>

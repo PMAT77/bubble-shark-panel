@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { ShardId, ShardSnapshotDto } from '@/api/modules/shard'
 import {
   NAlert,
@@ -210,7 +213,7 @@ watch(() => [props.instanceId, props.shard], () => {
               :loading="busy"
               :disabled="!running"
               @click="confirmRollback"
-            >
+             v-if="hasPermission('world:rollback')">
               回档
             </NButton>
           </div>
@@ -259,7 +262,7 @@ watch(() => [props.instanceId, props.shard], () => {
             :disabled="!resetConfirmMatched"
             :loading="busy"
             @click="submitResetWorld"
-          >
+           v-if="hasPermission('world:reset')">
             确认重置
           </NButton>
         </div>

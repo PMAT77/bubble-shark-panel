@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { DataTableColumns } from 'naive-ui'
 import type {
   ModInstallStatus,
@@ -1800,7 +1803,7 @@ onMounted(async () => {
                   clearable
                   @keydown.enter="subscribeManualWorkshop"
                 />
-                <NButton :disabled="!selectedInstanceId" @click="subscribeManualWorkshop">
+                <NButton :disabled="!selectedInstanceId" @click="subscribeManualWorkshop" v-if="hasPermission('mod:install')">
                   直接订阅
                 </NButton>
                 <NButton type="primary" :disabled="!selectedInstanceId" @click="loadSteamMods(true)">
@@ -1931,11 +1934,11 @@ onMounted(async () => {
                     :loading="batchUpdating"
                     :disabled="subscribedSummary.outdated === 0"
                     @click="updateAllOutdatedMods"
-                  >
+                   v-if="hasPermission('mod:install')">
                     全部更新 ({{ subscribedSummary.outdated }})
                   </NButton>
                   <NButton
-                    v-if="checkedRowKeys.length > 0"
+                    v-if="(checkedRowKeys.length > 0) && hasPermission('mod:install')"
                     size="small"
                     secondary
                     :loading="batchUpdating"
@@ -1945,7 +1948,7 @@ onMounted(async () => {
                     更新选中 ({{ selectedUpdatableMods.length }})
                   </NButton>
                   <NButton
-                    v-if="subscribedSummary.failed > 0"
+                    v-if="(subscribedSummary.failed > 0) && hasPermission('mod:install')"
                     size="small"
                     type="warning"
                     secondary
@@ -2001,7 +2004,7 @@ onMounted(async () => {
                       检查更新
                     </NButton>
                     <NButton
-                      v-if="subscribedSummary.outdated > 0"
+                      v-if="(subscribedSummary.outdated > 0) && hasPermission('mod:install')"
                       size="small"
                       type="primary"
                       secondary
@@ -2011,7 +2014,7 @@ onMounted(async () => {
                       全部更新 ({{ subscribedSummary.outdated }})
                     </NButton>
                     <NButton
-                      v-if="subscribedSummary.failed > 0"
+                      v-if="(subscribedSummary.failed > 0) && hasPermission('mod:install')"
                       size="small"
                       type="warning"
                       secondary

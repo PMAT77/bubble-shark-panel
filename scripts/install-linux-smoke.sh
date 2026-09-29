@@ -16,22 +16,22 @@ source "${SCRIPT_DIR}/install.linux.sh"
 SMOKE_RELEASE_TAG="${GSH_RELEASE_TAG}"
 SMOKE_INSTALLED_TAG='v0.6.0'
 
-# v0.9.1 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${GSH_RELEASE_TAG}" == "v0.9.1" ]]
+# v0.10.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${GSH_RELEASE_TAG}" == "v0.10.0" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.9.1"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.10.0"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.9.1" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.10.0" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 

@@ -2,6 +2,7 @@ import axios from 'axios'
 import router from '@/router'
 import { resolveApiBaseUrl } from './base-url'
 import { isBinaryResponse, parseBinaryErrorPayload } from './binary-response'
+import { isPermissionSnapshotStale } from './permission-snapshot'
 
 // 请求重试配置
 const MAX_RETRY_COUNT = 3 // 最大重试次数
@@ -43,6 +44,54 @@ const api = axios.create({
   timeout: 1000 * 60,
   responseType: 'json',
 })
+
+/**
+ * 权限被改过但页面没刷新时的自愈。
+ *
+ * 菜单与"我能进哪些页面"是**登录时的一次快照**（`/app/route/list` 注册路由、
+ * `/app/account/permission` 决定按钮），而服务端每次请求都查库。管理员改完角色的那一刻，
+ * 那个已登录的账号就进入错位状态：菜单和页面还在，请求开始 403——用户看着像坏了，
+ * 唯一的解法是自己想到"刷新一下页面"。
+ *
+ * 这里在收到 403 时重新拉一次权限，**只有快照确实变了**才提示并重新加载：
+ * 权限没变的 403 属于这个功能本身无权（或实例授权不足），刷新只会白闪一次。
+ */
+let permissionRefreshPromise: Promise<void> | null = null
+let permissionRefreshNotified = false
+
+function healStalePermissionSnapshot(): Promise<void> {
+  const appAccountStore = useAppAccountStore()
+  // 游客角色的权限点由代码固化、登录前也没有快照可谈
+  if (!appAccountStore.isLogin || appAccountStore.isGuestRole) {
+    return Promise.resolve()
+  }
+  if (permissionRefreshPromise) {
+    return permissionRefreshPromise
+  }
+  permissionRefreshPromise = (async () => {
+    const before = [...appAccountStore.permissions]
+    try {
+      await appAccountStore.getPermissions()
+    }
+    catch {
+      // 拉取失败就当作没变化：这条 403 已经提示过一次，不必再打扰用户
+      return
+    }
+    if (!isPermissionSnapshotStale(before, appAccountStore.permissions)) {
+      return
+    }
+    if (!permissionRefreshNotified) {
+      permissionRefreshNotified = true
+      faToast.info('权限已变更', {
+        description: '正在按最新权限重新加载菜单与页面',
+      })
+    }
+    window.setTimeout(() => window.location.reload(), 800)
+  })().finally(() => {
+    permissionRefreshPromise = null
+  })
+  return permissionRefreshPromise
+}
 
 api.interceptors.request.use(
   (request) => {
@@ -104,6 +153,9 @@ async function handleError(error: any) {
   }
   // 下载失败时如实显示后端给的原因，而不是 "Request failed with status code 404"
   if (binaryRequest && typeof responseData?.error === 'string' && responseData.error) {
+    if (responseData.code === 'AUTH_FORBIDDEN') {
+      void healStalePermissionSnapshot()
+    }
     toastBusinessErrorOnce(responseData.error)
     return rejectRequest()
   }
@@ -174,6 +226,13 @@ api.interceptors.response.use(
             && response.data.code !== 'HOST_MEMORY_PRESSURE'
           ) {
             toastBusinessErrorOnce(response.data.error)
+          }
+          /**
+           * 403 可能是"我的权限刚被改过、页面还是旧快照"：这种情况自动重新拉权限、
+           * 提示并重新加载，而不是只告诉用户"你没权限"（他根本不知道该刷新页面）。
+           */
+          if (response.data.code === 'AUTH_FORBIDDEN') {
+            void healStalePermissionSnapshot()
           }
           return Promise.reject(response.data)
         }

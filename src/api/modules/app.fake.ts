@@ -70,6 +70,7 @@ export default defineFakeRoute([
         data: {
           permissions,
           mustChangePassword: false,
+          roleKind: 'user',
         },
       }
     },

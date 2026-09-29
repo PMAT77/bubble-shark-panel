@@ -41,6 +41,9 @@ export const useAppAccountStore = defineStore('appAccount', () => {
 
   // 权限信息
   const permissions = ref<string[]>([])
+  /** 角色种类：`guest` 是内置游客角色（只读预览），界面据此提示「当前是游客模式」 */
+  const roleKind = ref<'user' | 'guest' | null>(null)
+  const isGuestRole = computed(() => roleKind.value === 'guest')
   /** 服务端要求强制改密：未完成前仅可访问改密页 */
   const mustChangePassword = ref(readMustChangePasswordFlag())
   /** 仅本次登录：服务端在「首次登录」时返回 true，用于右上角改密建议（与 DB 长期标记无关） */
@@ -70,19 +73,46 @@ export const useAppAccountStore = defineStore('appAccount', () => {
       challengeToken: data.challengeToken,
       challengeAnswer: data.challengeAnswer,
     })
+    persistSession(res.data, remember)
+  }
+
+  /**
+   * 游客（只读预览）免密登录。
+   *
+   * 与 `login()` 走**同一段落盘逻辑**（`persistSession`）：两份实现漂移过一次就会出现
+   * "游客登录后刷新页面就掉线"这种只在一条路径上出现的 bug。
+   *
+   * 服务端强制 `remember: false`（共享浏览器不该留下 30 天的刷新令牌），
+   * 这里也不需要传账号密码——游客凭证根本不存在。
+   */
+  async function loginAsGuest() {
+    const res = await apiApp.guestLogin()
+    persistSession(res.data, false)
+    return res.data
+  }
+
+  /** 落地一次登录结果；`login` 与 `loginAsGuest` 共用，避免两套实现漂移 */
+  function persistSession(data: {
+    account: string
+    token: string
+    refreshToken: string
+    avatar: string
+    email: string
+    mustChangePassword: boolean
+  }, remember: boolean) {
     const targetStorage = getPersistentStorage(remember)
     clearAccountStorage()
-    targetStorage.setItem('account', res.data.account)
-    targetStorage.setItem('token', res.data.token)
-    targetStorage.setItem('refreshToken', res.data.refreshToken)
-    targetStorage.setItem('avatar', res.data.avatar)
-    targetStorage.setItem('email', res.data.email)
-    account.value = res.data.account
-    token.value = res.data.token
-    refreshToken.value = res.data.refreshToken
-    avatar.value = res.data.avatar
-    email.value = res.data.email
-    mustChangePassword.value = res.data.mustChangePassword === true
+    targetStorage.setItem('account', data.account)
+    targetStorage.setItem('token', data.token)
+    targetStorage.setItem('refreshToken', data.refreshToken)
+    targetStorage.setItem('avatar', data.avatar)
+    targetStorage.setItem('email', data.email)
+    account.value = data.account
+    token.value = data.token
+    refreshToken.value = data.refreshToken
+    avatar.value = data.avatar
+    email.value = data.email
+    mustChangePassword.value = data.mustChangePassword === true
     writeMustChangePasswordFlag(mustChangePassword.value, remember)
     suggestPasswordChangeOnFirstLogin.value = false
   }
@@ -164,6 +194,7 @@ export const useAppAccountStore = defineStore('appAccount', () => {
     avatar.value = ''
     email.value = ''
     permissions.value = []
+    roleKind.value = null
     mustChangePassword.value = false
     suggestPasswordChangeOnFirstLogin.value = false
     appSettingsStore.updateSettings({}, true)
@@ -177,6 +208,7 @@ export const useAppAccountStore = defineStore('appAccount', () => {
     const res = await apiApp.permission()
     permissions.value = res.data.permissions
     mustChangePassword.value = res.data.mustChangePassword === true
+    roleKind.value = res.data.roleKind ?? null
     writeMustChangePasswordFlag(mustChangePassword.value)
   }
 
@@ -217,10 +249,13 @@ export const useAppAccountStore = defineStore('appAccount', () => {
     avatar,
     email,
     permissions,
+    roleKind,
+    isGuestRole,
     mustChangePassword,
     suggestPasswordChangeOnFirstLogin,
     isLogin,
     login,
+    loginAsGuest,
     applySessionTokens,
     logout,
     requestLogout,

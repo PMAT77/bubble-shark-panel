@@ -7,6 +7,8 @@
 export {}
 declare global {
   const EffectScope: typeof import('vue').EffectScope
+  const GUEST_MODE_NOTICE_CONTENT: typeof import('../composables/guestModeNotice').GUEST_MODE_NOTICE_CONTENT
+  const GUEST_MODE_NOTICE_TITLE: typeof import('../composables/guestModeNotice').GUEST_MODE_NOTICE_TITLE
   const acceptHMRUpdate: typeof import('pinia').acceptHMRUpdate
   const buildRoutesFromBackend: typeof import('../store/modules/app/route-layout').buildRoutesFromBackend
   const computed: typeof import('vue').computed
@@ -24,6 +26,7 @@ declare global {
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
   const getCurrentWatcher: typeof import('vue').getCurrentWatcher
+  const guestModeNoticeDismissKey: typeof import('../composables/guestModeNotice').guestModeNoticeDismissKey
   const h: typeof import('vue').h
   const inject: typeof import('vue').inject
   const instanceSupportsDstRoom: typeof import('../composables/useGameInstance').instanceSupportsDstRoom
@@ -68,12 +71,14 @@ declare global {
   const readonly: typeof import('vue').readonly
   const ref: typeof import('vue').ref
   const resolveComponent: typeof import('vue').resolveComponent
+  const resolveGuestLoginPrefill: typeof import('../composables/app/guestLoginPrefill').resolveGuestLoginPrefill
   const resolvePanelVersionMismatch: typeof import('../composables/panelVersionGuard').resolvePanelVersionMismatch
   const setActivePinia: typeof import('pinia').setActivePinia
   const setMapStoreSuffix: typeof import('pinia').setMapStoreSuffix
   const shallowReactive: typeof import('vue').shallowReactive
   const shallowReadonly: typeof import('vue').shallowReadonly
   const shallowRef: typeof import('vue').shallowRef
+  const shouldShowGuestModeNotice: typeof import('../composables/guestModeNotice').shouldShowGuestModeNotice
   const storeToRefs: typeof import('pinia').storeToRefs
   const suppressScheduleRunNotificationOnce: typeof import('../composables/useScheduleRunNotifier').suppressScheduleRunNotificationOnce
   const toRaw: typeof import('vue').toRaw
@@ -100,6 +105,7 @@ declare global {
   const useFaDrawer: typeof import('@fantastic-admin/components').useFaDrawer
   const useFaImagePreview: typeof import('@fantastic-admin/components').useFaImagePreview
   const useFaModal: typeof import('@fantastic-admin/components').useFaModal
+  const useGuestModeNotice: typeof import('../composables/useGuestModeNotice').useGuestModeNotice
   const useHostMemoryGuidance: typeof import('../composables/useHostMemoryGuidance').useHostMemoryGuidance
   const useId: typeof import('vue').useId
   const useInstanceModState: typeof import('../composables/useInstanceModState').useInstanceModState
@@ -134,6 +140,12 @@ declare global {
   // @ts-ignore
   export type { MenuRouteMetaLike, MenuRouteItemLike, MenuRouteModuleLike, BackendRouteItemLike, BackendRoutesContext } from '../store/modules/app/route-layout'
   import('../store/modules/app/route-layout')
+  // @ts-ignore
+  export type { GuestLoginPrefill, GuestLoginResultLike } from '../composables/app/guestLoginPrefill'
+  import('../composables/app/guestLoginPrefill')
+  // @ts-ignore
+  export type { GuestModeNoticeState } from '../composables/guestModeNotice'
+  import('../composables/guestModeNotice')
   // @ts-ignore
   export type { PanelVersionMismatch } from '../composables/panelVersionGuard'
   import('../composables/panelVersionGuard')

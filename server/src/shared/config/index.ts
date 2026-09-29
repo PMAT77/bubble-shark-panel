@@ -8,7 +8,7 @@ import { loadModeEnv } from './env-file'
 import { resolveRepoRoot } from '../repo-root'
 
 /** v0.2.0 起面板/DST/SteamCMD 共用的统一镜像引用（tag 随版本发布推进）。 */
-export const UNIFIED_IMAGE_REF = 'ghcr.io/pmat77/game-server-hub:v0.9.1'
+export const UNIFIED_IMAGE_REF = 'ghcr.io/pmat77/game-server-hub:v0.10.0'
 
 const envSchema = z.object({
   SERVER_HOST: z.string().trim().min(1).default('0.0.0.0'),
@@ -55,6 +55,10 @@ const envSchema = z.object({
   GSH_TRUST_PROXY: z.string().trim().optional(),
   /** 实例安装路径策略：instances-root=必须位于 GSH_INSTANCES_ROOT 之下；any=允许任意绝对路径（自担风险） */
   GSH_INSTALL_PATH_POLICY: z.enum(['instances-root', 'any']).default('instances-root'),
+  /** 游客（只读预览）免密登录开关；1 才启用，且只在 Native + production 下真正生效 */
+  GSH_GUEST_LOGIN_ENABLED: z.string().trim().optional(),
+  /** 游客账号名；面板启动时会按此名预置一个只读账号 */
+  GSH_GUEST_LOGIN_ACCOUNT: z.string().trim().optional(),
 })
 
 function resolveMode() {
@@ -119,6 +123,22 @@ export interface ServerConfig {
   installPathPolicy: 'instances-root' | 'any'
   /** Fastify @fastify/cors origin 选项；生产默认同源（false） */
   corsOrigin: boolean | string | string[]
+  /**
+   * 是否开放**游客（只读预览）免密登录**。
+   *
+   * 组合判定的结果，不是环境变量的原样透传：见 `resolveGuestLoginEnabled`。
+   * 默认永远为 false——只有显式开开关、且 Native + production 时才为真。
+   */
+  guestLoginEnabled: boolean
+  /**
+   * 环境变量 `GSH_GUEST_LOGIN_ENABLED` 是否被显式打开（**不含**三道闸门的判定结果）。
+   *
+   * 单独留着只为一件事：`guestLoginEnabled` 为 false 时区分"没开"与"开了但被拒绝"。
+   * 后者要在启动日志里给出原因，否则部署者看到的现象只是"登录页没有游客按钮"。
+   */
+  guestLoginRequested: boolean
+  /** 游客账号名（`GSH_GUEST_LOGIN_ACCOUNT`，默认 `guest`），面板启动时按它预置只读账号 */
+  guestLoginAccount: string
 }
 
 export function loadServerConfig(): ServerConfig {
@@ -164,6 +184,8 @@ export function loadServerConfig(): ServerConfig {
     GSH_PASSWORD_RECOVERY_TOKEN: process.env.GSH_PASSWORD_RECOVERY_TOKEN ?? env.GSH_PASSWORD_RECOVERY_TOKEN,
     GSH_TRUST_PROXY: process.env.GSH_TRUST_PROXY ?? env.GSH_TRUST_PROXY,
     GSH_INSTALL_PATH_POLICY: process.env.GSH_INSTALL_PATH_POLICY ?? env.GSH_INSTALL_PATH_POLICY,
+    GSH_GUEST_LOGIN_ENABLED: process.env.GSH_GUEST_LOGIN_ENABLED ?? env.GSH_GUEST_LOGIN_ENABLED,
+    GSH_GUEST_LOGIN_ACCOUNT: process.env.GSH_GUEST_LOGIN_ACCOUNT ?? env.GSH_GUEST_LOGIN_ACCOUNT,
   }
   const parsed = envSchema.parse(merged)
   const adminCredentials = resolveAdminCredentials(mode, parsed.ADMIN_USERNAME, parsed.ADMIN_PASSWORD)
@@ -225,7 +247,87 @@ export function loadServerConfig(): ServerConfig {
       .filter(Boolean),
     installPathPolicy: parsed.GSH_INSTALL_PATH_POLICY,
     corsOrigin: resolveCorsOrigin(mode, parsed.CORS_ORIGIN),
+    guestLoginEnabled: resolveGuestLoginEnabled({
+      requested: isTruthyEnv(parsed.GSH_GUEST_LOGIN_ENABLED),
+      runtimeMode: parsed.GSH_RUNTIME_MODE,
+      mode,
+      account: parsed.GSH_GUEST_LOGIN_ACCOUNT,
+      adminUsername: adminCredentials.username,
+    }),
+    guestLoginRequested: isTruthyEnv(parsed.GSH_GUEST_LOGIN_ENABLED),
+    guestLoginAccount: parsed.GSH_GUEST_LOGIN_ACCOUNT?.trim() || DEFAULT_GUEST_LOGIN_ACCOUNT,
   }
+}
+
+/** 游客（只读预览）账号的默认名 */
+export const DEFAULT_GUEST_LOGIN_ACCOUNT = 'guest'
+
+/**
+ * 是否真的开放游客免密登录。**只在三件事同时成立时为真。**
+ *
+ * 为什么不是"读一下环境变量就行"：`SECURITY.md` 早就写明游客角色有两条硬前提，
+ * 其中第一条是**必须 Native 模式部署**——Docker 模式下面板挂着 `docker.sock`，
+ * 对 Docker 守护进程 API 的访问等价于宿主机 root，**一次有效登录就等于 root**，
+ * 而面板自身的权限体系不构成隔离层。游客登录会把"一次有效登录"免费送给任何匿名访客，
+ * 所以它在 Docker 模式下不是"风险高一点"，而是"把宿主机交出去"，必须在代码里拒绝，
+ * 而不是指望部署者记得去读文档。
+ *
+ * 三条闸门：
+ * 1. 显式开开关（默认关闭，且重跑安装脚本升级时不会打开）；
+ * 2. `native` 运行时；
+ * 3. `production`——开发/测试环境不该凭空多出一个免密入口，
+ *    本地要看预览效果直接登录预置的游客账号即可。
+ *
+ * 另外拒绝"游客账号名 == 管理员账号名"：那会让 `POST /app/account/guest-login`
+ * 签发的会话属于管理员账号名（`isAdminAccountName()` 会把它当成管理员，
+ * 从而解锁"密码只能本人改""不能被停用"这些保护），是彻底的配置事故。
+ */
+export function resolveGuestLoginEnabled(input: {
+  requested: boolean
+  runtimeMode: 'docker' | 'native'
+  mode: ServerConfig['mode']
+  account: string | undefined
+  adminUsername: string
+}): boolean {
+  if (!input.requested) {
+    return false
+  }
+  if (input.runtimeMode !== 'native' || input.mode !== 'production') {
+    return false
+  }
+  const account = input.account?.trim() || DEFAULT_GUEST_LOGIN_ACCOUNT
+  if (account === input.adminUsername) {
+    return false
+  }
+  return true
+}
+
+/**
+ * 游客登录被拒绝的原因（用于启动日志）。返回空串表示没有被拒绝。
+ *
+ * 单独抽出来是为了让"配了但没生效"这件事在日志里有一句人话可看——
+ * 否则表现是"登录页就是不出现游客按钮"，而排查的人只能去翻源码。
+ */
+export function describeGuestLoginRejection(input: {
+  requested: boolean
+  runtimeMode: 'docker' | 'native'
+  mode: ServerConfig['mode']
+  account: string | undefined
+  adminUsername: string
+}): string {
+  if (!input.requested) {
+    return ''
+  }
+  if (input.runtimeMode !== 'native') {
+    return 'GSH_GUEST_LOGIN_ENABLED 已开启，但当前是 Docker 运行时：一次有效登录等价于宿主机 root，游客预览会把它交给任何匿名访客，因此拒绝开放（改用 Native 模式部署，并在反向代理层再加一层访问控制）'
+  }
+  if (input.mode !== 'production') {
+    return `GSH_GUEST_LOGIN_ENABLED 已开启，但当前是 ${input.mode} 环境：游客登录只在 production 下开放`
+  }
+  if ((input.account?.trim() || DEFAULT_GUEST_LOGIN_ACCOUNT) === input.adminUsername) {
+    return 'GSH_GUEST_LOGIN_ACCOUNT 与管理员的 ADMIN_USERNAME 同名：那会让游客会话落到管理员账号名上，因此拒绝开放'
+  }
+  return ''
 }
 
 export function resolveCorsOrigin(

@@ -107,25 +107,44 @@ describe('菜单接口 /app/route/list', () => {
       '前置条件：管理员初始应当持有全部权限点',
     )
 
-    // 只留房间权限，其余删掉；这模拟的就是「子账号只被分到改房间配置的能力」
+    /**
+     * 只留房间权限，其余删掉；这模拟的就是「子账号只被分到改房间配置的能力」。
+     *
+     * 房间列表的数据来自实例，但那是接口的事（`/app/instance/room-summaries` 按 `room:read`
+     * 放行、只回房间字段），所以**菜单只需要它自己的读权限**——这条接口是前端路由的唯一来源，
+     * 菜单里没有的模块就等于那一页连路由都不注册。
+     */
     await drizzleDb.delete(userPermissions).where(and(
       eq(userPermissions.userId, admin.id),
       ne(userPermissions.permission, 'room:read'),
     ))
 
-    const body = await fetchMenu(token)
+    const roomOnly = await fetchMenu(token)
     assert.deepEqual(
-      body.data.map(module => module.meta.title),
+      roomOnly.data.map(module => module.meta.title),
       ['房间管理'],
-      '只给 room:read 时，其余模块连入口都不该出现（前端据此不会注册那些路由）',
+      '只给 room:read 时只该出现房间管理（不牵连、也不需要 instance:read）',
     )
-    const roomPages = (body.data[0]?.children ?? [])
+    const roomPages = (roomOnly.data[0]?.children ?? [])
       .flatMap(child => child.children ?? [])
       .map(page => page.meta.title)
     // 不比较排序后的数组：中文标题的排序没有稳定直觉，这里只关心"是哪两个"
     assert.equal(roomPages.length, 2, `房间模块下应当有 2 个页面，实际：${roomPages.join('、')}`)
     assert.ok(roomPages.includes('房间管理'), '房间管理页依赖 room:read，应当在')
     assert.ok(roomPages.includes('房间设置'), '房间设置页依赖 room:read，应当在')
+
+    // 取消「查看实例」只收走实例管理：补上 room:read 之外的模块权限时其它模块照旧
+    await drizzleDb.insert(userPermissions).values({
+      userId: admin.id,
+      permission: 'instance:read',
+      createdAt: new Date().toISOString(),
+    })
+    const withInstance = await fetchMenu(token)
+    assert.deepEqual(
+      withInstance.data.map(module => module.meta.title),
+      ['实例管理', '房间管理'],
+      '补上 instance:read 后实例管理出现，房间管理不受影响',
+    )
   })
 
   it('权限被全部清空时返回空菜单，而不是报错', async () => {

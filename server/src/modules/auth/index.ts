@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import {
+  guestLoginBodySchema,
   loginBodySchema,
   logoutBodySchema,
   passwordEditBodySchema,
@@ -9,6 +10,7 @@ import {
   refreshTokenBodySchema,
 } from '../../../../shared/contracts/auth'
 import type {
+  LoginOptionsResponse,
   LoginResponse,
   PasswordEditResponse,
   PasswordRecoveryStatusResponse,
@@ -20,8 +22,9 @@ import { ErrorCode } from '../../../../shared/constants/error-code'
 import { isStrongPassword, PASSWORD_POLICY_HINT } from '../../../../shared/constants/password'
 import { deleteAdminCredentialsFile } from '../../shared/config/credentials-file'
 import { loadServerConfig } from '../../shared/config'
+import { resolveGuestAccountId } from '../../shared/db/guest-account'
 import { resolveClientIp } from '../../shared/http/client-ip'
-import { createSessionTokens, findPermissionsByUserId, findUserByAccount, findUserByToken, revokeSession, rotateSessionByRefreshToken, updateUserPassword, userMustChangePassword, verifyPassword } from '../../shared/db/index'
+import { createSessionTokens, findPermissionsByUserId, findRoleKindByUserId, findUserByAccount, findUserById, findUserByToken, revokeSession, rotateSessionByRefreshToken, updateUserPassword, userMustChangePassword, verifyPassword } from '../../shared/db/index'
 import { businessError, success, unauthorized } from '../../shared/http/response'
 import type { MenuRouteItem } from '../../shared/menu-routes'
 import { filterMenuRoutes, menuRouteList } from '../../shared/menu-routes'
@@ -36,6 +39,7 @@ import {
   shouldRequireCaptcha,
   verifyCaptchaChallenge,
 } from './login-guard'
+import type { LoginGuardOptions } from './login-guard'
 import {
   deleteRateLimitState,
   getRateLimitState,
@@ -57,6 +61,54 @@ const LOGIN_GUARD_OPTIONS = {
   blockMs: 15 * 60 * 1000,
   captchaTtlMs: 2 * 60 * 1000,
 } as const
+
+/**
+ * 游客免密登录的限流参数。
+ *
+ * 门槛与普通登录一致（5 次 / 5 分钟 → 验证码 → 15 分钟封锁），差别只在于**维度**：
+ * 这里只用 IP 与 socket，不用账号维度。游客账号是所有访客共用的，
+ * 账号维度会让任何一个恶意 IP 把全部访客锁在门外，把"防刷"变成"可被第三方利用的拒绝服务"。
+ */
+const GUEST_LOGIN_GUARD_OPTIONS = {
+  maxFailures: 5,
+  captchaThreshold: 3,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 15 * 60 * 1000,
+  captchaTtlMs: 2 * 60 * 1000,
+} as const
+
+/**
+ * 同一个 IP 在窗口内允许**成功**签发的游客会话数。
+ *
+ * 为什么失败要限流、成功也要限流：每次成功都会往 `auth_sessions` 写一行（**不缓存、不合并**），
+ * 而游客入口是匿名的、可以无限重复。只限失败次数的话，"每次都成功"的攻击者反而畅通无阻，
+ * 能靠反复点按钮把会话表写大。20 次／10 分钟对正常访客绰绰有余（共享出口的办公室够用），
+ * 对脚本刷则等于每次刷新都要等半分钟以上。
+ */
+const GUEST_LOGIN_SESSION_LIMIT = 20
+const GUEST_LOGIN_SESSION_WINDOW_MS = 10 * 60 * 1000
+
+function guestLoginSessionStateKey(ip: string): string {
+  return `guest-login-sessions:${ip}`
+}
+
+/** 窗口内已签发的会话数；窗口过期自动归零 */
+function countGuestLoginSessions(ip: string, now: number): number {
+  const state = getRateLimitState(guestLoginSessionStateKey(ip))
+  if (!state || now - state.windowStart > GUEST_LOGIN_SESSION_WINDOW_MS) {
+    return 0
+  }
+  return state.failedCount
+}
+
+function recordGuestLoginSession(ip: string, now: number): void {
+  const state = getRateLimitState(guestLoginSessionStateKey(ip))
+  if (!state || now - state.windowStart > GUEST_LOGIN_SESSION_WINDOW_MS) {
+    saveRateLimitState(guestLoginSessionStateKey(ip), { failedCount: 1, windowStart: now, blockedUntil: 0 })
+    return
+  }
+  saveRateLimitState(guestLoginSessionStateKey(ip), { ...state, failedCount: state.failedCount + 1 })
+}
 
 function normalizeToken(tokenHeader: string | string[] | undefined): string {
   if (Array.isArray(tokenHeader)) {
@@ -117,14 +169,36 @@ function buildCaptchaRequiredResponse(
   request: FastifyRequest,
   loginGuardKey: string,
   message = '请先完成验证码验证',
+  options: LoginGuardOptions = LOGIN_GUARD_OPTIONS,
 ): ApiErrorResponse {
-  const challenge = issueCaptchaChallenge(loginGuardKey, LOGIN_GUARD_OPTIONS)
+  const challenge = issueCaptchaChallenge(loginGuardKey, options)
   return businessError(message, request, ErrorCode.CAPTCHA_REQUIRED, {
     captchaRequired: true,
     challengeToken: challenge.token,
     challengeQuestion: challenge.question,
     challengeExpiresInSec: challenge.expiresInSec,
   })
+}
+
+/**
+ * 「登录过于频繁」的统一响应。
+ *
+ * 抽出来是因为游客免密登录在**两处**要回它（进来时已封锁、答错验证码后刚好触顶），
+ * 而这两处之前各写一遍取最大剩余秒数的逻辑——两份重复的实现最容易在改动时漏掉一处。
+ */
+function buildLoginRateLimitedResponse(
+  request: FastifyRequest,
+  guardKeys: readonly string[],
+  options: LoginGuardOptions,
+): ApiErrorResponse {
+  const blockingStates = guardKeys.map(key => getLoginGuardState(key, options))
+  const retryAfterSec = Math.max(0, ...blockingStates.map(getBlockRemainingSeconds))
+  return businessError(
+    `登录尝试过于频繁，请 ${Math.max(1, Math.ceil(retryAfterSec / 60))} 分钟后再试`,
+    request,
+    ErrorCode.LOGIN_RATE_LIMITED,
+    { retryAfterSec },
+  )
 }
 
 function verifyRecoveryToken(expected: string, provided: string): boolean {
@@ -251,16 +325,7 @@ export function registerAuthModule(app: FastifyInstance) {
     const allGuardKeys = [...guardKeys.blocking, ...guardKeys.escalation]
     const allGuardStates = allGuardKeys.map(key => getLoginGuardState(key, LOGIN_GUARD_OPTIONS))
 
-    const blockedResponse = () => {
-      const blockingStates = guardKeys.blocking.map(key => getLoginGuardState(key, LOGIN_GUARD_OPTIONS))
-      const retryAfterSec = Math.max(...blockingStates.map(getBlockRemainingSeconds))
-      return businessError(
-        `登录尝试过于频繁，请 ${Math.max(1, Math.ceil(retryAfterSec / 60))} 分钟后再试`,
-        request,
-        ErrorCode.LOGIN_RATE_LIMITED,
-        { retryAfterSec },
-      )
-    }
+    const blockedResponse = () => buildLoginRateLimitedResponse(request, guardKeys.blocking, LOGIN_GUARD_OPTIONS)
     const isBlockingNow = () => guardKeys.blocking
       .map(key => getLoginGuardState(key, LOGIN_GUARD_OPTIONS))
       .some(isBlocked)
@@ -314,6 +379,132 @@ export function registerAuthModule(app: FastifyInstance) {
       accessExpiresInSec: tokens.accessExpiresInSec,
       refreshExpiresInSec: tokens.refreshExpiresInSec,
       mustChangePassword,
+    }, request)
+  })
+
+  /**
+   * 登录页初始化：服务端是否开放游客（只读预览）免密登录。
+   *
+   * 匿名接口，只回一个布尔与一个展示用账号名——不含任何凭证与账号信息。
+   * 前端据此决定**渲不渲染**那个按钮：让用户点出一个报错，比没有按钮更糟。
+   */
+  app.get('/app/account/login-options', async (request): Promise<ApiSuccessResponse<LoginOptionsResponse>> => {
+    const config = loadServerConfig()
+    return success({
+      guestLoginEnabled: config.guestLoginEnabled,
+      guestAccountLabel: config.guestLoginAccount,
+    }, request)
+  })
+
+  /**
+   * 游客（只读预览）免密登录。
+   *
+   * ## 为什么需要独立接口，而不是"前端自动填充账号密码"
+   *
+   * 自动填充要求前端手里有游客口令，而前端能拿到口令的方式只有三种——写进前端常量、
+   * 写进仓库配置、或由接口下发——**三种都等于把口令公开**：`dist/` 是公开静态资源，
+   * 拿到口令后绕开按钮直接调 `/app/account/login` 就能反复使用，按钮上做的任何限制都白费。
+   *
+   * 所以这里把"口令"这个概念整个拿掉：游客账号由面板启动时预置，口令是当场生成、
+   * 立即丢弃的随机值（见 `shared/db/guest-account.ts`），`/app/account/login` 对它永远登不上。
+   * 会话只能由这个接口签发，而且签发前要过开关与限流两道。
+   *
+   * ## 限流只按 IP
+   *
+   * 普通登录按 `blocking`（IP 维度）+ `escalation`（账号维度）两组限流。这里刻意**不用账号维度**：
+   * 游客账号是所有访客共用的，账号维度意味着任何一个恶意 IP 都能把全部访客锁在门外——
+   * 把"防爆破"变成"可被第三方利用的拒绝服务"。IP 维度足够拦住单点刷接口。
+   */
+  app.post('/app/account/guest-login', async (request): Promise<ApiSuccessResponse<LoginResponse> | ApiErrorResponse> => {
+    const config = loadServerConfig()
+    if (!config.guestLoginEnabled) {
+      return businessError('当前面板未开放游客预览', request, ErrorCode.FORBIDDEN)
+    }
+
+    const parsed = guestLoginBodySchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      return businessError('请求参数无效', request)
+    }
+    const body = parsed.data
+    const ip = getClientIp(request)
+    const socketIp = request.ip || 'unknown'
+    const guardKeys = [`guest-ip:${ip}`, `guest-socket:${socketIp}`]
+    const guardKey = guardKeys[0]!
+    const isBlockingNow = () => guardKeys
+      .map(key => getLoginGuardState(key, GUEST_LOGIN_GUARD_OPTIONS))
+      .some(isBlocked)
+
+    if (isBlockingNow()) {
+      return buildLoginRateLimitedResponse(request, guardKeys, GUEST_LOGIN_GUARD_OPTIONS)
+    }
+
+    const needsCaptcha = guardKeys
+      .map(key => getLoginGuardState(key, GUEST_LOGIN_GUARD_OPTIONS))
+      .some(state => shouldRequireCaptcha(state, GUEST_LOGIN_GUARD_OPTIONS))
+    if (needsCaptcha && !verifyCaptchaChallenge(guardKey, body.challengeToken, body.challengeAnswer)) {
+      guardKeys.forEach(key => recordLoginFailure(key, GUEST_LOGIN_GUARD_OPTIONS))
+      if (isBlockingNow()) {
+        return buildLoginRateLimitedResponse(request, guardKeys, GUEST_LOGIN_GUARD_OPTIONS)
+      }
+      return buildCaptchaRequiredResponse(request, guardKey, '请先完成验证码验证', GUEST_LOGIN_GUARD_OPTIONS)
+    }
+
+    /**
+     * 只认指针（`system_settings` 里的 `guest.account`），不认账号名。
+     *
+     * 按名字找等于"谁叫这个名字谁就是游客"，而签发的会话属于那个账号——
+     * 只要有一次配置或历史数据重名，这里就会把别人的账号签出去。
+     */
+    const guestUserId = await resolveGuestAccountId()
+    if (!guestUserId) {
+      // 不区分"没预置""被停用""被改成别的角色"：游客入口是匿名的，细节只对攻击者有价值
+      return businessError('游客预览当前不可用，请稍后再试', request, ErrorCode.FORBIDDEN)
+    }
+
+    /**
+     * 成功签发也要限流：每次成功都会往 `auth_sessions` 写一行，而失败限流拦不住
+     * "每次都能成功"的脚本。理由与取值见 `GUEST_LOGIN_SESSION_LIMIT`。
+     */
+    const now = Date.now()
+    if (countGuestLoginSessions(ip, now) >= GUEST_LOGIN_SESSION_LIMIT) {
+      const retryAfterSec = Math.ceil(GUEST_LOGIN_SESSION_WINDOW_MS / 1000)
+      return businessError(
+        '游客预览打开得过于频繁，请稍后再试',
+        request,
+        ErrorCode.LOGIN_RATE_LIMITED,
+        { retryAfterSec },
+      )
+    }
+
+    const user = await findUserById(guestUserId)
+    if (!user) {
+      return businessError('游客预览当前不可用，请稍后再试', request, ErrorCode.FORBIDDEN)
+    }
+
+    guardKeys.forEach(clearLoginGuardState)
+    recordGuestLoginSession(ip, now)
+
+    /**
+     * 强制 `remember: false`：游客会话不该在共享浏览器里留下 30 天的刷新令牌。
+     * 刷新令牌走 7 天档，与"勾了记住账号"区分开。
+     */
+    const tokens = await createSessionTokens(user.id, {
+      remember: false,
+      ip,
+      userAgent: String(request.headers['user-agent'] ?? ''),
+    })
+
+    return success({
+      account: user.account,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      avatar: user.avatar,
+      email: user.email,
+      remember: false,
+      accessExpiresInSec: tokens.accessExpiresInSec,
+      refreshExpiresInSec: tokens.refreshExpiresInSec,
+      // 游客账号的口令是随机值，不存在"首次登录须改密"这回事
+      mustChangePassword: false,
     }, request)
   })
 
@@ -379,6 +570,7 @@ export function registerAuthModule(app: FastifyInstance) {
     return success({
       permissions: await findPermissionsByUserId(user.id),
       mustChangePassword: userMustChangePassword(user),
+      roleKind: (await findRoleKindByUserId(user.id)) ?? null,
     }, request)
   })
 

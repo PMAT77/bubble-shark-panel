@@ -331,7 +331,7 @@ function testAccount(account: string) {
         >
           <!-- `FaButton` 只转发默认插槽，没有 `#start`：图标与文字一起放在默认插槽里 -->
           <FaIcon name="i-lucide:eye" />
-          <span>{{ guestAccountLabel ? `以 ${guestAccountLabel} 身份预览` : '游客预览' }}</span>
+          <span>以游客身份预览</span>
         </FaButton>
         <p class="mt-2 text-xs text-muted-foreground">
           游客为只读账号：能查看面板内容，所有操作入口都已隐藏。

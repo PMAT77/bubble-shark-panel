@@ -15,7 +15,12 @@ import {
  * `auth` 被收窄成 `PermissionKey`（权限点清单里的字面量联合）：菜单是权限体系的第二个消费方
  * （第一个是路由鉴权），写错一个字符就会让「这个角色怎么点都进不去」，而这类错误在运行时
  * 只表现为菜单少一项——所以让 `tsc` 在第一道就拦住它。
- * 数组是 `some` 语义（任一满足即显示），用于「成员与角色」这类两个页面权限不同的模块。
+ * 数组是 `some` 语义（任一满足即显示），用于「系统设置」这类一个入口承载多种权限要求的模块。
+ *
+ * **一个菜单项只由它自己的读权限决定（一个读权限 ↔ 一个菜单）。** 页面需要的跨模块数据
+ * 不能靠"给菜单加别的模块的权限"来解决：那会让「查看房间配置」被迫等于「能看实例管理」，
+ * 取消「查看实例」就顺带收走一串菜单。做法是让接口按页面自己的读权限放行、并只回这一页
+ * 要用的字段（`/app/instance/room-summaries`、`/app/instance/options` 就是这么来的）。
  */
 export type MenuRouteMeta = Omit<RouteMetaRaw, 'auth'> & {
   title: string
@@ -89,17 +94,20 @@ export {
  *
  * 菜单组织约定（扁平化，杜绝「控制台>控制台>监控台」式同名嵌套）：
  * - 主导航（图标栏）每一项对应一个页面任务：监控台 / 实例管理 / 房间管理 / 世界管理 / 玩家管理 /
- *   模组管理 / 备份与恢复 / 计划任务 / 商业支持与 Pro / 系统设置——
- *   管理类三项排在最后：前八个是天天要点的，而「系统设置」改完就很少回来，放最末不挡常用项；
+ *   模组管理 / 备份与恢复 / 计划任务 / 成员管理 / 角色管理 / 商业支持与 Pro / 系统设置——
+ *   管理类几项排在最后：前八个是天天要点的，而成员、角色、授权与「系统设置」都是配完就很少回来的，
+ *   放最末不挡常用项；
  * - **插件模块暂时以 `menu: false` 隐藏**（页面与接口都在，只是不占主导航槽位），
  *   待呈现打磨完再放开；它与「商业支持与 Pro」原本各占一个槽位，服务的是
  *   "我要装什么、我需要什么支持"，与"面板怎么运行"不是同一件事；
  * - 设置页（`system/settings.vue`）用页内 tab 收纳「通知渠道」与「操作记录」，因此系统设置组下只有一个页面；
  * - **多页模块的页面挂在 Layout 容器下**（`component: 'Layout'`），页面自身 `meta.menu: false`，
  *   使容器在菜单中呈现为可点击的单项；容器用 redirect 指向真实页面；
- * - **仅有一个页面的模块不套容器**（当前的「系统设置」）：容器与它唯一的子页面同名时，图标栏已经写着这个名字，
- *   二级导航又照 hover 的名称画一遍同样的文字，看起来就是两个「系统设置」。
- *   直接以页面作模块入口后，侧边栏只剩图标栏那一处；页面自身保持 `menu: false`，否则二级导航会画出第二个同名项；
+ * - **仅有一个页面的模块不套容器**（当前的「系统设置」「成员管理」「角色管理」）：容器与它唯一的子页面同名时，图标栏已经写着这个名字，
+ *   二级导航又照 hover 的名称画一遍同样的文字，看起来就是两个同名菜单项。
+ *   直接以页面作模块入口后，侧边栏只剩图标栏那一处；页面自身保持 `menu: false`，否则二级导航会画出第二个同名项。
+ *   页面的 `path` 必须写成**绝对路径**：路由层靠「模块下只有一个绝对路径叶子页面」判定单页模块并补布局容器，
+ *   写成相对路径会让页面脱离布局（侧栏与顶栏整条不渲染）；
  * - 列表页 `meta.breadcrumb: false` 避免与容器标题重复；
  * - 房间/世界/Mod 的设置页保持隐藏路由（menu: false），面包屑正常展示，activeMenu 归属列表项。
  */
@@ -499,6 +507,51 @@ export const menuRouteList: MenuRouteItem[] = [
   },
   {
     meta: {
+      title: '成员管理',
+      icon: 'ri:team-line',
+    },
+    children: [
+      // 单页模块（与「系统设置」同构）：不套 Layout 容器，页面本身即模块入口。
+      // 拆自原来的「成员与角色」多页模块——那个容器 redirect 到成员管理页，
+      // 两个子页面又都是 menu: false，于是「角色管理」在侧边栏里根本没有入口。
+      {
+        path: FRONTEND_ROUTE_PATHS.membersList,
+        name: 'membersList',
+        component: 'system/members.vue',
+        meta: {
+          title: '成员管理',
+          icon: 'ri:team-line',
+          auth: 'member:read',
+          breadcrumb: false,
+          activeMenu: FRONTEND_ROUTE_PATHS.membersList,
+          menu: false,
+        },
+      },
+    ],
+  },
+  {
+    meta: {
+      title: '角色管理',
+      icon: 'ri:shield-user-line',
+    },
+    children: [
+      {
+        path: FRONTEND_ROUTE_PATHS.roles,
+        name: 'roles',
+        component: 'system/roles.vue',
+        meta: {
+          title: '角色管理',
+          icon: 'ri:shield-user-line',
+          auth: 'role:read',
+          breadcrumb: false,
+          activeMenu: FRONTEND_ROUTE_PATHS.roles,
+          menu: false,
+        },
+      },
+    ],
+  },
+  {
+    meta: {
       title: '商业支持与 Pro',
       icon: 'ri:shield-star-line',
     },
@@ -527,55 +580,6 @@ export const menuRouteList: MenuRouteItem[] = [
               menu: false,
               breadcrumb: false,
               activeMenu: FRONTEND_ROUTE_PATHS.commercial,
-            },
-          },
-        ],
-      },
-    ],
-  },
-  {
-    meta: {
-      title: '成员与角色',
-      icon: 'ri:team-line',
-    },
-    children: [
-      {
-        path: FRONTEND_ROUTE_PATHS.members,
-        component: 'Layout',
-        name: 'members',
-        redirect: FRONTEND_ROUTE_PATHS.membersList,
-        meta: {
-          title: '成员与角色',
-          icon: 'ri:team-line',
-          // 数组是 some 语义：只给「角色管理」权限的账号也该看到这个模块入口，
-          // 否则它只能靠直接输地址到达角色页——那是个没有入口的死页面。
-          auth: ['member:read', 'role:read'],
-        },
-        children: [
-          {
-            path: 'list',
-            name: 'membersList',
-            component: 'system/members.vue',
-            meta: {
-              title: '成员管理',
-              icon: 'ri:user-settings-line',
-              auth: 'member:read',
-              menu: false,
-              breadcrumb: false,
-              activeMenu: FRONTEND_ROUTE_PATHS.membersList,
-            },
-          },
-          {
-            path: 'roles',
-            name: 'membersRoles',
-            component: 'system/roles.vue',
-            meta: {
-              title: '角色管理',
-              icon: 'ri:shield-user-line',
-              auth: 'role:read',
-              menu: false,
-              breadcrumb: false,
-              activeMenu: FRONTEND_ROUTE_PATHS.roles,
             },
           },
         ],

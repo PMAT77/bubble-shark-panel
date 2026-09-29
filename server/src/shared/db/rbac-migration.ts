@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import {
+  GUEST_ROLE_PERMISSIONS,
   LEGACY_FRAMEWORK_PERMISSIONS,
   NODE_INSTANCE_MANAGE_PERMISSION,
   OPS_MANAGE_PERMISSION,
@@ -27,7 +28,7 @@ import {
  * 迁移会空转，之后又没有第二次机会。
  *
  * 迁移做四件事：
- * 1. 建内置**游客**角色（`key: 'guest'`，权限点恒为空）；
+ * 1. 建内置**游客**角色（`key: 'guest'`，权限点由 `GUEST_ROLE_PERMISSIONS` 固化）；
  * 2. 把每个既有用户的旧权限点**映射**成新权限点，并为它建立一个角色挂上去；
  * 3. 把映射结果物化回 `user_permissions`（它仍是最终生效表）；
  * 4. 给每个用户补上「当前全部实例」的授权，保证升级后老账号看不到的实例不会凭空消失。
@@ -172,30 +173,68 @@ async function writeMigrationFlag(): Promise<void> {
     })
 }
 
-/** 建内置游客角色：权限点恒为空、不可改、不可删。将来公开只读预览靠它当安全阀 */
-async function ensureGuestRole(): Promise<boolean> {
+/**
+ * 固化游客角色的权限点，并物化到挂该角色的成员。
+ *
+ * 语义：**除「成员管理」「角色管理」外的所有页面都能看，但一个操作都做不了**
+ * （权限点全部是 read，且服务端对 guest 还有一道「写接口一律拒绝」的保险）。
+ *
+ * 为什么每次启动都要执行：`migrateRbacFromLegacy` 只在首次迁移时跑一次（有迁移标记），
+ * 而游客的权限集是**代码定义的**——改了 `GUEST_ROLE_PERMISSIONS` 之后，已经迁移过的库
+ * 不会重跑迁移。只靠"建角色时写一次"会让存量部署永远停在旧集合上。
+ *
+ * 两步都不能省：
+ * - 写 `role_permissions` 是权限点的真源（角色管理页、菜单过滤都读它）；
+ * - 写 `user_permissions` 是让鉴权生效——服务端读的是这张物化表。
+ */
+export async function syncGuestRolePermissions(): Promise<{
+  created: boolean
+  permissions: readonly string[]
+  membersSynced: number
+}> {
   const { drizzleDb } = ensureDb()
+  const now = nowIso()
   const existing = await drizzleDb
     .select({ id: roles.id })
     .from(roles)
     .where(eq(roles.key, GUEST_ROLE_KEY))
     .limit(1)
-  if (existing[0]) {
-    return false
+
+  let roleId = existing[0]?.id
+  let created = false
+  if (!roleId) {
+    roleId = randomUUID()
+    await drizzleDb.insert(roles).values({
+      id: roleId,
+      key: GUEST_ROLE_KEY,
+      name: '游客',
+      description: '只读预览用的固化角色：固定持有「除成员管理、角色管理外」的全部只读权限点，不能被修改权限点或删除',
+      kind: 'guest',
+      isBuiltin: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    created = true
   }
-  const now = nowIso()
-  await drizzleDb.insert(roles).values({
-    id: randomUUID(),
-    key: GUEST_ROLE_KEY,
-    name: '游客',
-    description: '只读预览用的固化角色：没有任何写权限，也不能被修改权限点或删除',
-    kind: 'guest',
-    isBuiltin: 1,
-    createdAt: now,
-    updatedAt: now,
-  })
-  // 权限点显式为空的语义由代码保证（guest 角色的权限集恒为空），不写 role_permissions 行
-  return true
+
+  // 先清后写：幂等，且保证删掉的权限点（例如将来从集合里移除某项）真的收回
+  await drizzleDb.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId))
+  await drizzleDb.insert(rolePermissions).values(
+    GUEST_ROLE_PERMISSIONS.map(permission => ({ roleId, permission, createdAt: now })),
+  )
+
+  const members = await drizzleDb
+    .select({ userId: userRoles.userId })
+    .from(userRoles)
+    .where(eq(userRoles.roleId, roleId))
+  for (const member of members) {
+    await drizzleDb.delete(userPermissions).where(eq(userPermissions.userId, member.userId))
+    await drizzleDb.insert(userPermissions).values(
+      GUEST_ROLE_PERMISSIONS.map(permission => ({ userId: member.userId, permission, createdAt: now })),
+    )
+  }
+
+  return { created, permissions: GUEST_ROLE_PERMISSIONS, membersSynced: members.length }
 }
 
 async function findRoleIdByKey(key: string): Promise<string | undefined> {
@@ -260,7 +299,7 @@ export async function migrateRbacFromLegacy(options: {
   }
 
   outcome.ran = true
-  outcome.guestRoleCreated = await ensureGuestRole()
+  outcome.guestRoleCreated = (await syncGuestRolePermissions()).created
 
   const { drizzleDb } = ensureDb()
 
@@ -337,7 +376,7 @@ export async function migrateRbacFromLegacy(options: {
      *
      * 差异来自「新体系新增、旧体系没有对应」的那几个权限点（`member:*` / `role:*`）：
      * 只物化映射结果的话，角色上有 53 个权限点、账号上却只有 49 个，
-     * 而鉴权读的是 `user_permissions`——升级后管理员会看不到「成员与角色」菜单。
+     * 而鉴权读的是 `user_permissions`——升级后管理员会看不到「成员管理」「角色管理」菜单。
      */
     let effectivePermissions: readonly string[]
     if (isAdmin) {

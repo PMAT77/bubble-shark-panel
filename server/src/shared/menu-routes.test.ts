@@ -4,7 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import { FRONTEND_ROUTE_PATHS } from '../../../shared/constants/frontend-routes'
-import { ALL_PERMISSIONS, isKnownPermission } from '../../../shared/constants/permissions'
+import { ALL_PERMISSIONS, GUEST_EXCLUDED_PERMISSIONS, GUEST_ROLE_PERMISSIONS, isKnownPermission } from '../../../shared/constants/permissions'
 import { filterMenuRoutes, menuRouteList } from './menu-routes'
 import type { MenuRouteItem } from './menu-routes'
 
@@ -18,8 +18,8 @@ import type { MenuRouteItem } from './menu-routes'
  * 1. 每个 `component` 指向的文件真实存在；
  * 2. 页面路径（含 FRONTEND_ROUTE_PATHS 常量）与前端 activeMenu 对得上；
  * 3. 同级菜单项标题不重复（历史上出现过"控制台 > 控制台"式嵌套），
- *    且单页模块不再套同名容器（否则图标栏与二级导航各画一个「系统设置」）；
- * 4. 每个主导航模块都有可点入口：多页模块靠可见页面，单页模块（系统设置）靠页面本身，
+ *    且单页模块不再套同名容器（否则图标栏与二级导航各画一个同名入口）；
+ * 4. 每个主导航模块都有可点入口：多页模块靠可见页面，单页模块（系统设置 / 成员管理 / 角色管理）靠页面本身，
  *    防止页面重新变成"路由可达但无处可点"。
  */
 
@@ -148,7 +148,7 @@ describe('菜单与路由一致性', () => {
   it('主导航的每个模块都有可点的入口（显示或单页模块；暂时隐藏的除外）', () => {
     // 真正的目标：页面不能是"路由可达但无处可点"。两种满足方式——
     // 多页模块：children 里有可见页面（容器会呈现为可点单项）；
-    // 单页模块（当前的「系统设置」）：没有容器，页面本身就是模块入口，
+    // 单页模块（当前的「系统设置」「成员管理」「角色管理」）：没有容器，页面本身就是模块入口，
     // 图标栏那一项直接点得进（`MainSidebar` 只要求 children 非空），因此页面可以保持隐藏。
     const unreachable: string[] = []
     const hidden: string[] = []
@@ -248,6 +248,60 @@ describe('菜单与路由一致性', () => {
     )
   })
 
+  /**
+   * 成员管理 / 角色管理与系统设置同为**单页模块**：模块本身没有 path、没有 Layout 容器，
+   * `children` 里只有页面这一项。这条同时挡住两种回归——
+   * 又给单页模块套回容器（侧栏会多出一个点不开的空壳），或把页面 path 写成相对值
+   * （路由层判定不出单页模块，页面会脱离布局：进这一页后侧栏与顶栏整条不渲染）。
+   */
+  it('单页模块只有系统设置、成员管理、角色管理三个，且都是「页面本身作入口」', () => {
+    const singlePageTitles = menuRouteList
+      .filter((group) => {
+        const children = group.children ?? []
+        return children.length === 1 && !!children[0]!.component && children[0]!.component !== 'Layout'
+      })
+      .map(group => group.meta.title)
+
+    assert.deepEqual(
+      singlePageTitles,
+      ['成员管理', '角色管理', '系统设置'],
+      `单页模块名单或顺序变了（实际：${singlePageTitles.join('、')}）。这里的顺序就是菜单顺序，改结构时要同步这条断言与下面的形状检查`,
+    )
+
+    const knownPaths = new Set<string>(Object.values(FRONTEND_ROUTE_PATHS))
+    for (const group of menuRouteList.filter(item => singlePageTitles.includes(item.meta.title))) {
+      const page = (group.children ?? [])[0]!
+      const where = `「${group.meta.title}」`
+      assert.equal(page.meta.title, group.meta.title, `${where}的页面应与模块同名：入口文字只有一处，不该出现第二个名字`)
+      assert.equal(page.meta.menu, false, `${where}的页面必须保持 menu: false，否则二级导航会画出第二个同名项`)
+      assert.equal(page.meta.breadcrumb, false, `${where}的容器由路由层补出且与页面同名，页面必须关掉自己的面包屑`)
+      assert.ok(
+        typeof page.path === 'string' && page.path.startsWith('/'),
+        `${where}的页面路径必须是绝对路径：路由层靠它判定单页模块并补布局容器`,
+      )
+      assert.ok(knownPaths.has(page.path!), `${where}的页面路径 ${page.path} 不在 FRONTEND_ROUTE_PATHS 里`)
+      assert.equal(page.meta.activeMenu, page.path, `${where}的 activeMenu 要指向页面自身路径，否则侧栏高亮会失效`)
+      assert.ok(group.meta.icon, `${where}应当有图标：单页模块在图标栏/平铺菜单里靠它区分`)
+    }
+  })
+
+  it('成员管理与角色管理是相邻的一级菜单，排在「商业支持与 Pro」之前', () => {
+    const titles = menuRouteList.map(item => item.meta.title)
+    const membersIndex = titles.indexOf('成员管理')
+    const rolesIndex = titles.indexOf('角色管理')
+    const commercialIndex = titles.indexOf('商业支持与 Pro')
+
+    assert.ok(membersIndex >= 0 && rolesIndex >= 0, `菜单里应当有「成员管理」「角色管理」，实际：${titles.join('、')}`)
+    assert.ok(commercialIndex >= 0, '菜单里应当有「商业支持与 Pro」')
+    assert.equal(rolesIndex, membersIndex + 1, '成员管理与角色管理应当相邻，中间不夹别的模块')
+    assert.ok(membersIndex < commercialIndex, '两个模块都要排在「商业支持与 Pro」之前')
+    assert.equal(
+      titles.includes('成员与角色'),
+      false,
+      '旧的合并模块不该再存在：它只有一个 redirect，点进去只能到成员管理页，角色管理没有入口',
+    )
+  })
+
   it('商业支持是独立的主导航模块，插件页面保留但暂从菜单隐藏', () => {
     const topTitles = menuRouteList.map(item => item.meta.title)
     assert.ok(
@@ -310,9 +364,63 @@ describe('按权限过滤菜单', () => {
   })
 
   it('只给房间权限时，只剩房间管理模块', () => {
+    /**
+     * 一个菜单项只由**它自己的**读权限决定。
+     *
+     * 房间列表的数据虽然来自实例，但那是接口的事（`/app/instance/room-summaries` 按
+     * `room:read` 放行、只回房间字段）。菜单不因此要「查看实例」——否则取消「查看实例」
+     * 会连带收走房间/世界/玩家/Mod/备份/计划任务/成员管理一大串菜单。
+     */
     const filtered = filterMenuRoutes(menuRouteList, new Set(['room:read']))
     assert.deepEqual(moduleTitles(filtered), ['房间管理'])
     assert.deepEqual(visiblePageTitles(filtered), ['房间管理', '房间设置'])
+  })
+
+  it('取消「查看实例」只影响实例管理，不牵连其它模块', () => {
+    // 除 instance:read 之外给全：只有实例管理该消失
+    const allExceptInstanceRead = ALL_PERMISSIONS.filter(key => key !== 'instance:read')
+    const titles = moduleTitles(filterMenuRoutes(menuRouteList, new Set(allExceptInstanceRead)))
+    assert.equal(titles.includes('实例管理'), false, '没有 instance:read 时实例管理必须消失')
+    for (const title of ['监控台', '房间管理', '世界管理', '玩家管理', '模组管理', '备份与恢复', '计划任务', '成员管理', '角色管理']) {
+      assert.ok(titles.includes(title), `取消查看实例不该牵连「${title}」，实际菜单：${titles.join('、')}`)
+    }
+  })
+
+  it('游客角色：除成员、角色、插件外，所有模块都看得见', () => {
+    /**
+     * 这条钉住「游客 = 能看不能改」里的**能看**那一半。
+     *
+     * 游客的权限集是代码固化的（`GUEST_ROLE_PERMISSIONS`），一旦有人新增了模块却忘了
+     * 给它的 read 权限点，这里会立刻失败——否则表现是"游客少了一个页面"，
+     * 而少一个页面没有任何报错。
+     *
+     * 期望值由 `GUEST_EXCLUDED_PERMISSIONS` 推导，而不是写死几个标题：
+     * 那份清单是"游客不该看什么"的唯一真源，测试里再抄一遍就会漂移。
+     * 逐个权限点对应的模块名不方便反推，所以这里只排除**已知会因此整块消失**的模块名，
+     * 并用"清单里的权限点确实都没出现在菜单里"作为交叉校验。
+     */
+    const filtered = filterMenuRoutes(menuRouteList, new Set(GUEST_ROLE_PERMISSIONS))
+    const titles = moduleTitles(filtered)
+    const hiddenModules = ['成员管理', '角色管理', '插件']
+    const expected = menuRouteList
+      .map(item => item.meta.title)
+      .filter(title => !hiddenModules.includes(title))
+    assert.deepEqual(titles, expected, `游客应当看到除成员/角色/插件外的全部模块，实际：${titles.join('、')}`)
+
+    // 交叉校验：被排除的权限点一个都不该在游客手上，否则"模块消失"就只是巧合
+    for (const excluded of GUEST_EXCLUDED_PERMISSIONS) {
+      assert.equal(
+        GUEST_ROLE_PERMISSIONS.includes(excluded as never),
+        false,
+        `${excluded} 还在游客权限集里，上面"模块消失"的断言会掩盖它`,
+      )
+    }
+
+    // 页面级也要对：模块在、页面被权限点挡掉同样会让游客点进去看到空壳
+    const pageTitles = visiblePageTitles(filtered)
+    const hiddenPages = [...hiddenModules, '实例控制台']
+    const expectedPages = visiblePageTitles(menuRouteList).filter(title => !hiddenPages.includes(title))
+    assert.deepEqual(pageTitles, expectedPages)
   })
 
   it('模块入口的权限是数组时按 some 判定：只给操作记录权限也能进系统设置', () => {
@@ -324,20 +432,28 @@ describe('按权限过滤菜单', () => {
     )
   })
 
-  it('子页面的权限互不相同时，只出现该账号真正能进的那一页', () => {
-    const filtered = filterMenuRoutes(menuRouteList, new Set(['member:read']))
-    const titles = visiblePageTitles(filtered)
-    assert.ok(titles.includes('成员管理'), '有 member:read 就应当看到成员管理')
-    assert.equal(titles.includes('角色管理'), false, '没有 role:read 就不该出现角色管理')
+  it('成员与角色拆开后，各按自己的权限点出现，谁也不带出谁', () => {
+    // 成员页的角色下拉与实例授权走各自的最小投影接口（`/app/system/role-options`、
+    // `/app/instance/options`，后者对 member:read 也放行），所以成员管理只需要 member:read。
+    const memberOnly = filterMenuRoutes(menuRouteList, new Set(['member:read']))
+    assert.deepEqual(moduleTitles(memberOnly), ['成员管理'], 'member:read 应当只带出「成员管理」')
+    assert.deepEqual(visiblePageTitles(memberOnly), ['成员管理'], '单页模块的入口就是页面本身')
+
+    const roleOnly = filterMenuRoutes(menuRouteList, new Set(['role:read']))
+    assert.deepEqual(moduleTitles(roleOnly), ['角色管理'], 'role:read 应当只带出「角色管理」')
+
+    // 拆开之后不再是「一个模块两个页面靠 some 语义共享入口」：
+    // 只给其中一个权限点时，另一页既没有菜单项，前端也不会注册它的路由
+    const neither = moduleTitles(filterMenuRoutes(menuRouteList, new Set(['room:read'])))
     assert.equal(
-      moduleTitles(filtered).includes('成员与角色'),
-      true,
-      '模块入口是 some 语义，任一子页面可见时模块就要在',
+      neither.includes('成员管理') || neither.includes('角色管理'),
+      false,
+      '没有任何成员/角色权限时，两个模块都不该出现',
     )
   })
 
   it('过滤结果里每一个页面的权限点都被满足（不变式）', () => {
-    const granted = new Set(['room:read', 'backup:read'])
+    const granted = new Set(['room:read', 'instance:read', 'backup:read', 'audit:read'])
     for (const item of flatten(filterMenuRoutes(menuRouteList, granted))) {
       const auth = item.meta.auth
       if (!auth) {

@@ -9,6 +9,8 @@ import { drizzle } from 'drizzle-orm/sqlite-proxy'
 import { migrate } from 'drizzle-orm/sqlite-proxy/migrator'
 import type { AdminCredentialOutcome } from '../config/credentials-file'
 import { ALL_PERMISSIONS } from '../../../../shared/constants/permissions'
+import { ensureGuestAccount } from './guest-account'
+import type { GuestAccountOutcome } from './guest-account'
 import type { RbacMigrationOutcome } from './rbac-migration'
 import {
   systemSettings,
@@ -35,6 +37,10 @@ interface InitDatabaseOptions {
   onAdminCredentialOutcome?: (outcome: AdminCredentialOutcome) => void
   /** RBAC 迁移结果回调；只在真的跑过迁移时触发（第二次启动起不再触发） */
   onRbacMigrationOutcome?: (outcome: RbacMigrationOutcome) => void
+  /** 游客（只读预览）账号预置配置；`enabled` 为 false（默认）时不会创建任何账号 */
+  guestAccount?: { enabled: boolean, account: string }
+  /** 游客账号预置结果回调；只有 `guestAccount.enabled` 时触发 */
+  onGuestAccountOutcome?: (outcome: GuestAccountOutcome) => void
 }
 
 interface AuthForcePasswordChangeState {
@@ -269,6 +275,17 @@ const MIGRATION_0008_MOD_FILES_SYNCED_KEY = 'migration.0008_mod_files_synced'
 async function runRbacMigration(): Promise<RbacMigrationOutcome> {
   const { migrateRbacFromLegacy } = await import('./rbac-migration')
   return migrateRbacFromLegacy({ allPermissions: ALL_PERMISSIONS })
+}
+
+/**
+ * 同步内置游客角色的权限点（幂等）。
+ *
+ * 与 RBAC 迁移分开：迁移只跑一次（有标记），而游客的权限集是代码定义的，
+ * 改了 `GUEST_ROLE_PERMISSIONS` 之后存量部署必须也能跟上，所以每次启动都同步一遍。
+ */
+async function runGuestRolePermissionSync() {
+  const { syncGuestRolePermissions } = await import('./rbac-migration')
+  return syncGuestRolePermissions()
 }
 
 async function runPostMigration0008ModFileSync() {
@@ -575,6 +592,20 @@ export async function initDatabase(
   const rbacOutcome = await runRbacMigration()
   if (rbacOutcome.ran) {
     options.onRbacMigrationOutcome?.(rbacOutcome)
+  }
+  // 必须排在迁移之后：游客角色由迁移建立，这里再把它的权限集同步成当前代码定义的那一份
+  await runGuestRolePermissionSync()
+  /**
+   * 游客（只读预览）账号预置，必须排在游客角色同步之后——角色是上一步才确定存在的。
+   *
+   * 只有 `guestAccount.enabled`（= 面板真的开放了游客登录）时才建账号：
+   * 默认部署不该凭空多出一个账号，哪怕它是只读的。
+   */
+  if (options.guestAccount?.enabled) {
+    const outcome = await ensureGuestAccount(options.guestAccount)
+    if (outcome) {
+      options.onGuestAccountOutcome?.(outcome)
+    }
   }
   return absolutePath
 }

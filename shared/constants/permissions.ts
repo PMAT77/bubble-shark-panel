@@ -40,6 +40,19 @@ export interface PermissionSpec {
   scope: PermissionScope
   /** 一句话说明：这个权限点允许对方做什么（界面上的悬停说明与文档都取自它） */
   summary: string
+  /**
+   * 这个**读**权限点会不会改变面板/游戏的状态。
+   *
+   * 正常情况下一律不写：`action: 'read'` 就意味着"不改任何东西"，写权限点单独用 `action: 'write'`。
+   * 例外只有一类——**接口方法名是读、实际会向外部系统下指令**的接口。目前唯一的一处是
+   * `instance.console:read`：`/app/instance/world-state` 会向运行中的游戏下发一条 `print` 指令
+   * 再回读日志（见 `server/src/modules/console/world-state-routes.ts`）。
+   *
+   * 为什么需要它：游客（只读预览）的写保护是按 `action === 'write'` 判的，这类接口会被漏掉；
+   * 而它可被匿名访客按页面的 30 秒轮询无成本放大成对游戏的命令注入。标记上之后
+   * `resolveAuthorizedContext` 会把它和写权限点同等对待（见 `server/src/modules/system/auth.ts`）。
+   */
+  sideEffect?: boolean
 }
 
 /** 模块分组。顺序即角色管理页的展示顺序 */
@@ -55,7 +68,8 @@ export const PERMISSION_GROUPS = [
   '备份',
   '计划任务',
   '系统',
-  '成员与角色',
+  '成员',
+  '角色',
 ] as const
 
 export type PermissionGroup = typeof PERMISSION_GROUPS[number]
@@ -153,6 +167,11 @@ export const PERMISSION_SPECS = [
     action: 'read',
     scope: 'instance',
     summary: '查看实例控制台的实时日志与历史日志',
+    /**
+     * `/app/instance/world-state` 走这个权限点，而它会向游戏下发 `print` 指令回读天数/季节。
+     * 读的是日志，写的是游戏控制台——对"只能看"的游客必须按写操作对待。
+     */
+    sideEffect: true,
   },
   {
     key: 'console:clear',
@@ -475,11 +494,11 @@ export const PERMISSION_SPECS = [
     summary: '查看版本形态、许可状态与可选付费服务说明',
   },
 
-  // ── 成员与角色 ──────────────────────────────────────────────────────────
+  // ── 成员 / 角色 ─────────────────────────────────────────────────────────
   {
     key: 'member:read',
     label: '查看成员',
-    group: '成员与角色',
+    group: '成员',
     action: 'read',
     scope: 'global',
     summary: '查看成员列表、角色与实例授权情况',
@@ -487,7 +506,7 @@ export const PERMISSION_SPECS = [
   {
     key: 'member:write',
     label: '管理成员',
-    group: '成员与角色',
+    group: '成员',
     action: 'write',
     scope: 'global',
     summary: '创建子账号、停用启用、重置密码、分配角色与实例授权',
@@ -495,7 +514,7 @@ export const PERMISSION_SPECS = [
   {
     key: 'role:read',
     label: '查看角色',
-    group: '成员与角色',
+    group: '角色',
     action: 'read',
     scope: 'global',
     summary: '查看角色列表与每个角色拥有的权限点',
@@ -503,7 +522,7 @@ export const PERMISSION_SPECS = [
   {
     key: 'role:write',
     label: '管理角色',
-    group: '成员与角色',
+    group: '角色',
     action: 'write',
     scope: 'global',
     summary: '新建、修改、删除角色与其权限点',
@@ -522,6 +541,15 @@ export type PermissionKey = typeof PERMISSION_SPECS[number]['key']
 /** 全部权限点字符串，顺序即展示顺序 */
 export const ALL_PERMISSIONS: readonly PermissionKey[] = PERMISSION_SPECS.map(spec => spec.key)
 
+/**
+ * 只读权限点的字面量联合（`action === 'read'` 的那些）。
+ *
+ * 用于「任一读权限即可」的接口（`requireAnyReadPermission`）：那类接口的语义是
+ * 「同一份只读数据被多个模块共用」，所以**只能**传读权限点。把它做成类型而不是运行时断言，
+ * 是因为写错（传了写权限点）的后果是"任一命中就能写"——那是个静默的越权，编译期拦住最省事。
+ */
+export type ReadPermissionKey = Extract<typeof PERMISSION_SPECS[number], { action: 'read' }>['key']
+
 const SPEC_BY_KEY: ReadonlyMap<string, PermissionSpec> = new Map(
   PERMISSION_SPECS.map(spec => [spec.key as string, spec as PermissionSpec]),
 )
@@ -534,6 +562,20 @@ export function isKnownPermission(key: string): key is PermissionKey {
   return SPEC_BY_KEY.has(key)
 }
 
+/**
+ * 这个权限点会不会改变状态：`write` 的写操作，或标了 `sideEffect` 的读接口。
+ *
+ * 判"能不能给游客"一律用它，不要只判 `action === 'write'`——那会漏掉
+ * `world-state` 这类"方法名是读、实际向游戏下指令"的接口。
+ */
+export function isStateChangingPermission(key: string): boolean {
+  const spec = SPEC_BY_KEY.get(key)
+  if (!spec) {
+    return false
+  }
+  return spec.action === 'write' || spec.sideEffect === true
+}
+
 /** 中文名；未登记的权限点原样返回，避免界面出现空白 */
 export function permissionLabel(key: string): string {
   return SPEC_BY_KEY.get(key)?.label ?? key
@@ -543,6 +585,49 @@ export function permissionLabel(key: string): string {
 export const READ_ONLY_PERMISSIONS: readonly PermissionKey[] = PERMISSION_SPECS
   .filter(spec => spec.action === 'read')
   .map(spec => spec.key)
+
+/**
+ * 游客角色**不持有**的读权限点。
+ *
+ * 五条各自对应一类"预览看到也没用、但拿出去有害"的信息：
+ *
+ * - `member:read` / `role:read`：成员与角色是面板的授权入口。只读预览看到成员名单、
+ *   角色权限矩阵没有意义，反而把「谁有哪些权限」这种布局信息交出去；而这两个模块本身
+ *   也只有 read/write 两个权限点，去掉 read 就等于整个模块消失
+ *   （菜单过滤 → 路由不注册 → 直接输地址落 404）。
+ * - `audit:read`：操作记录里逐条都是**管理员账号名 + 改了哪个实例的什么**，
+ *   接口还回 `auditRoot` 绝对路径。公开预览等于把管理员账号名与运维作息交给任何访客，
+ *   而这些名字可以直接拿去撞库。
+ * - `plugin:read`：插件调用审计，同样回 `auditRoot` 绝对路径与插件来源信息。
+ * - `instance.console:read`：它是**标了 `sideEffect` 的读权限点**——控制台页面本身是只读的，
+ *   但同一个权限点还管着 `/app/instance/world-state`，那个接口会向运行中的游戏下发
+ *   `print` 指令。`resolveAuthorizedContext` 已经会拦这一类接口，这里**再摘一层**是刻意的：
+ *   游客的"只读"不该依赖某个权限点的元数据一直标着 `sideEffect`，
+ *   哪天有人把那个标记去掉，游客仍然拿不到控制台读权限，也就碰不到那条命令通道。
+ *
+ * 这是游客可见面的**唯一真源**的一部分：迁移会把它固化进游客角色的 `role_permissions`
+ * 并物化到成员，管理接口不允许改它。想调整游客能看什么，改下面两个常量就行，不要改数据库。
+ */
+export const GUEST_EXCLUDED_PERMISSIONS = [
+  'member:read',
+  'role:read',
+  'audit:read',
+  'plugin:read',
+  'instance.console:read',
+] as const
+
+/**
+ * 内置游客角色固定持有的权限点。
+ *
+ * 语义是「**能看除成员、角色、审计、插件外的所有页面，但一个操作都做不了**」：
+ * 全部 read 权限点减去 `GUEST_EXCLUDED_PERMISSIONS`。
+ *
+ * 这里是游客能看到的页面范围的**唯一真源**：迁移会把它固化进游客角色的
+ * `role_permissions` 并物化到成员，管理接口不允许改它。想调整游客能看什么，
+ * 改上面那个数组就行，不要改数据库。
+ */
+export const GUEST_ROLE_PERMISSIONS: readonly PermissionKey[] = READ_ONLY_PERMISSIONS
+  .filter(key => !(GUEST_EXCLUDED_PERMISSIONS as readonly PermissionKey[]).includes(key))
 
 /** 需要实例授权的权限点 */
 export const INSTANCE_SCOPED_PERMISSIONS: readonly PermissionKey[] = PERMISSION_SPECS

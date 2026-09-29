@@ -7,14 +7,16 @@ import { fileURLToPath } from 'node:url'
 import { eq } from 'drizzle-orm'
 import {
   ALL_PERMISSIONS,
+  GUEST_ROLE_PERMISSIONS,
   LEGACY_FRAMEWORK_PERMISSIONS,
   NODE_INSTANCE_MANAGE_PERMISSION,
   OPS_MANAGE_PERMISSION,
   OPS_READ_PERMISSION,
   SYSTEM_MANAGE_PERMISSION,
+  findPermissionSpec,
 } from '../../../../shared/constants/permissions'
 import { closeDatabase, ensureDb, initDatabase, nowIso } from './connection'
-import { mapLegacyPermissions } from './rbac-migration'
+import { mapLegacyPermissions, syncGuestRolePermissions } from './rbac-migration'
 import {
   gameInstances,
   instanceGrants,
@@ -78,7 +80,7 @@ describe('RBAC 迁移：全新库', () => {
     assert.equal(outcome?.guestRoleCreated, true)
   })
 
-  it('内置游客角色存在、权限点为零、不可被当作普通角色', async () => {
+  it('内置游客角色存在、权限点是固定只读集、不可被当作普通角色', async () => {
     const { drizzleDb } = ensureDb()
     const rows = await drizzleDb.select().from(roles).where(eq(roles.key, 'guest'))
     const guest = rows[0]
@@ -89,7 +91,63 @@ describe('RBAC 迁移：全新库', () => {
       .select()
       .from(rolePermissions)
       .where(eq(rolePermissions.roleId, guest.id))
-    assert.equal(permissions.length, 0, '游客角色的权限点必须为空——它是只读预览的安全阀')
+    assert.deepEqual(
+      permissions.map(row => row.permission).sort(),
+      [...GUEST_ROLE_PERMISSIONS].sort(),
+      '游客角色的权限点必须等于代码定义的那一份固定只读集',
+    )
+    // 只读 + 不含成员/角色：分别是"不能操作"与"看不到成员与角色管理"的判据
+    for (const permission of permissions) {
+      assert.equal(findPermissionSpec(permission.permission)?.action, 'read', `${permission.permission} 不该出现在游客角色上`)
+    }
+    for (const excluded of ['member:read', 'role:read']) {
+      assert.ok(!permissions.some(row => row.permission === excluded), `${excluded} 不该给游客——那是成员/角色管理的入口`)
+    }
+  })
+
+  it('挂上游客角色的成员会被物化成同一份只读权限点', async () => {
+    const { drizzleDb } = ensureDb()
+    const guestRows = await drizzleDb.select().from(roles).where(eq(roles.key, 'guest'))
+    const guest = guestRows[0]!
+    const userRows = await drizzleDb.select().from(users).where(eq(users.account, 'superadmin'))
+    const targetUserId = userRows[0]!.id
+
+    // 现场快照：这个账号在别的用例里还要用，改完必须还原，否则用例之间互相污染
+    const roleBefore = await drizzleDb.select().from(userRoles).where(eq(userRoles.userId, targetUserId))
+    const permissionsBefore = await drizzleDb.select().from(userPermissions).where(eq(userPermissions.userId, targetUserId))
+
+    try {
+      // 模拟「管理员在成员管理里把这个账号换成游客角色」
+      await drizzleDb.delete(userRoles).where(eq(userRoles.userId, targetUserId))
+      await drizzleDb.insert(userRoles).values({ userId: targetUserId, roleId: guest.id, createdAt: nowIso() })
+      // 残留的旧权限点必须被覆盖，不能与新权限点并存
+      await drizzleDb.delete(userPermissions).where(eq(userPermissions.userId, targetUserId))
+      await drizzleDb.insert(userPermissions).values({ userId: targetUserId, permission: 'instance:lifecycle', createdAt: nowIso() })
+
+      await syncGuestRolePermissions()
+
+      const materialized = await drizzleDb
+        .select()
+        .from(userPermissions)
+        .where(eq(userPermissions.userId, targetUserId))
+      assert.deepEqual(
+        materialized.map(row => row.permission).sort(),
+        [...GUEST_ROLE_PERMISSIONS].sort(),
+        '鉴权读的是 user_permissions：挂上游客角色后必须物化成那份只读集',
+      )
+    }
+    finally {
+      await drizzleDb.delete(userRoles).where(eq(userRoles.userId, targetUserId))
+      if (roleBefore[0]) {
+        await drizzleDb.insert(userRoles).values({ userId: targetUserId, roleId: roleBefore[0].roleId, createdAt: nowIso() })
+      }
+      await drizzleDb.delete(userPermissions).where(eq(userPermissions.userId, targetUserId))
+      if (permissionsBefore.length > 0) {
+        await drizzleDb.insert(userPermissions).values(
+          permissionsBefore.map(row => ({ userId: targetUserId, permission: row.permission, createdAt: nowIso() })),
+        )
+      }
+    }
   })
 
   it('管理员拿到系统管理员角色，且生效权限点与角色权限点一致', async () => {

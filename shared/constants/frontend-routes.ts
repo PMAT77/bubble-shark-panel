@@ -18,8 +18,14 @@ export const FRONTEND_ROUTE_PATHS = {
   plugins: '/plugins',
   /** 「商业支持与 Pro」主导航模块 */
   commercial: '/commercial',
-  /** 「成员与角色」主导航模块下的两个页面 */
-  members: '/members',
+  /**
+   * 「成员管理」与「角色管理」两个一级菜单各自的页面路径。
+   *
+   * 二者都是单页模块（模块下只有一个页面，不套 Layout 容器），页面路径必须是**绝对路径**：
+   * 路由层靠它判定单页模块并补布局容器。原本是同一个「成员与角色」模块下的两个子路径，
+   * 拆成两个一级菜单只是去掉了容器，地址不变。
+   * 旧容器地址 `/members` 随之消失——该模块从未随版本发布过，不为它留重定向。
+   */
   membersList: '/members/list',
   roles: '/members/roles',
 } as const

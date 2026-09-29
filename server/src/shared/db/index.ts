@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import process from 'node:process'
-import { and, asc, eq, isNull, or } from 'drizzle-orm'
+import { and, asc, eq, isNotNull, isNull, lt, or } from 'drizzle-orm'
 import {
   authSessions,
   serverNodes,
@@ -108,6 +108,37 @@ export async function findUserByAccount(account: string): Promise<DbUserRow | un
   return result[0]
 }
 
+/**
+ * 按 userId 取用户（只回启用中的账号）。
+ *
+ * 用于"手上已经有 userId、但要签发会话"的路径——游客免密登录就是这种形态：
+ * 它拿到的是一行内部指针（`guest.account`），不是账号名，也不该为了签发会话
+ * 反查账号名再查一次（那等于把指针路径变成名字路径，正好是这里要避免的）。
+ */
+export async function findUserById(userId: string): Promise<DbUserRow | undefined> {
+  const { drizzleDb } = ensureDb()
+  const result = await drizzleDb
+    .select({
+      id: users.id,
+      account: users.account,
+      password_hash: users.passwordHash,
+      email: users.email,
+      avatar: users.avatar,
+      status: users.status,
+      must_change_password: users.mustChangePassword,
+      updated_at: users.updatedAt,
+    })
+    .from(users)
+    .where(
+      and(
+        eq(users.id, userId),
+        eq(users.status, 1),
+      ),
+    )
+    .limit(1)
+  return result[0]
+}
+
 export async function createSession(token: string, userId: string) {
   const { drizzleDb } = ensureDb()
   const now = nowIso()
@@ -203,6 +234,34 @@ export async function revokeSessionsByUserId(userId: string) {
         isNull(authSessions.revokedAt),
       ),
     )
+}
+
+/**
+ * 清理已经不可能再被使用的会话记录。
+ *
+ * 为什么需要：`auth_sessions` 里没有任何回收机制——每登录一次就多一行，长期运行只增不减。
+ * 会话数少时无所谓，但**游客登录会把"一次登录"的成本降到一次点击**，
+ * 公开预览站的这张表会天天长；而它的行里带着 user_agent 与 last_seen_ip，属于能不存就不存的东西。
+ *
+ * 判据是"两张令牌都不可能再生效"：access 只是刷新令牌的短命衍生物，
+ * 所以只要 refresh 过期（或整条早已被吊销）就可以删。
+ * 用启动时 + 每日各一次的频率调用即可，它不是热路径。
+ */
+export async function deleteExpiredAuthSessions(now = new Date()): Promise<void> {
+  const { drizzleDb } = ensureDb()
+  const nowIsoString = toIsoFromMs(now.getTime())
+  await drizzleDb.delete(authSessions).where(
+    or(
+      and(
+        isNotNull(authSessions.refreshExpiresAt),
+        lt(authSessions.refreshExpiresAt, nowIsoString),
+      ),
+      and(
+        isNotNull(authSessions.revokedAt),
+        lt(authSessions.revokedAt, nowIsoString),
+      ),
+    ),
+  )
 }
 
 export async function findUserByToken(token: string): Promise<DbUserRow | undefined> {

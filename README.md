@@ -3,10 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/PMAT77/game-serve-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/PMAT77/game-serve-hub/actions/workflows/ci.yml)
 ![Public Beta](https://img.shields.io/badge/status-Public%20Beta-orange)
+[![在线预览](https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E9%A2%84%E8%A7%88-%E7%82%B9%E6%AD%A4%E6%89%93%E5%BC%80-12B7F5)](http://111.170.172.120:50155)
 
 ![Game Server Hub 面板预览](https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/game-server-hub/GameServer_B_0925.png)
 
-面向 Steam 专用服务器的开源运维面板。当前以《饥荒联机版》（DST）为首个完整适配游戏，提供安装、更新、启停、监控、日志、控制台、世界和 Mod 管理。
+面向 Steam 专用服务器的开源运维面板。当前以《饥荒联机版》（DST）为首个完整适配游戏，提供安装、更新、启停、监控、日志、控制台、世界和 Mod 管理。**不用装、不用注册**，点上面的「在线预览」即可只读浏览真实面板。
 
 ## 适合谁
 

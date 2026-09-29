@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | `GSH_INSTALL_MODE` | `auto` | 同 `--mode` |
 | `GSH_NETWORK_PROFILE` | `auto` | 同 `--network` |
-| `GSH_RELEASE_TAG` | 脚本内置 `v0.10.0` | 安装指定版本。升级时填**目标**版本 |
+| `GSH_RELEASE_TAG` | 脚本内置 `v0.10.1` | 安装指定版本。升级时填**目标**版本 |
 | `GSH_PANEL_ENV_PRESET` | `auto` | 内存预设档位：`auto` / `small` / `medium` / `large` / `none` |
 | `PANEL_IMAGE` | GHCR 当前 tag | 统一镜像的完整引用（tag 或 digest），自建仓库时用 |
 | `INSTALL_STEAMCMD_IMAGE` | `1` | 设 `0` 跳过预拉 SteamCMD 镜像 |
@@ -94,7 +94,7 @@
 
 | 变量 | 默认 | 用途 |
 | --- | --- | --- |
-| `PANEL_IMAGE` | `ghcr.io/pmat77/game-server-hub:v0.10.0` | 统一镜像引用，自建仓库或固定 digest 时用 |
+| `PANEL_IMAGE` | `ghcr.io/pmat77/game-server-hub:v0.10.1` | 统一镜像引用，自建仓库或固定 digest 时用 |
 | `GSH_IMAGE_MIRRORS` | 空 | 备选 registry 候选，逗号分隔、按顺序尝试 |
 | `GSH_GITHUB_PROXY` | 内置代理池 | Release 离线镜像包的加速代理，留空则按代理池依次尝试 |
 | `GSH_GITHUB_API_BASE` | `https://api.github.com` | 「检查更新」用的 GitHub API 基址，直连超时时指向兼容反代 |

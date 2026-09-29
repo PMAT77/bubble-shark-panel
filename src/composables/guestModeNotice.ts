@@ -8,9 +8,9 @@
  * 别人临时开给你看的，你得知道该去找谁、改什么，而不是以为面板坏了。
  */
 
-export const GUEST_MODE_NOTICE_TITLE = '当前是游客模式'
+export const GUEST_MODE_NOTICE_TITLE = '当前为游客模式'
 
-export const GUEST_MODE_NOTICE_CONTENT = '此账号只能查看，无法执行任何操作——所有操作入口都已隐藏。需要操作权限，请让管理员在「成员管理」里换一个角色。'
+export const GUEST_MODE_NOTICE_CONTENT = '此账号只能查看，无法执行任何操作——所有操作入口都已隐藏。'
 
 /**
  * 「已经关过这个提示」的存储键。

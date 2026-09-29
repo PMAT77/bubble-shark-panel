@@ -109,7 +109,7 @@ export const loginOptionsResponseSchema = z.object({
   /** 是否开放游客（只读预览）免密登录 */
   guestLoginEnabled: z.boolean(),
   /**
-   * 游客账号名，仅用于按钮上的展示文案（例如「以 guest 身份预览」）。
+   * 游客账号名，仅用于按钮上的展示文案（例如「以游客身份预览」）。
    *
    * 它不是凭证：口令是随机值且不落盘，知道账号名没有任何用。
    */

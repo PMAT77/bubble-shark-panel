@@ -18,7 +18,6 @@ describe('游客模式提示', () => {
     assert.ok(GUEST_MODE_NOTICE_TITLE.includes('游客'), '标题要点明是游客模式')
     assert.ok(GUEST_MODE_NOTICE_CONTENT.includes('只能查看'), '要说明只能查看')
     assert.ok(GUEST_MODE_NOTICE_CONTENT.includes('隐藏'), '要说明操作入口被隐藏了')
-    assert.ok(GUEST_MODE_NOTICE_CONTENT.includes('成员管理'), '要给出下一步能找谁')
   })
 
   it('「关过」的记录按账号分开，空账号不给键', () => {

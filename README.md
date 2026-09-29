@@ -40,7 +40,7 @@
 
 ## 快速开始
 
-当前为 `v0.10.0` 公测线。装法与环境要求见安装手册：[Docker 模式](docs/install-docker.md) · [Native systemd 模式](docs/install-native.md)；参数与变量速查见[参数速查](docs/reference.md)。
+当前为 `v0.10.1` 公测线。装法与环境要求见安装手册：[Docker 模式](docs/install-docker.md) · [Native systemd 模式](docs/install-native.md)；参数与变量速查见[参数速查](docs/reference.md)。
 
 ## 开源与规划
 

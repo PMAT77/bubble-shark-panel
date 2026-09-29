@@ -13,7 +13,7 @@ Windows 不是部署目标，只用于本机开发调试。
 一条命令装完，安装器自己装 Docker 与 Compose 插件，再拉取统一镜像并启动面板栈。
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.0/scripts/install.linux.sh" \
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.1/scripts/install.linux.sh" \
   | sudo bash -s -- --mode docker
 ```
 
@@ -26,13 +26,13 @@ GHCR 拉取慢或超时的话，把上面命令里的 `https://raw.githubusercon
 ### 1. 下载安装器并确认版本
 
 ```bash
-tag=v0.10.0
+tag=v0.10.1
 # gh-proxy 加速；不可用时换成 https://ghfast.top/ 前缀。
 # 用 curl -o 指定带版本号的文件名：wget 遇到同名文件是另存为 .1，容易继续跑上一次的旧脚本
 curl -fL --retry 3 -o "install-${tag}.sh" \
   "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/${tag}/scripts/install.linux.sh"
 
-# 自证版本：这一步必须输出 ...:-v0.10.0}}，对不上就停下排查。
+# 自证版本：这一步必须输出 ...:-v0.10.1}}，对不上就停下排查。
 # 这一行的默认 tag 决定安装器要装的镜像版本
 sed -n '9p' "install-${tag}.sh"
 ```
@@ -60,11 +60,11 @@ curl -fL --retry 3 -o "game-server-hub-${tag}-docker-image.tar.gz.sha256" "${bas
 # 校验完整性，末尾应输出 OK。.sha256 记录的是原始文件名，改过名要先改回
 sha256sum -c "game-server-hub-${tag}-docker-image.tar.gz.sha256"
 
-# 核对包内镜像 tag：RepoTags 应为 ghcr.io/pmat77/game-server-hub:v0.10.0
+# 核对包内镜像 tag：RepoTags 应为 ghcr.io/pmat77/game-server-hub:v0.10.1
 tar -xOzf "game-server-hub-${tag}-docker-image.tar.gz" manifest.json | head -c 200; echo
 
 # 导入镜像（约 560 MB）；-i 带进度条，不要用 gunzip 管道。
-# 输出 Loaded image: ghcr.io/pmat77/game-server-hub:v0.10.0 即成功
+# 输出 Loaded image: ghcr.io/pmat77/game-server-hub:v0.10.1 即成功
 docker load -i "game-server-hub-${tag}-docker-image.tar.gz"
 
 # 断言本地 tag 与目标版本一致：安装器只认完整引用字符串，tag 对不上会重新拉取

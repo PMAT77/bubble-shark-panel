@@ -168,6 +168,22 @@ const { ok, data, error } = await response.json()
 - 进程状态单独给出（`stopped` / `starting` / `running` / `finished` / `crashed`）：**退出码 0 记为 `finished` 且不重启**，非零退出按退避重启、连续 5 次后停在 `crashed`；插件输出见其目录下的 `plugin.log`；
 - 插件装载失败**不会**让接口报错，坏插件会以 `invalid` 出现在列表里并给出原因——否则一个坏插件会让管理员连"停用"都点不到。
 
+## 游客（只读预览）登录接口
+
+把面板的只读面开放给访客。默认关闭，且只在 Native + `production` 下才可能生效（原因与硬前提见 [SECURITY.md](../SECURITY.md)）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/app/account/login-options` | **匿名**。返回 `{ guestLoginEnabled, guestAccountLabel }`：前者决定登录页要不要渲染「游客预览」按钮，后者只用于按钮文案。响应里没有任何凭证 |
+| `POST` | `/app/account/guest-login` | **匿名**。body 可带 `challengeToken` / `challengeAnswer`（触发验证码时）。成功返回与 `/app/account/login` 完全相同的会话结构，`remember` 恒为 `false` |
+
+**没有游客口令这回事。** 面板启动时按 `GSH_GUEST_LOGIN_ACCOUNT`（默认 `guest`）预置一个只读账号，它的口令是当场生成、随即丢弃的随机值：不返回、不落盘、不出现在日志里，因此 `/app/account/login` 对这个账号永远登不上。任何"把口令交给前端去自动填充"的做法都会让口令变成公开静态资源的一部分，这也是没有提供这类接口的原因。
+
+两条实现细节值得集成方知道：
+
+- 游客入口的限流**只按 IP 与 socket 维度**计数（普通登录另有一个账号维度）。游客账号是所有访客共用的，加上账号维度会让任何一个 IP 都能把全部访客锁在门外。**超时的与成功的请求都计数**：每次成功都会往 `auth_sessions` 写一行，只限失败等于给脚本开了正门；同一个 IP 连续打开超过 20 次（10 分钟窗口）会收到 `AUTH_LOGIN_RATE_LIMITED`；
+- 判定"这个请求该签给谁"只认 `system_settings` 里的 `guest.account` 指针，不认账号名——按名字找等于"谁叫这个名字谁就是游客"。配置的账号名已被**非游客角色**的账号占用时，面板不会改写那个账号，而是把游客入口标成不可用并在启动日志里说明。
+
 ## 成员与角色接口
 
 管理面板自己的账号与权限。**能力与范围是两层**：角色的权限点决定账号能做什么，实例授权决定它能在哪些实例上做，两者同时满足才生效。
@@ -180,16 +196,18 @@ const { ok, data, error } = await response.json()
 | `POST` | `/app/system/roles/delete` | 删除角色：body `{ roleId }`。内置游客角色、以及仍有成员在用的角色会被拒绝。需 `role:write` |
 | `GET` | `/app/system/members` | 成员列表（含角色与实例授权）。需 `member:read` |
 | `POST` | `/app/system/members/create` | 建子账号：body `{ account, password, roleId, instanceIds?, mustChangePassword? }`。密码须过强度校验（与改密同一套规则）；`mustChangePassword` 默认 `true`。需 `member:write` |
-| `POST` | `/app/system/members/update` | 改角色或启停：body `{ userId, roleId?, status? }`。需 `member:write` |
-| `POST` | `/app/system/members/password` | 重置密码：body `{ userId, password, mustChangePassword? }`。会吊销该账号现有会话。需 `member:write` |
+| `POST` | `/app/system/members/update` | 改角色或启停：body `{ userId, roleId?, status? }`。**超级管理员账号不接受停用**（`status: 0`），启用仍允许。需 `member:write` |
+| `POST` | `/app/system/members/password` | 重置密码：body `{ userId, password, mustChangePassword? }`。会吊销该账号现有会话。**不接受超级管理员账号**（配置里的管理员账号，默认 `superadmin`）：它的密码只能本人在「个人设置 → 修改密码」里改。需 `member:write` |
 | `POST` | `/app/system/members/instances` | 设置可见实例：body `{ userId, instanceIds[] }`，**整表替换**。需 `member:write` |
 | `POST` | `/app/system/members/delete` | 删除成员：body `{ userId }`，连带清掉它的角色关联与实例授权。需 `member:write` |
 
-**三条防锁死约束**（违反时返回业务错误，消息里写明原因）：
+**四条防锁死约束**（违反时返回业务错误，消息里写明原因）：
 
 1. 不能停用、删除或降权**当前登录的账号**；不能把自己的角色换成没有「管理角色」权限的；
 2. 不能让**最后一个能管理角色或面板设置的启用账号**消失——停用、降权、删角色三条路径都拦。判定依据是**生效权限点**而不是角色（鉴权读的就是它）；
-3. 内置**游客角色**不可改权限点、不可删除。
+3. **超级管理员账号**（配置里的管理员账号，默认 `superadmin`）**受两条额外保护**：密码不能由别人重置——本人从这里重置也不行，只能本人在「个人设置 → 修改密码」里改（要验旧密码）；账号不能被停用——只拦停用、保留「启用」，历史数据里若是停用状态还能恢复。这条入口一旦开着，"谁是超级管理员"就取决于谁先点了那个按钮。忘了密码的兜底在面板外——服务器上执行 `server/scripts/reset-admin-password.ts`，或用 `ADMIN_PASSWORD` 配合 `GSH_SYNC_ADMIN_PASSWORD_FROM_ENV` 同步，两条都要求能登录服务器本身。成员列表会返回 `isAdminAccount` 标记，界面据此不显示重置与停用入口；
+4. 内置**游客角色**的权限点由代码固化（`GUEST_ROLE_PERMISSIONS` = 全部只读权限点减去 `GUEST_EXCLUDED_PERMISSIONS`：成员、角色、操作记录、插件、控制台读），不可改、不可删。此外**游客角色对任何写操作一律拒绝**——判据是 `isStateChangingPermission`，即写权限点**加上**标了 `sideEffect` 的读接口（`instance.console:read` 管着 `/app/instance/world-state`，那个接口会向游戏下发 `print` 指令）。判断在 `resolveAuthorizedContext`，覆盖全局与实例两级接口，即使有人绕过角色接口直接改库给它加上写权限点也不生效；
+5. 内置**游客角色只能分配给配置里的游客账号**（`GSH_GUEST_LOGIN_ACCOUNT`，默认 `guest`）：建号与换角色两条路都会拒绝。挂到在用的运维账号上会让那个账号静默失去全部操作能力，而界面上不会说明原因；该游客账号的口令也不能在成员管理里重置——一旦它有了已知口令，免密入口上的开关与限流就都可以绕过。
 
 权限点清单**不通过接口下发**：前端直接引用 `shared/constants/permissions.ts` 的 `PERMISSION_SPECS`，少一份传输就少一个漂移点。
 

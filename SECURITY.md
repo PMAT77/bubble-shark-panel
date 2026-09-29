@@ -63,16 +63,31 @@
 
 ### 游客角色（只读预览）的硬前提
 
-面板内置一个**游客角色**：零写权限、不可修改权限点、不可删除，专为「让别人只读看一演」准备。它**默认没有被使用**，面板不提供公开预览入口。要用它时，两条前提同时满足：
+面板内置一个**游客角色**：零写权限、不可修改权限点、不可删除，专为「让别人只读看一眼」准备。它默认没有被使用，面板也不开放公开预览入口。要用它时，两条前提同时满足：
 
 1. **必须是 Native 模式部署**。Docker 模式下一次有效登录等于宿主机 root，把只读账号开给外部人员等于把宿主机交出去；
 2. **在反向代理层再加一层访问控制**（IP 白名单、Basic Auth 或 VPN，见下方最佳实践）。面板自身的登录只作为第二道，不作为唯一一道。
 
+手工用法是在「成员管理」里建一个账号并挂上游客角色。**只有配置里的那个游客账号可以挂这个角色**：把它挂到某个在用的运维账号上，那个账号会静默失去全部操作能力（还用自己的密码登录，但所有按钮消失、写操作一律被拒），而界面上不会说明原因，因此成员管理会直接拒绝这类分配。
+
+#### 免密「游客登录」
+
+如果希望访客点一下就能进（例如放在 GitHub 上让人试），可在 `panel.env` 设置 `GSH_GUEST_LOGIN_ENABLED=1`。开启后登录页会出现「游客预览」按钮，面板启动时自动预置一个只读账号，它的口令是随机值、不落盘、不出现在任何接口响应里——**面板不提供也不需要任何游客口令**。会话由服务端的 `POST /app/account/guest-login` 直接签发。
+
+这个开关有三道闸门，缺一不可：显式打开、Native 运行时、`production` 环境。**Docker 模式下即使打开也不会生效**，面板会在启动日志里给出原因。此外还有两条限制：
+
+- 游客账号名（`GSH_GUEST_LOGIN_ACCOUNT`，默认 `guest`）不允许与 `ADMIN_USERNAME` 相同；
+- 游客入口的限流只按 IP 维度计数，因此任何一个 IP 都无法把其他访客锁在门外。
+
+**只读不等于看不到东西。** 游客能看到实例目录与文件内容、房间与世界配置、玩家名单（含管理员名单）、在线玩家、备份列表与游戏控制台日志。不要在承载真实玩家数据、或有敏感信息的面板上开放公开预览。
+
+**给公开预览站的额外建议**：把 `ADMIN_USERNAME` 从默认的 `superadmin` 改掉，并用 `GSH_DST_AUTO_PUBLIC_IP=0` 配合 `GSH_DST_CONNECT_HOST` 关闭公网自动探测，避免面板把宿主公网 IP 展示给访客。
+
 **安装脚本以 root 执行。** 文档给出的一行式安装是 `curl … | sudo bash`。发布流水线同时产出 `install-<tag>.sh` 与同名 `.sha256`，条件允许时请走「下载 → 校验 → 执行」三步，而不是管道直执行：
 
 ```bash
-curl -fL -o install.sh https://github.com/PMAT77/game-serve-hub/releases/download/v0.9.1/install-v0.9.1.sh
-curl -fL -o install.sh.sha256 https://github.com/PMAT77/game-serve-hub/releases/download/v0.9.1/install-v0.9.1.sh.sha256
+curl -fL -o install.sh https://github.com/PMAT77/game-serve-hub/releases/download/v0.10.0/install-v0.10.0.sh
+curl -fL -o install.sh.sha256 https://github.com/PMAT77/game-serve-hub/releases/download/v0.10.0/install-v0.10.0.sh.sha256
 sha256sum -c install.sh.sha256
 sudo bash install.sh --mode docker
 ```

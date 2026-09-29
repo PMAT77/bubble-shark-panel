@@ -61,7 +61,7 @@
 
 ## 快速开始
 
-当前为 `v0.9.1` 公测线。要求 Ubuntu 22.04 / 24.04 或 Debian 12，root/sudo，至少 4 GiB 内存和 4 GiB 空闲磁盘（离线镜像包约 227 MB，导入后本地镜像约 560 MB；游戏本体与存档另需数 GB）；Native 正式支持 x86_64，Docker 的 ARM64 支持仍为实验性。
+当前为 `v0.10.0` 公测线。要求 Ubuntu 22.04 / 24.04 或 Debian 12，root/sudo，至少 4 GiB 内存和 4 GiB 空闲磁盘（离线镜像包约 227 MB，导入后本地镜像约 560 MB；游戏本体与存档另需数 GB）；Native 正式支持 x86_64，Docker 的 ARM64 支持仍为实验性。
 
 > **4 GiB 内存的机器请先加 swap**：分片加载整套 Mod 时内存会短时冲高，4 GiB 物理内存同时承载主世界与洞穴会很紧张。执行 `sudo gsh setup-swap` 创建 2 GiB swapfile（同时设置 `vm.swappiness=20`）即可；启动前的内存守卫会按「分片数 ×（512 MiB + 每个 Mod 32 MiB）」估算并把可用 swap 计入余量，不够时直接拒绝启动并给出建议，而不是启动到一半被内核杀掉。
 
@@ -81,14 +81,14 @@
 > Native 模式不拉取任何容器镜像，不需要这一步。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.9.1/scripts/install.linux.sh \
+curl -fsSL https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.0/scripts/install.linux.sh \
   | sudo bash -s -- --mode docker
 ```
 
 ### Native systemd 模式
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.9.1/scripts/install.linux.sh \
+curl -fsSL https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.0/scripts/install.linux.sh \
   | sudo bash -s -- --mode native
 ```
 
@@ -99,7 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.9.1/script
 若 GitHub Raw 不稳定，可从 jsDelivr 获取同版本脚本，并启用国内网络档位（`--mode` 按你选的模式改）：
 
 ```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/PMAT77/game-serve-hub@v0.9.1/scripts/install.linux.sh \
+curl -fsSL https://cdn.jsdelivr.net/gh/PMAT77/game-serve-hub@v0.10.0/scripts/install.linux.sh \
   | sudo bash -s -- --mode native --network cn
 ```
 
@@ -191,6 +191,21 @@ pnpm exec tsx scripts/export-cluster-archive.ts --source <旧机器的存档目�
 ### 不想用了，数据能带走吗
 
 能。面板本身不托管任何数据：存档是饥荒自己的 `klei-storage` 目录，备份是你机器上的 `tar.gz`，数据库是单个 SQLite 文件。卸载面板不会删除实例与备份目录；不装面板时，把存档目录交给官方专用服同样能开。
+
+### 想让别人只读看看面板，怎么做
+
+面板内置**游客角色**：能看绝大多数页面，一个操作也做不了。两种用法：
+
+- **手工用**：在「成员管理」里建一个账号，角色选「游客」，再勾上它可见的实例；
+- **免密预览入口**：在 `panel.env` 设置 `GSH_GUEST_LOGIN_ENABLED=1` 并重启面板，登录页会出现「以 guest 身份预览」按钮，访客点一下就能进，不需要任何账号密码（面板自动预置只读账号，口令是随机值且不落盘）。
+
+**开启前请先读 [SECURITY.md 的「游客角色（只读预览）的硬前提」](SECURITY.md)**。三条最容易忽略的：
+
+1. **只有 Native 模式会生效**。Docker 模式下面板挂着 `docker.sock`，一次有效登录等价于宿主机 root —— 把只读账号交给匿名访客等于把宿主机交出去，所以面板会拒绝开放并在日志里说明；
+2. **只在反向代理层再加一层访问控制**（IP 白名单、Basic Auth 或 VPN），别把面板直接裸在公网；
+3. **只读不等于看不到东西**：实例目录与文件内容、房间与世界配置、玩家名单（含管理员名单）、在线玩家、备份列表与控制台日志都对访客可见。不要在有真实玩家数据的机器上开放。
+
+另建议把 `ADMIN_USERNAME` 从默认的 `superadmin` 改掉。
 
 更多按错误关键词整理的处理方法见 [INSTALL.md 的 FAQ](docs/INSTALL.md#问题清单按报错关键词对照)。
 

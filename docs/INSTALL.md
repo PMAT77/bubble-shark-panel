@@ -33,12 +33,12 @@ Native 路线不安装、也不调用 Docker，与 Docker 路线不互相迁移�
 **模式：Docker。** 安装器自行安装 Docker 与 Compose 插件，再拉取统一镜像启动面板栈。
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.9.1/scripts/install.linux.sh" \
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.0/scripts/install.linux.sh" \
   | sudo bash -s -- --mode docker
 ```
 
 > 管道方式锁定的是当次下载内容，不会误用磁盘上的旧脚本。若想先确认拿到的是目标版本：
-> `curl -fsSL "<上面的 URL>" | sed -n '9p'`，第 9 行应输出 `...:-v0.9.1}}` —— 这一行的默认 tag 决定安装器要装的镜像版本。
+> `curl -fsSL "<上面的 URL>" | sed -n '9p'`，第 9 行应输出 `...:-v0.10.0}}` —— 这一行的默认 tag 决定安装器要装的镜像版本。
 
 ```bash
 # 初始密码：安装器默认不打印，从 panel.env 读取（管理员名 superadmin，首登强制改密）
@@ -65,11 +65,11 @@ gsh doctor
 ```bash
 # 下载安装器（gh-proxy 加速；不可用时换 https://ghfast.top/ 前缀）
 # 用 curl -o 指定带版本号的文件名：wget 遇到同名文件不会覆盖而是另存为 .1，容易继续跑上一次的旧脚本
-tag=v0.9.1
+tag=v0.10.0
 curl -fL --retry 3 -o "install-${tag}.sh" \
   "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/${tag}/scripts/install.linux.sh"
 
-# 自证版本：必须输出 ...:-v0.9.1}}，对不上就停下排查（这行的默认 tag 决定安装器要装的镜像版本）
+# 自证版本：必须输出 ...:-v0.10.0}}，对不上就停下排查（这行的默认 tag 决定安装器要装的镜像版本）
 sed -n '9p' "install-${tag}.sh"
 
 # 第一次运行：自动装好 Docker 与 Compose 插件。
@@ -90,7 +90,7 @@ sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 ### 阶段二：导入离线镜像包
 
 ```bash
-tag=v0.9.1
+tag=v0.10.0
 base="https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/${tag}"
 
 # 下载镜像包与校验文件（约 227 MB，以 Release 页面显示为准；差得离谱说明下错了版本）
@@ -100,11 +100,11 @@ curl -fL --retry 3 -o "game-server-hub-${tag}-docker-image.tar.gz.sha256" "${bas
 # 校验完整性（期望输出末尾 OK）。.sha256 记录原始文件名，改过名需先改回
 sha256sum -c "game-server-hub-${tag}-docker-image.tar.gz.sha256"
 
-# 核对包内镜像 tag 与目标版本一致（RepoTags 应为 ghcr.io/pmat77/game-server-hub:v0.9.1）
+# 核对包内镜像 tag 与目标版本一致（RepoTags 应为 ghcr.io/pmat77/game-server-hub:v0.10.0）
 tar -xOzf "game-server-hub-${tag}-docker-image.tar.gz" manifest.json | head -c 200; echo
 
-# 导入镜像（v0.9.1 下载包约 227 MB，导入后本地镜像约 560 MB，预留 4 GB 磁盘；-i 带进度条，不要用 gunzip 管道；
-# 输出 Loaded image: ghcr.io/pmat77/game-server-hub:v0.9.1 即成功）
+# 导入镜像（v0.10.0 下载包约 227 MB，导入后本地镜像约 560 MB，预留 4 GB 磁盘；-i 带进度条，不要用 gunzip 管道；
+# 输出 Loaded image: ghcr.io/pmat77/game-server-hub:v0.10.0 即成功）
 docker load -i "game-server-hub-${tag}-docker-image.tar.gz"
 
 # 断言本地 tag 与目标版本一致：安装器只认完整引用字符串，tag 对不上即使内容相同也会重新拉取
@@ -149,13 +149,13 @@ GSH_STEAM_HTTPS_PROXY=http://host.docker.internal:7890
 面板由系统级 `game-server-hub.service` 管理，游戏分片由 `gsh` 用户的 systemd 服务管理（面板自身的日志用 `journalctl -u game-server-hub.service` 查看，分片日志直接写入实例目录下的控制台日志文件，可在面板里查看与下载）。不安装 Docker，也不使用 tmux、screen 与 PM2。
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.9.1/scripts/install.linux.sh" \
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.0/scripts/install.linux.sh" \
   | sudo bash -s -- --mode native
 ```
 
 > 管道安装的默认模式是 Docker，Native 必须显式写 `--mode native`。脚本默认 tag 决定安装版本，确认方式与[路线 A](#路线-a海外机器一个命令装完)相同。
 
-安装器按顺序做这些事：装基础依赖与 32 位运行库（`libcurl4:i386` 等，DST 与 SteamCMD 需要）→ 创建 `gsh` 系统用户并开启 linger → 下载校验 Native Release（`game-server-hub-native-v0.9.1-linux-x64.tar.gz`，自带 Node 运行时）→ 解压到 `/opt/game-server-hub/releases/v0.9.1` 并原子切换 `current` 符号链接 → 装 SteamCMD → 写 `panel.env` → 启动面板并等待健康检查。
+安装器按顺序做这些事：装基础依赖与 32 位运行库（`libcurl4:i386` 等，DST 与 SteamCMD 需要）→ 创建 `gsh` 系统用户并开启 linger → 下载校验 Native Release（`game-server-hub-native-v0.10.0-linux-x64.tar.gz`，自带 Node 运行时）→ 解压到 `/opt/game-server-hub/releases/v0.10.0` 并原子切换 `current` 符号链接 → 装 SteamCMD → 写 `panel.env` → 启动面板并等待健康检查。
 
 ```bash
 # 初始密码：与 Docker 模式同一个文件（管理员名 superadmin，首登强制改密）
@@ -176,12 +176,12 @@ gsh doctor
 Native 模式不拉取容器镜像，境外依赖只有两处：GitHub Raw（安装器组件）与 GitHub Release（Native 包）。安装器自带加速代理池，顺序为 `gh-proxy.com`、`ghfast.top`、`ghproxy.com`，全部失败才走直连，因此国内一般可以直接安装。先把脚本下载到本地更稳妥。
 
 ```bash
-tag=v0.9.1
+tag=v0.10.0
 # 下载安装器（gh-proxy 加速；不可用时换 https://ghfast.top/ 前缀）
 curl -fL --retry 3 -o "install-${tag}.sh" \
   "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/${tag}/scripts/install.linux.sh"
 
-# 自证版本：必须输出 ...:-v0.9.1}}，对不上就停下排查
+# 自证版本：必须输出 ...:-v0.10.0}}，对不上就停下排查
 sed -n '9p' "install-${tag}.sh"
 
 # 安装：--network cn 把 apt 源临时切到国内镜像，SteamCMD 走 cn 区域并重试 8 次
@@ -195,7 +195,7 @@ sudo env GSH_RELEASE_TAG="${tag}" bash "install-${tag}.sh" --mode native --netwo
 加速代理全部不可用时，改为手动下载 Native 包再安装。包旁必须放同名 `.sha256`，也可以用 `GSH_NATIVE_RELEASE_SHA256` 直接给出摘要。
 
 ```bash
-tag=v0.9.1
+tag=v0.10.0
 base="https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/${tag}"
 curl -fL --retry 3 -o "game-server-hub-native-${tag}-linux-x64.tar.gz"        "${base}/game-server-hub-native-${tag}-linux-x64.tar.gz"
 curl -fL --retry 3 -o "game-server-hub-native-${tag}-linux-x64.tar.gz.sha256" "${base}/game-server-hub-native-${tag}-linux-x64.tar.gz.sha256"
@@ -286,6 +286,26 @@ sudo cat /var/lib/game-server-hub/admin-credentials.txt
 
 也可安装时显式指定：`sudo env ADMIN_USERNAME=admin ADMIN_PASSWORD='强密码' bash install.linux.sh --mode docker`。不要把 `panel.env` 或授权文件发到公开 Issue。
 
+#### 游客登录（只读预览）
+
+想让别人（例如 GitHub 上的访客）只看不给改，在 `panel.env` 加上下面两行并重启面板：
+
+```bash
+GSH_GUEST_LOGIN_ENABLED=1
+# 游客账号名，默认 guest；不允许与 ADMIN_USERNAME 相同
+GSH_GUEST_LOGIN_ACCOUNT=guest
+```
+
+登录页的登录按钮下方会出现「以 guest 身份预览」按钮，点一下即以只读身份进入。面板启动时自动预置这个只读账号，**它的口令是随机值，不落盘、不返回、不写进日志**——所以面板不提供也不需要任何游客口令，也就没有"把口令交给前端自动填充"这回事。用普通登录页输入 `guest` 是登不上的，这是刻意的。
+
+三条必须同时满足的前提（以及为什么默认关闭）：
+
+1. **只有 Native 模式会生效**。Docker 模式下面板挂着 `docker.sock`，一次有效登录等价于宿主机 root，把只读账号交给匿名访客等于把宿主机交出去 —— 因此 Docker 部署即使设成 `1` 也不会开放，启动日志里会打印原因；
+2. **必须在反向代理层再加一层访问控制**（IP 白名单、Basic Auth 或 VPN），别把面板直接裸在公网；
+3. **只读不等于看不到东西**：实例目录与文本文件内容、房间与世界配置、玩家名单（含管理员名单）、在线玩家、备份列表与游戏控制台日志都对访客可见。相应地，游客看不到成员与角色管理、操作记录、插件页，也没有控制台读权限（`world-state` 会向游戏下发指令），`/app/system/info` 也不再返回主机名、内核版本与 CPU 型号。
+
+另建议把 `ADMIN_USERNAME` 从默认的 `superadmin` 改掉：公开预览站会吸引对默认管理员名的撞库。完整说明见 [SECURITY.md](../SECURITY.md) 的「游客角色（只读预览）的硬前提」。
+
 ### 升级
 
 升级入口都在「系统设置 → 面板与游戏版本」。两种部署方式都能在面板里更新，但机制不同：
@@ -327,11 +347,11 @@ sudo cat /var/lib/game-server-hub/admin-credentials.txt
 不想走面板时，随时可以用目标版本重跑安装器，效果与面板内更新一致（安装器同样会校验、切换并回滚）：
 
 ```bash
-curl -fsSL "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.9.1/scripts/install.linux.sh" \
-  | sudo env GSH_RELEASE_TAG=v0.9.1 bash -s -- --mode native
+curl -fsSL "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.0/scripts/install.linux.sh" \
+  | sudo env GSH_RELEASE_TAG=v0.10.0 bash -s -- --mode native
 ```
 
-> `GSH_RELEASE_TAG` 必须填写**目标**版本号；填成当前版本只是原地重装，不会升级。国内直连 GitHub Raw 不通时，先把 `install-v0.9.1.sh` 下载到服务器，再执行 `sudo env GSH_RELEASE_TAG=v0.9.1 bash install-v0.9.1.sh --mode native`。
+> `GSH_RELEASE_TAG` 必须填写**目标**版本号；填成当前版本只是原地重装，不会升级。国内直连 GitHub Raw 不通时，先把 `install-v0.10.0.sh` 下载到服务器，再执行 `sudo env GSH_RELEASE_TAG=v0.10.0 bash install-v0.10.0.sh --mode native`。
 
 ### 备份与恢复（v0.2.0 起）
 
@@ -546,8 +566,8 @@ GSH_NATIVE_UPDATE_DIR=PATH     Native 面板内更新的请求/状态交换目�
 ```bash
 sudo docker login registry.example.com
 # 版本三方必须一致：脚本默认 tag（sed -n '9p' 可查）= 本地镜像 tag = 这里 PANEL_IMAGE 的 tag
-curl -fsSL https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.9.1/scripts/install.linux.sh \
-  | sudo env PANEL_IMAGE=registry.example.com/gsh/game-server-hub:v0.9.1 bash -s -- --mode docker --network cn
+curl -fsSL https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.0/scripts/install.linux.sh \
+  | sudo env PANEL_IMAGE=registry.example.com/gsh/game-server-hub:v0.10.0 bash -s -- --mode docker --network cn
 ```
 
 镜像引用与 Release tag 一致，按 Release 的 `release-images.json` 核对 digest。

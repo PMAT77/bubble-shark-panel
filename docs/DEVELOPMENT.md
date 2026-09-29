@@ -235,6 +235,7 @@ git diff --exit-code -- server/drizzle      # 迁移漂移检查：无输出即�
 | `pnpm run lint` | vue-tsc 类型检查 |
 | `pnpm run lint:ox` | oxlint 静态检查（`--deny-warnings`） |
 | `pnpm run lint:copy` | UI 文案检查 |
+| `pnpm run check:menu-pages` | 菜单页首屏读请求的权限检查（菜单进得去，请求就必须能通过） |
 | `pnpm test:unit` | 全部测试：后端 `server/src/**` 与前端 `src/**`、脚本用例（发布门禁跑的就是它） |
 | `pnpm test:server` | 只跑后端 `server/src/**/*.test.ts`，是 `test:unit` 的真子集，用于改后端时快速迭代 |
 | `pnpm run build` | 生产构建（仅前端 `dist/`；服务端 bundle 用 `pnpm run build:server`） |

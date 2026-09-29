@@ -30,10 +30,12 @@ schema 定义在 `server/src/shared/db/schema/`，统一从 `index.ts` 导出：
 
 | 表 | 作用 |
 | --- | --- |
-| `roles` | 角色。`kind` 为 `guest` 的是内置游客角色（零写权限、不可改不可删） |
+| `roles` | 角色。`kind` 为 `guest` 的是内置游客角色：权限点由代码固化（`GUEST_ROLE_PERMISSIONS` = 全部只读权限点减去 `GUEST_EXCLUDED_PERMISSIONS`），管理接口不可改不可删，并且只能分配给配置里的游客账号 |
 | `role_permissions` | 角色 → 权限点。**角色是权限的唯一编辑入口** |
 | `user_roles` | 用户 → 角色（主键就是 `userId`，即一个用户一个角色） |
 | `instance_grants` | 用户 → 实例。**范围**：没有这一行，该用户看不到这个实例 |
+
+另外 `system_settings` 里的 `guest.account` 存的是**面板预置的游客账号 userId**（开启 `GSH_GUEST_LOGIN_ENABLED` 时由启动流程写入）。免密登录只按这个指针签发会话，不按账号名——按名字找等于"谁叫这个名字谁就是游客"。
 
 两条容易踩的规则：
 

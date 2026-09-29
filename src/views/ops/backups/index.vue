@@ -4,7 +4,7 @@ const { auth: hasPermission } = useAppAuth()
 
 import type { DataTableColumns, SelectOption } from 'naive-ui'
 import type { BackupItem } from '@/api/modules/backup'
-import type { InstanceItem } from '@/api/modules/instance'
+import type { InstanceSummaryItem } from '@/api/modules/instance'
 import { NAlert, NButton, NDataTable, NEmpty, NInput, NModal, NSpace, NSelect, NTag, NTooltip, useDialog } from 'naive-ui'
 import { computed, h, onActivated, onMounted, ref } from 'vue'
 import apiBackup, { DB_SNAPSHOT_RESTORE_CONFIRM_TEXT } from '@/api/modules/backup'
@@ -22,7 +22,7 @@ const dialog = useDialog()
 const route = useRoute()
 
 const rows = ref<BackupItem[]>([])
-const instances = ref<InstanceItem[]>([])
+const instances = ref<InstanceSummaryItem[]>([])
 const dbRows = ref<BackupItem[]>([])
 const selectedInstanceId = ref<string | null>(null)
 
@@ -103,7 +103,7 @@ function triggerLoad() {
   runLoad(async () => {
     const [backupResponse, instanceResponse] = await Promise.all([
       apiBackup.getBackupList(selectedInstanceId.value ?? undefined),
-      apiInstance.getInstanceList().catch(() => ({ data: [] as InstanceItem[] })),
+      apiInstance.getInstanceOptions().catch(() => ({ data: [] as InstanceSummaryItem[] })),
     ])
     rows.value = backupResponse.data ?? []
     instances.value = instanceResponse.data ?? []
@@ -475,7 +475,8 @@ const columns = computed<DataTableColumns<BackupItem>>(() => [
     width: 190,
     render: (row) => {
       const buttons = []
-      if (row.status === 'completed') {
+      // 下载是只读动作，服务端按 backup:read 把关（权限点清单里没有 backup:download）
+      if (row.status === 'completed' && hasPermission('backup:read')) {
         // 一次只下一个包：并发下载会互相抢磁盘与带宽，也更容易触发浏览器的多文件下载拦截
         buttons.push(h(NButton, {
           size: 'small',
@@ -486,7 +487,7 @@ const columns = computed<DataTableColumns<BackupItem>>(() => [
           onClick: () => handleDownload(row),
         }, { default: () => '下载' }))
       }
-      if (row.kind !== 'database' && row.status === 'completed') {
+      if (row.kind !== 'database' && row.status === 'completed' && hasPermission('backup:restore')) {
         buttons.push(h(NTooltip, { trigger: 'hover' }, {
           trigger: () => h(NButton, {
             size: 'small',
@@ -497,12 +498,14 @@ const columns = computed<DataTableColumns<BackupItem>>(() => [
           default: () => '回滚该实例存档到此备份点（实例须已停止）',
         }))
       }
-      buttons.push(h(NButton, {
-        size: 'small',
-        quaternary: true,
-        type: 'error',
-        onClick: () => handleDelete(row),
-      }, { default: () => '删除' }))
+      if (hasPermission('backup:delete')) {
+        buttons.push(h(NButton, {
+          size: 'small',
+          quaternary: true,
+          type: 'error',
+          onClick: () => handleDelete(row),
+        }, { default: () => '删除' }))
+      }
       return h('div', { style: 'display:flex;gap:4px' }, buttons)
     },
   },
@@ -557,7 +560,8 @@ const dbColumns = computed<DataTableColumns<BackupItem>>(() => [
     width: 190,
     render: (row) => {
       const buttons = []
-      if (row.status === 'completed') {
+      // 下载是只读动作，服务端按 backup:read 把关（权限点清单里没有 backup:download）
+      if (row.status === 'completed' && hasPermission('backup:read')) {
         buttons.push(h(NButton, {
           size: 'small',
           quaternary: true,
@@ -566,6 +570,8 @@ const dbColumns = computed<DataTableColumns<BackupItem>>(() => [
           disabled: downloadingBackupId.value !== null && downloadingBackupId.value !== row.id,
           onClick: () => handleDownload(row),
         }, { default: () => '下载' }))
+      }
+      if (row.status === 'completed' && hasPermission('backup:restore')) {
         buttons.push(h(NTooltip, { trigger: 'hover' }, {
           trigger: () => h(NButton, {
             size: 'small',
@@ -576,12 +582,14 @@ const dbColumns = computed<DataTableColumns<BackupItem>>(() => [
           default: () => '用该快照替换面板数据（面板会重启，当前登录会失效）',
         }))
       }
-      buttons.push(h(NButton, {
-        size: 'small',
-        quaternary: true,
-        type: 'error',
-        onClick: () => handleDelete(row),
-      }, { default: () => '删除' }))
+      if (hasPermission('backup:delete')) {
+        buttons.push(h(NButton, {
+          size: 'small',
+          quaternary: true,
+          type: 'error',
+          onClick: () => handleDelete(row),
+        }, { default: () => '删除' }))
+      }
       return h('div', { style: 'display:flex;gap:4px' }, buttons)
     },
   },
@@ -637,6 +645,7 @@ onActivated(() => {
         secondary
         :disabled="!selectedInstanceId || selectedInstanceId === 'panel-db'"
         @click="importModalVisible = true"
+        v-if="hasPermission('backup:import')"
       >
         导入外部存档
       </NButton>

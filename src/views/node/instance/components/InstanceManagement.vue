@@ -1411,9 +1411,15 @@ onBeforeUnmount(() => {
             <NFormItem label="安装目录" path="installPath">
               <div class="flex items-center gap-2 w-full">
                 <NInput v-model:value="createForm.installPath" class="flex-1" placeholder="默认自动分配" />
-                <NButton class="shrink-0" @click="openDirectoryBrowser">
-                  浏览
-                </NButton>
+                <!--
+                  目录浏览走的是 `/app/system/filesystem/directories`（settings:write）：
+                  没有这个权限就把入口收起来，输入框仍可手填路径——点开只会报 403。
+                -->
+                <AppAuth value="settings:write">
+                  <NButton class="shrink-0" @click="openDirectoryBrowser">
+                    浏览
+                  </NButton>
+                </AppAuth>
               </div>
             </NFormItem>
           </NCollapseItem>
@@ -1514,10 +1520,15 @@ onBeforeUnmount(() => {
           <NButton @click="closeCreateGuideModal">
             稍后再说
           </NButton>
-          <NButton @click="goToWorldSettingsFromCreateGuide">
+          <!--
+            这两个入口各指向另一个模块的页面（世界管理 / 房间管理），且都是**按路由名**跳转。
+            面板的路由按权限动态注册：目标模块无权时那条路由不存在，点了会在解析阶段抛 No match，
+            看起来就是按钮失灵——所以无权时直接不出现。
+          -->
+          <NButton v-if="hasPermission('world:read')" @click="goToWorldSettingsFromCreateGuide">
             去配置世界
           </NButton>
-          <NButton type="primary" @click="goToRoomSettingsFromCreateGuide">
+          <NButton v-if="hasPermission('room:read')" type="primary" @click="goToRoomSettingsFromCreateGuide">
             去配置房间
           </NButton>
         </NSpace>

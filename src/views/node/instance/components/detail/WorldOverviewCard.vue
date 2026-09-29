@@ -35,6 +35,10 @@ const emit = defineEmits<{
 const router = useRouter()
 const initCavesLoading = ref(false)
 
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+const canViewWorld = computed(() => hasPermission('world:read'))
+
 const cavesShard = computed(() => props.shardList?.shards.find(shard => shard.id === 'caves') ?? null)
 
 const cavesEnabled = computed(() => props.shardList?.clusterShardEnabled === true)
@@ -152,7 +156,7 @@ function goWorldSettings() {
 
       <div v-if="!cavesEnabled" class="mt-3 rounded-md bg-muted/50 px-3 py-2.5 flex flex-wrap items-center justify-between gap-2">
         <span class="text-xs text-muted-foreground">未开启洞穴</span>
-        <NButton size="tiny" secondary @click="goWorldSettings">
+        <NButton v-if="canViewWorld" size="tiny" secondary @click="goWorldSettings">
           去世界设置
         </NButton>
       </div>
@@ -161,13 +165,20 @@ function goWorldSettings() {
         class="mt-3 rounded-md bg-muted/50 px-3 py-2.5 flex flex-wrap items-center justify-between gap-2"
       >
         <span class="text-xs text-muted-foreground">洞穴还没准备好，初始化后即可使用</span>
-        <NButton size="tiny" type="primary" secondary :loading="initCavesLoading" @click="initCaves">
+        <NButton size="tiny" type="primary" secondary :loading="initCavesLoading" @click="initCaves" v-if="hasPermission('world:write')">
           初始化洞穴
         </NButton>
       </div>
     </template>
     <template v-else-if="instance">
-      <NEmpty description="世界配置读取失败，请稍后重试" size="small" />
+      <!--
+        「读取失败」与「没有权限」必须分开说：详情页只在有 world:read 时才去拉分片列表，
+        没有权限时这里必然是空的——写成"请稍后重试"会让人一直点刷新。
+      -->
+      <NEmpty
+        :description="canViewWorld ? '世界配置读取失败，请稍后重试' : '当前账号没有「查看世界配置」权限，看不到世界信息'"
+        size="small"
+      />
     </template>
     <NEmpty v-else description="未找到实例" size="small" />
   </NCard>

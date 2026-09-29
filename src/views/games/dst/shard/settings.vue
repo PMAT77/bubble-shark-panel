@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { FormInst, FormRules } from 'naive-ui'
 import type {
   CavesWorldgenPreset,
@@ -680,7 +683,8 @@ onActivated(() => {
             <NTag :type="shardList.clusterShardEnabled ? 'info' : 'default'" size="small" :bordered="false">
               {{ shardList.clusterShardEnabled ? '洞穴已开启' : '洞穴未开启' }}
             </NTag>
-            <NButton size="small" text @click="goClusterSettings">
+            <!-- 目标页在「房间管理」模块下（room:read），无权时该路由不存在，按名跳转会抛 No match -->
+            <NButton v-if="hasPermission('room:read')" size="small" text @click="goClusterSettings">
               前往房间设置
               <FaIcon name="i-lucide:arrow-right" class="size-4" />
             </NButton>
@@ -750,6 +754,7 @@ onActivated(() => {
                       :loading="allocatingPorts"
                       :disabled="isSaving"
                       @click="autoAllocatePorts"
+                      v-if="hasPermission('instance:ports')"
                     >
                       自动分配未占用端口
                     </NButton>
@@ -791,7 +796,7 @@ onActivated(() => {
               <p class="text-sm text-muted-foreground mt-2 mb-4">
                 需先在房间设置中开启洞穴，才能调整洞穴的世界规则与世界生成。
               </p>
-              <NButton size="small" @click="goClusterSettings">
+              <NButton v-if="hasPermission('room:read')" size="small" @click="goClusterSettings">
                 前往房间设置
               </NButton>
             </template>
@@ -873,10 +878,12 @@ onActivated(() => {
           :resetting="resetting"
           :restart-disabled="saveAndRestartDisabled"
           :restart-disabled-title="saveAndRestartDisabledTitle"
+          :show-restart="hasPermission('instance:lifecycle')"
           :save-label="mainTab === 'caves' ? '保存洞穴' : '保存地上'"
           @reset="resetConfig"
           @save="saveShard(currentShardId, false)"
           @save-and-restart="confirmSaveAndRestart(currentShardId)"
+          v-if="hasPermission('world:write')"
         />
       </div>
     </template>

@@ -30,6 +30,18 @@ const props = defineProps<{
 
 const router = useRouter()
 
+/**
+ * 这一卡片把四个权限点的数据拼在一屏里：没有权限的格子显示"—"，能用的按钮才出现。
+ * 这里自己判权（而不是靠父级传"缺了哪几块"），按钮与格子用的是同一个判据，不会漂移。
+ */
+const { auth: hasPermission } = useAppAuth()
+const canViewRoom = computed(() => hasPermission('room:read'))
+const canViewPlayers = computed(() => hasPermission('player:read'))
+const canViewMods = computed(() => hasPermission('mod:read'))
+const canViewConsole = computed(() => hasPermission('instance.console:read'))
+// 世界设置的入口在「世界管理」模块下（world:read），与本卡片的房间数据不是一个权限点
+const canViewWorldSettings = computed(() => hasPermission('world:read'))
+
 const isDst = computed(() => Boolean(props.instance && instanceSupportsDstRoom(props.instance)))
 const installed = computed(() => Boolean(
   props.instance
@@ -137,22 +149,22 @@ function goMods() {
         v-if="isDst && installed"
         class="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4 lg:grid-cols-6"
       >
-        <NStatistic label="房间名" :value="roomName" />
+        <NStatistic label="房间名" :value="canViewRoom ? roomName : '—'" />
         <NStatistic label="游戏模式">
-          {{ dstGameModeLabel(cluster?.gameMode) }}
+          {{ canViewRoom ? dstGameModeLabel(cluster?.gameMode) : '—' }}
         </NStatistic>
         <NStatistic label="联网模式">
-          {{ networkModeLabel }}
+          {{ canViewRoom || canViewConsole ? networkModeLabel : '—' }}
         </NStatistic>
         <NStatistic label="在线玩家">
           <span :class="onlinePlayers?.running ? '' : 'text-muted-foreground'">
-            {{ playerCountText }}
+            {{ canViewPlayers ? playerCountText : '—' }}
           </span>
         </NStatistic>
         <NStatistic label="Mod（已生效 / 总数）">
-          {{ modCountText }}
+          {{ canViewMods ? modCountText : '—' }}
           <NTag
-            v-if="notReadyModCount > 0"
+            v-if="canViewMods && notReadyModCount > 0"
             size="tiny"
             :bordered="false"
             type="warning"
@@ -163,7 +175,7 @@ function goMods() {
         </NStatistic>
         <NStatistic label="洞穴">
           <NTag size="small" :bordered="false" :type="cavesText === '已开启' ? 'success' : 'default'">
-            {{ cavesText }}
+            {{ canViewRoom ? cavesText : '—' }}
           </NTag>
         </NStatistic>
       </div>
@@ -177,22 +189,26 @@ function goMods() {
         description="当前游戏暂不支持房间配置，仅饥荒（DST）实例提供房间概览"
         size="small"
       />
-      <!-- 快捷入口对已安装实例统一展示：非 DST 游戏没有房间/世界设置，但控制台照样要进得去 -->
+      <!--
+        快捷入口按各自的权限点出现：这些跳转是**按路由名**的，而面板的路由按权限动态注册
+        （`routeBaseOn: 'backend'`），无权时目标路由根本不存在——点下去不是"进不去"，
+        而是在路由解析阶段直接抛 `No match`，按钮看起来完全失灵。
+      -->
       <div v-if="installed" class="mt-4 flex flex-wrap gap-2">
-        <NButton size="small" secondary @click="goConsole">
+        <NButton v-if="canViewConsole" size="small" secondary @click="goConsole">
           控制台
         </NButton>
-        <NButton v-if="isDst" size="small" secondary @click="goPlayerManage">
+        <NButton v-if="isDst && canViewPlayers" size="small" secondary @click="goPlayerManage">
           玩家管理
         </NButton>
         <template v-if="isDst">
-          <NButton size="small" secondary @click="goRoomSettings">
+          <NButton v-if="canViewRoom" size="small" secondary @click="goRoomSettings">
             房间设置
           </NButton>
-          <NButton size="small" secondary @click="goWorldSettings">
+          <NButton v-if="canViewWorldSettings" size="small" secondary @click="goWorldSettings">
             世界设置
           </NButton>
-          <NButton size="small" secondary @click="goMods">
+          <NButton v-if="canViewMods" size="small" secondary @click="goMods">
             Mod 管理
           </NButton>
         </template>

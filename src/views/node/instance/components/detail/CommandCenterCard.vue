@@ -29,6 +29,9 @@ const emit = defineEmits<{
 const dialog = useDialog()
 const router = useRouter()
 
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 type CommandTab = 'quick' | 'custom' | 'announce'
 
 const activeTab = ref<CommandTab>('quick')
@@ -267,6 +270,7 @@ defineExpose({
             :disabled="!running || commandSending"
             :loading="commandSending"
             @click="runQuickCommand(item.key)"
+            v-if="hasPermission('console:command')"
           >
             {{ item.label }}
           </NButton>
@@ -276,6 +280,7 @@ defineExpose({
             :disabled="!running || commandSending"
             :loading="commandSending"
             @click="confirmResetWorld"
+            v-if="hasPermission('console:command')"
           >
             重置世界
           </NButton>
@@ -306,6 +311,7 @@ defineExpose({
             type="primary"
             :loading="commandSending"
             :disabled="!running || commandSending"
+            v-if="hasPermission('console:command')"
           >
             发送
           </NButton>
@@ -338,6 +344,7 @@ defineExpose({
             :loading="maintenanceSaving"
             :disabled="maintenanceLoading || maintenancePushing"
             @click="saveMaintenanceDraft"
+            v-if="hasPermission('maintenance:write')"
           >
             保存草稿
           </NButton>
@@ -347,6 +354,7 @@ defineExpose({
             :loading="maintenancePushing"
             :disabled="!running || maintenanceLoading || maintenanceSaving"
             @click="confirmPushMaintenanceAnnounce"
+            v-if="hasPermission('maintenance:write')"
           >
             推送到房间
           </NButton>

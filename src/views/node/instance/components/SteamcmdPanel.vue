@@ -12,6 +12,9 @@ const emit = defineEmits<{
   stateChange: [payload: { installed: boolean }]
 }>()
 
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 const steamcmdInstalling = shallowRef(false)
 const gameDstPulling = shallowRef(false)
 const steamcmdInstalled = shallowRef(false)
@@ -113,11 +116,12 @@ onMounted(() => {
             :loading="steamcmdInstalling"
             :disabled="!runtimeAvailable"
             @click="ensureSteamcmdImage"
+            v-if="hasPermission('settings:write')"
           >
             {{ environmentView.primaryActionLabel }}
           </NButton>
           <NButton
-            v-if="environmentView.secondaryPullVisible"
+            v-if="environmentView.secondaryPullVisible && hasPermission('settings:write')"
             type="default"
             secondary
             :loading="gameDstPulling"

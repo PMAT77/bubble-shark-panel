@@ -4,7 +4,7 @@ const { auth: hasPermission } = useAppAuth()
 
 import type { DataTableColumns, FormRules, SelectOption } from 'naive-ui'
 import type { ScheduleCreateRequest, ScheduleTaskItem } from '@/api/modules/schedule'
-import type { InstanceItem } from '@/api/modules/instance'
+import type { InstanceSummaryItem } from '@/api/modules/instance'
 import { NButton, NDataTable, NEmpty, NForm, NFormItem, NInput, NInputNumber, NModal, NSelect, NSpace, NSwitch, NTag, NTime, NTimePicker, NTooltip, useDialog } from 'naive-ui'
 import { computed, h, onActivated, onMounted, ref } from 'vue'
 import apiSchedule from '@/api/modules/schedule'
@@ -22,7 +22,7 @@ const route = useRoute()
 const router = useRouter()
 
 const rows = ref<ScheduleTaskItem[]>([])
-const instances = ref<InstanceItem[]>([])
+const instances = ref<InstanceSummaryItem[]>([])
 const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 
 const {
@@ -103,7 +103,7 @@ function triggerLoad() {
   void runLoad(async () => {
     const [scheduleResponse, instanceResponse] = await Promise.all([
       apiSchedule.getScheduleList(),
-      apiInstance.getInstanceList().catch(() => ({ data: [] as InstanceItem[] })),
+      apiInstance.getInstanceOptions().catch(() => ({ data: [] as InstanceSummaryItem[] })),
     ])
     rows.value = scheduleResponse.data ?? []
     instances.value = instanceResponse.data ?? []

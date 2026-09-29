@@ -20,6 +20,10 @@ const NODE_POLL_MS = 10_000
 const registerLoading = ref(false)
 const nodes = ref<NodeListItem[]>([])
 
+/** 节点列表两个权限点都能读（服务端放行），但「重注册」仍归监控读权限 */
+const { auth: hasPermission } = useAppAuth()
+const canMonitor = computed(() => hasPermission('console.monitor:read'))
+
 const {
   loading,
   error,
@@ -112,7 +116,19 @@ onUnmounted(stopNodePolling)
           <NButton :loading="loading" @click="fetchNodes">
             刷新节点
           </NButton>
-          <NButton type="error" strong secondary :loading="registerLoading" @click="registerLocalNode">
+          <!--
+            「重注册本地节点」走 `/app/node/local/register`，归 console.monitor:read。
+            这一页对 instance:read 也开着（实例创建要选节点），所以按钮必须自己判权——
+            否则只有实例权限的账号会看到一个点了必然 403 的按钮。
+          -->
+          <NButton
+            v-if="canMonitor"
+            type="error"
+            strong
+            secondary
+            :loading="registerLoading"
+            @click="registerLocalNode"
+          >
             重注册本地节点
           </NButton>
         </div>

@@ -10,6 +10,9 @@ import { useInstanceModState } from '@/composables/useInstanceModState'
 
 type ModEnabledFilter = 'all' | 'enabled' | 'disabled'
 
+// 启停 Mod 是写操作：只读账号（游客角色）能看列表与状态，但点不动
+const { auth: hasPermission } = useAppAuth()
+
 const props = defineProps<{
   instanceId: string
   memoryWarning?: string | null
@@ -110,31 +113,34 @@ const installedColumns: DataTableColumns<ModItemDto> = [
     title: '操作',
     key: 'actions',
     width: 150,
-    render: row => h(
-      NTooltip,
-      {
-        disabled: row.installStatus === 'ready',
-      },
-      {
-        trigger: () => h(
-          NButton,
+    // 启停 Mod 要 mod:toggle：没有就不给这个入口（服务端同样会拒）
+    render: row => (hasPermission('mod:toggle')
+      ? h(
+          NTooltip,
           {
-            size: 'small',
-            type: row.enabled ? 'warning' : 'primary',
-            ghost: true,
-            loading: mutatingWorkshopIds.value.has(row.workshopId),
-            disabled: !hasInstanceId.value
-              || mutatingWorkshopIds.value.has(row.workshopId)
-              || row.installStatus !== 'ready',
-            onClick: () => void toggleModEnabled(row),
+            disabled: row.installStatus === 'ready',
           },
-          { default: () => (row.enabled ? '关闭' : '开启') },
-        ),
-        default: () => (row.installStatus === 'failed'
-          ? '下载失败，请在 Mod 管理页重试'
-          : '下载完成后才能开启'),
-      },
-    ),
+          {
+            trigger: () => h(
+              NButton,
+              {
+                size: 'small',
+                type: row.enabled ? 'warning' : 'primary',
+                ghost: true,
+                loading: mutatingWorkshopIds.value.has(row.workshopId),
+                disabled: !hasInstanceId.value
+                  || mutatingWorkshopIds.value.has(row.workshopId)
+                  || row.installStatus !== 'ready',
+                onClick: () => void toggleModEnabled(row),
+              },
+              { default: () => (row.enabled ? '关闭' : '开启') },
+            ),
+            default: () => (row.installStatus === 'failed'
+              ? '下载失败，请在 Mod 管理页重试'
+              : '下载完成后才能开启'),
+          },
+        )
+      : null),
   },
 ]
 

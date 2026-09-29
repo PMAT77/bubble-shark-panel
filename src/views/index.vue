@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { CapabilityCard } from './home-capabilities'
-import { routeToNodeInstance } from '@/navigation/game-routes'
 import { HOME_CAPABILITIES } from './home-capabilities'
+import { resolveHomeEntryPath } from './home-entry'
 
 defineOptions({
   name: 'Home',
@@ -52,6 +52,7 @@ function openCapability(card: CapabilityCard) {
 }
 
 const appMenuStore = useAppMenuStore()
+const appSettingsStore = useAppSettingsStore()
 
 /**
  * 已登录、但一个可见模块都没有。
@@ -67,12 +68,26 @@ function logout() {
 }
 
 function goLogin() {
-  // 已登录时原跳 /login 会被守卫弹回主页，直接进入实例管理
-  if (appAccountStore.isLogin) {
-    router.push(routeToNodeInstance())
+  if (!appAccountStore.isLogin) {
+    router.push('/login')
     return
   }
-  router.push('/login')
+  /**
+   * 已登录：按账号实际能进的页面跳，不要写死实例管理。
+   * 面板内的路由是按权限动态注册的，没权限的账号没有 `nodeInstance` 这条记录，
+   * 按 name 跳会在 resolve 阶段直接抛 "No match"（守卫兜不住，见 home-entry.ts）。
+   */
+  const target = resolveHomeEntryPath({
+    canReadInstance: hasPermission('instance:read'),
+    firstAccessiblePath: appMenuStore.sidebarMenusFirstDeepestPath,
+    homePath: appSettingsStore.settings.app.home.fullPath,
+  })
+  if (!target) {
+    // 零权限：页面上方已有提示块，这里只说明按钮为什么没反应
+    faToast.warning('当前账号还没有被分配任何模块权限')
+    return
+  }
+  router.push(target)
 }
 </script>
 
@@ -140,7 +155,7 @@ function goLogin() {
           </p>
           <div class="flex flex-wrap gap-3">
             <FaButton size="lg" @click="goLogin">
-              {{ appAccountStore.isLogin ? '进入实例管理' : '进入面板' }}
+              {{ appAccountStore.isLogin && hasPermission('instance:read') ? '进入实例管理' : '进入面板' }}
             </FaButton>
             <FaButton variant="outline" size="lg" @click="open(LINKS.docs)">
               项目文档

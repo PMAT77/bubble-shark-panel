@@ -26,6 +26,9 @@ defineOptions({
 const dialog = useDialog()
 const message = useMessage()
 
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 const currentPath = ref('')
 const entries = ref<InstanceFileEntry[]>([])
 const keyFiles = ref<InstanceKeyFile[]>([])
@@ -336,7 +339,7 @@ watch(() => props.instanceId, () => {
         </NButton>
       </template>
       <span class="grow" />
-      <NButton size="tiny" :loading="uploading" @click="openUploadPicker">
+      <NButton size="tiny" :loading="uploading" @click="openUploadPicker" v-if="hasPermission('file:upload')">
         上传到当前目录
       </NButton>
       <span v-if="uploading" class="text-xs text-muted-foreground">已上传 {{ uploadPercent }}%</span>
@@ -383,10 +386,10 @@ watch(() => props.instanceId, () => {
               :disabled="!canEdit(entry)"
               @click="openEntry(entry)"
             >
-              编辑
+              {{ hasPermission('file:write') ? '编辑' : '查看' }}
             </NButton>
             <NButton
-              v-if="entry.type === 'file' && !entry.protected"
+              v-if="entry.type === 'file' && !entry.protected && hasPermission('file:download')"
               text
               size="tiny"
               :disabled="busy"
@@ -395,7 +398,7 @@ watch(() => props.instanceId, () => {
               下载
             </NButton>
             <NButton
-              v-if="!entry.protected"
+              v-if="!entry.protected && hasPermission('file:write')"
               text
               size="tiny"
               @click="openRename(entry)"
@@ -403,7 +406,7 @@ watch(() => props.instanceId, () => {
               重命名
             </NButton>
             <NButton
-              v-if="!entry.protected"
+              v-if="!entry.protected && hasPermission('file:delete')"
               text
               size="tiny"
               type="error"
@@ -430,7 +433,7 @@ watch(() => props.instanceId, () => {
           <NButton @click="editorVisible = false">
             取消
           </NButton>
-          <NButton type="primary" :loading="busy" @click="saveEditor">
+          <NButton type="primary" :loading="busy" @click="saveEditor" v-if="hasPermission('file:write')">
             保存
           </NButton>
         </div>
@@ -444,7 +447,7 @@ watch(() => props.instanceId, () => {
           <NButton @click="renameVisible = false">
             取消
           </NButton>
-          <NButton type="primary" :loading="busy" @click="submitRename">
+          <NButton type="primary" :loading="busy" @click="submitRename" v-if="hasPermission('file:write')">
             确定
           </NButton>
         </div>

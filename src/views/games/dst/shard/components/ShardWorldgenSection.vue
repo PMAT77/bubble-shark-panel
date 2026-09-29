@@ -4,6 +4,9 @@ import { NButton, NInput, NTag } from 'naive-ui'
 import { getWorldgenOptions } from '../constants/dstWorldAssets'
 import ShardWorldRulesSection from './ShardWorldRulesSection.vue'
 
+// 重置世界是写操作：只读账号能看当前种子与预设，但点不动
+const { auth: hasPermission } = useAppAuth()
+
 const props = defineProps<{
   shard: 'master' | 'caves'
   shardFolder: 'Master' | 'Caves'
@@ -157,6 +160,7 @@ const seedHint = computed(() => {
           :loading="resetting"
           :disabled="resetting || !canResetWorld"
           @click="emit('reset')"
+          v-if="hasPermission('world:reset')"
         >
           重置世界
         </NButton>

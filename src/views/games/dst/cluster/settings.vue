@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { FormInst, FormRules } from 'naive-ui'
 import type {
   ClusterConfigDto,
@@ -635,7 +638,13 @@ onActivated(() => {
               管理员、白名单与黑名单已经集中到「玩家管理」页面：那里能看到在线玩家、按游戏名添加名单、踢出或封禁玩家。
               白名单是否生效仍由上面的「白名单预留位」决定，填 0 就是不用白名单。
             </p>
-            <NButton class="mt-3" size="small" secondary @click="goPlayerManage">
+            <NButton
+              v-if="hasPermission('player:read')"
+              class="mt-3"
+              size="small"
+              secondary
+              @click="goPlayerManage"
+            >
               前往玩家管理
             </NButton>
           </NCard>
@@ -690,7 +699,13 @@ onActivated(() => {
                 </template>
               </NFormItem>
             </template>
-            <NButton v-if="formModel.shardEnabled" size="small" class="mt-3" @click="goWorldSettings">
+            <!-- 目标页在「世界管理」模块下（world:read）：无权时这条路由根本没注册，按名跳转会在解析阶段抛 No match -->
+            <NButton
+              v-if="formModel.shardEnabled && hasPermission('world:read')"
+              size="small"
+              class="mt-3"
+              @click="goWorldSettings"
+            >
               前往世界设置
               <FaIcon name="i-lucide:arrow-right" class="size-4" />
             </NButton>
@@ -748,6 +763,7 @@ onActivated(() => {
             :resetting="resetting"
             :restart-disabled="saveAndRestartDisabled"
             :restart-disabled-title="saveAndRestartDisabledTitle"
+            :show-restart="hasPermission('instance:lifecycle')"
             @reset="resetConfig"
             @save="saveConfig(false)"
             @save-and-restart="confirmSaveAndRestart"

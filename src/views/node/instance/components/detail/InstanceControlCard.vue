@@ -25,6 +25,13 @@ defineOptions({
   name: 'InstanceDetailControlCard',
 })
 
+/**
+ * 这张卡片上的每个按钮都是写操作（控制台是读，但它的路由也按权限注册——
+ * 没权限时点进去会落到 404），所以逐个按权限点决定是否出现。
+ * 只读账号（游客角色）能看状态与指标，但一个按钮都点不到。
+ */
+const { auth: hasPermission } = useAppAuth()
+
 const props = defineProps<{
   instance: InstanceItem | null
 }>()
@@ -224,6 +231,7 @@ function goConsole() {
           :loading="isActionLoading(instance.id, 'start')"
           :disabled="!canStart()"
           @click="confirmStartInstance(instance)"
+          v-if="hasPermission('instance:lifecycle')"
         >
           启动
         </NButton>
@@ -234,6 +242,7 @@ function goConsole() {
           :loading="isActionLoading(instance.id, 'stop')"
           :disabled="!canStop()"
           @click="requestDangerous(instance.status === 'installing' || instance.status === 'pending_install' ? 'cancel_install' : 'stop')"
+          v-if="hasPermission('instance:lifecycle')"
         >
           {{ isInstalling ? '取消安装' : '停止' }}
         </NButton>
@@ -243,10 +252,11 @@ function goConsole() {
           :loading="isActionLoading(instance.id, 'restart')"
           :disabled="!canRestart()"
           @click="requestDangerous('restart')"
+          v-if="hasPermission('instance:lifecycle')"
         >
           重启
         </NButton>
-        <NTooltip trigger="hover" :disabled="canUpdateInstance(instance)">
+        <NTooltip trigger="hover" :disabled="canUpdateInstance(instance)" v-if="hasPermission('instance:update')">
           <template #trigger>
             <NButton
               size="small"
@@ -261,7 +271,7 @@ function goConsole() {
           </template>
           {{ getUpdateInstanceButtonTitle(instance) }}
         </NTooltip>
-        <NButton size="small" secondary :disabled="isInstalling" @click="goConsole">
+        <NButton size="small" secondary :disabled="isInstalling" @click="goConsole" v-if="hasPermission('instance.console:read')">
           控制台
         </NButton>
         <NButton
@@ -270,6 +280,7 @@ function goConsole() {
           secondary
           :disabled="!canDelete()"
           @click="requestDangerous('delete')"
+          v-if="hasPermission('instance:delete')"
         >
           删除
         </NButton>

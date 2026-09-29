@@ -429,7 +429,7 @@ defineExpose({ loadAll })
             :key="segmentIndex"
           >
             <NButton
-              v-if="segment.link"
+              v-if="segment.link && hasPermission('room:read')"
               text
               type="primary"
               size="tiny"
@@ -484,7 +484,7 @@ defineExpose({ loadAll })
                   {{ candidate.kuId }} · {{ formatLastSeen(candidate.lastSeenAt) }}
                 </p>
               </div>
-              <NButton size="small" @click="addCandidate(candidate)">
+              <NButton size="small" @click="addCandidate(candidate)" v-if="hasPermission('player:write')">
                 加入
               </NButton>
             </li>

@@ -9,6 +9,9 @@ defineOptions({
   name: 'ModConfigModal',
 })
 
+// 保存 Mod 配置要 mod:config：只读账号即使打开了这个弹窗也提交不了
+const { auth: hasPermission } = useAppAuth()
+
 interface KvRow {
   key: string
   value: string
@@ -311,7 +314,7 @@ async function saveConfig() {
         <NButton size="small" @click="visible = false">
           取消
         </NButton>
-        <NButton size="small" type="primary" :loading="saving" :disabled="loading" @click="saveConfig">
+        <NButton size="small" type="primary" :loading="saving" :disabled="loading" @click="saveConfig" v-if="hasPermission('mod:config')">
           保存
         </NButton>
       </div>

@@ -35,6 +35,8 @@ const route = useRoute()
 const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
+/** 「去开启 Mod」跳的是「世界管理」模块（world:read），无权时那条路由不存在 */
+const { auth: hasPermission } = useAppAuth()
 const { locale: contentLocale } = useModContentLocale()
 const unsubscribing = ref(false)
 
@@ -145,9 +147,19 @@ function showSubscribeSuccessGuide() {
 
 /** 已订阅时主按钮 → 前往世界设置开启 */
 function goToEnableMod() {
-  if (instanceId.value) {
-    router.push(routeToDstWorldSettings(instanceId.value))
+  if (!instanceId.value) {
+    return
   }
+  /**
+   * 目标是「世界管理」下的页面，而路由按权限动态注册：没有 world:read 时那条路由不存在，
+   * `router.push({ name })` 会在解析阶段直接抛 `No match`（守卫兜不住）。
+   * 这种情况下给一句可执行的说明，而不是把用户送进一个报错。
+   */
+  if (!hasPermission('world:read')) {
+    message.warning('请到「世界管理」里开启该 Mod；当前账号没有「查看世界配置」权限，无法跳转过去')
+    return
+  }
+  router.push(routeToDstWorldSettings(instanceId.value))
 }
 
 function confirmUnsubscribe() {

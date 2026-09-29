@@ -230,6 +230,7 @@ watch(() => [props.instanceId, props.shard], () => {
             :disabled="!running"
             :loading="busy"
             @click="resetModalVisible = true"
+            v-if="hasPermission('world:reset')"
           >
             重置世界
           </NButton>

@@ -7,11 +7,12 @@ import apiCluster from '@/api/modules/cluster'
 import apiInstance from '@/api/modules/instance'
 import apiMod from '@/api/modules/mod'
 import apiShard from '@/api/modules/shard'
-import { NButton, NSpin } from 'naive-ui'
+import { NButton, NCard, NEmpty, NSpin } from 'naive-ui'
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { routeToNodeInstance } from '@/navigation/game-routes'
 import { statusBadgeClass } from '@/constants/statusDictionary'
 import { getInstanceState } from './instanceDisplay'
+import { planInstanceDetailRequests } from './detailRequestPermissions'
 import CommandCenterCard from './components/detail/CommandCenterCard.vue'
 import InstanceFilesCard from './components/detail/InstanceFilesCard.vue'
 import InstanceMigrationCard from './components/detail/InstanceMigrationCard.vue'
@@ -26,6 +27,14 @@ defineOptions({
 
 const route = useRoute()
 const router = useRouter()
+
+/** 复用统一的权限判定（它同时处理「面板关闭登录」的场景） */
+const { auth: hasPermission } = useAppAuth()
+/**
+ * 游客身份要额外挡住"会改状态的读接口"（世界状态查询会向游戏下发 print 指令）。
+ * 判定不能只看权限点——游客恰好持有 `instance.console:read`，但服务端会拒绝它。
+ */
+const appAccountStore = useAppAccountStore()
 
 const instanceId = computed(() => String(route.params.instanceId ?? ''))
 
@@ -43,6 +52,28 @@ const pageTitle = computed(() => instance.value
   : '实例详情')
 
 const state = computed(() => (instance.value ? getInstanceState(instance.value) : null))
+
+/**
+ * 有权限就拉，没有就不发；单项失败给 `null`（不阻塞其余区块）。
+ *
+ * 为什么不是"先发再说"：详情页只要求 `instance:read`，而房间/世界/玩家/Mod/控制台各有
+ * 自己的读权限。无权限时发出去只会拿到 403，而 `allSettled` 会把失败吞成 `null`——
+ * 卡片显示"—"，看起来像"这里没有数据"，而不是"你没有权限"。
+ */
+async function fetchSection<T>(allowed: boolean, request: () => Promise<{ data: T }>): Promise<T | null> {
+  if (!allowed) {
+    return null
+  }
+  try {
+    const res = await request()
+    return res.data
+  }
+  catch {
+    return null
+  }
+}
+
+/** 房间概览卡片自己按权限显示提示与快捷入口，这里不再重复计算 */
 
 /** 运行中的实例每 30 秒静默刷新概览数据 */
 const DETAIL_POLL_MS = 30_000
@@ -88,30 +119,39 @@ async function loadDetail(options?: { silent?: boolean }) {
     }
     instance.value = target
 
+    /**
+     * 先按权限决定要发哪些请求：没有权限的区块一个请求都不发。
+     * 发出去只会拿到 403（一屏红字），而卡片拿到 `null` 后只能显示"—"。
+     */
+    const plan = planInstanceDetailRequests(hasPermission, appAccountStore.isGuestRole)
+
     // 概览数据并行拉取，单项失败不阻塞页面（对应卡片展示空态）
-    const [clusterRes, shardRes, onlineRes, modRes, connectRes] = await Promise.allSettled([
-      apiCluster.getClusterConfig(targetId),
-      apiShard.getShardList(targetId),
-      apiCluster.getOnlinePlayers(targetId),
-      apiMod.getModList(targetId),
-      apiInstance.getInstanceConnectInfo(targetId),
+    const [clusterData, shardData, onlineData, modData, connectData] = await Promise.all([
+      fetchSection(plan.cluster, () => apiCluster.getClusterConfig(targetId)),
+      fetchSection(plan.shardList, () => apiShard.getShardList(targetId)),
+      fetchSection(plan.onlinePlayers, () => apiCluster.getOnlinePlayers(targetId)),
+      fetchSection(plan.modList, () => apiMod.getModList(targetId)),
+      fetchSection(plan.connectInfo, () => apiInstance.getInstanceConnectInfo(targetId)),
     ])
     if (targetId !== instanceId.value) {
       return
     }
-    cluster.value = clusterRes.status === 'fulfilled' ? clusterRes.value.data : null
-    shardList.value = shardRes.status === 'fulfilled' ? shardRes.value.data : null
-    onlinePlayers.value = onlineRes.status === 'fulfilled' ? onlineRes.value.data : null
-    modList.value = modRes.status === 'fulfilled' ? modRes.value.data : null
-    connectInfo.value = connectRes.status === 'fulfilled' ? connectRes.value.data : null
+    cluster.value = clusterData
+    shardList.value = shardData
+    onlinePlayers.value = onlineData
+    modList.value = modData
+    connectInfo.value = connectData
 
     /**
      * P1：运行中实例查询世界状态（天数/季节），失败静默。
      *
+     * 这个接口会向游戏下发一条 print 指令，服务端按 `instance.console:read` 把关，
+     * 所以没有控制台读权限时同样不发请求。
+     *
      * 刷新时**不清空**旧读数：清空会让「世界进程」那行在每次手动刷新与 30 秒轮询时消失一瞬，
      * 卡片高度塌一下再弹回来。只有实例停止（读数已无意义）或切实例时才真正清掉。
      */
-    if (target.status === 'running') {
+    if (plan.worldState && target.status === 'running') {
       try {
         const res = await apiInstance.getInstanceWorldState(targetId, 'master')
         if (targetId === instanceId.value) {
@@ -269,21 +309,50 @@ onBeforeUnmount(() => {
         />
       </div>
 
-      <CommandCenterCard
-        :instance="instance"
-        :connect-info="connectInfo"
-        @refreshed="() => loadDetail({ silent: true })"
-      />
+      <!--
+        指令中心、文件、迁移三块各有自己的权限点：无权时给一句说明，而不是挂载一个
+        会立刻 403 的组件（它的加载失败会被吞成空数据，看起来像"这里没有内容"）。
+      -->
+      <AppAuth value="instance.console:read">
+        <CommandCenterCard
+          :instance="instance"
+          :connect-info="connectInfo"
+          @refreshed="() => loadDetail({ silent: true })"
+        />
+        <template #no-auth>
+          <NCard size="small" title="指令中心">
+            <NEmpty size="small" description="当前账号没有「查看控制台」权限，指令与维护公告不可用" />
+          </NCard>
+        </template>
+      </AppAuth>
 
-      <InstanceFilesCard
-        v-if="instance"
-        :instance-id="instance.id"
-      />
+      <AppAuth value="file:read">
+        <InstanceFilesCard
+          v-if="instance"
+          :instance-id="instance.id"
+        />
+        <template #no-auth>
+          <NCard size="small" title="文件管理">
+            <NEmpty size="small" description="当前账号没有「浏览文件」权限，文件管理不可用" />
+          </NCard>
+        </template>
+      </AppAuth>
 
-      <InstanceMigrationCard
-        v-if="instance && instanceSupportsDstRoom(instance)"
-        :instance-id="instance.id"
-      />
+      <AppAuth value="instance.migration:read">
+        <InstanceMigrationCard
+          v-if="instance && instanceSupportsDstRoom(instance)"
+          :instance-id="instance.id"
+        />
+        <template #no-auth>
+          <NCard
+            v-if="instance && instanceSupportsDstRoom(instance)"
+            size="small"
+            title="迁移到其他机器"
+          >
+            <NEmpty size="small" description="当前账号没有「查看迁移报告」权限，迁移报告不可用" />
+          </NCard>
+        </template>
+      </AppAuth>
 
       <p v-if="instance" class="text-xs text-muted-foreground">
         实例 ID：{{ instance.id }}

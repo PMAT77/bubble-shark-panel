@@ -32,6 +32,9 @@ defineOptions({
 
 type ConsoleTab = 'console' | 'maintenance'
 
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
@@ -883,7 +886,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="flex flex-wrap gap-2 items-center mt-3">
-            <FaButton size="sm" variant="outline" @click="clearLogs">
+            <FaButton size="sm" variant="outline" @click="clearLogs" v-if="hasPermission('console:clear')">
               清空日志
             </FaButton>
             <FaButton size="sm" variant="outline" @click="copyLogs">
@@ -929,6 +932,7 @@ onBeforeUnmount(() => {
                 size="small"
                 :disabled="!running || commandSending"
                 @click="sendCommand(item.command)"
+                v-if="hasPermission('console:command')"
               >
                 {{ item.label }}
               </NButton>
@@ -937,6 +941,7 @@ onBeforeUnmount(() => {
                 type="warning"
                 :disabled="!running || commandSending"
                 @click="confirmDangerousCommand('c_reset()', '确认重置世界？', '将立即重新生成一个全新世界：当前世界的地形、建筑与玩家物品都会丢失且不可恢复（已保存的回档快照除外）。真的要继续吗？')"
+                v-if="hasPermission('console:command')"
               >
                 重置世界
               </NButton>
@@ -953,6 +958,7 @@ onBeforeUnmount(() => {
                 variant="default"
                 :loading="commandSending"
                 :disabled="!running || commandSending"
+                v-if="hasPermission('console:command')"
               >
                 发送
               </FaButton>
@@ -980,6 +986,7 @@ onBeforeUnmount(() => {
               :loading="maintenanceSaving"
               :disabled="maintenanceLoading || maintenancePushing"
               @click="saveMaintenanceDraft"
+              v-if="hasPermission('maintenance:write')"
             >
               保存草稿
             </NButton>
@@ -989,6 +996,7 @@ onBeforeUnmount(() => {
               :loading="maintenancePushing"
               :disabled="!running || maintenanceLoading || maintenanceSaving"
               @click="confirmPushMaintenanceAnnounce"
+              v-if="hasPermission('maintenance:write')"
             >
               推送到房间
             </NButton>

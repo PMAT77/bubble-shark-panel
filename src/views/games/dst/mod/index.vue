@@ -10,7 +10,7 @@ import type {
   SteamModSort,
   SteamModTrendDays,
 } from '@/api/modules/mod'
-import type { InstanceItem } from '@/api/modules/instance'
+import type { InstanceSummaryItem } from '@/api/modules/instance'
 import { useDebounceFn } from '@vueuse/core'
 import type { NotificationReactive } from 'naive-ui'
 import { NAlert, NButton, NCard, NDataTable, NEmpty, NImage, NInput, NPagination, NRate, NSelect, NSwitch, NTabPane, NTabs, NTag, NTooltip, useDialog, useMessage, useNotification } from 'naive-ui'
@@ -81,7 +81,7 @@ const batchUpdating = ref(false)
 const reorderingMods = ref(false)
 const configModalShow = ref(false)
 const configTarget = ref<{ workshopId: string, name: string } | null>(null)
-const instances = ref<InstanceItem[]>([])
+const instances = ref<InstanceSummaryItem[]>([])
 const selectedInstanceId = ref('')
 const {
   downloadingMods,
@@ -588,22 +588,28 @@ function showSubscribeSuccessGuide() {
     onClose: () => {
       subscribeGuideNotificationRef.value = null
     },
-    action: () => h(
-      NButton,
-      {
-        size: 'small',
-        type: 'primary',
-        secondary: true,
-        onClick: () => {
-          subscribeGuideNotificationRef.value?.destroy()
-          subscribeGuideNotificationRef.value = null
-          if (selectedInstanceId.value) {
-            router.push(routeToDstWorldSettings(selectedInstanceId.value))
-          }
-        },
-      },
-      { default: () => '去开启 Mod' },
-    ),
+    /**
+     * 这个按钮跳的是「世界管理」模块（world:read）。目标模块无权时那条路由根本没注册，
+     * 按名跳转会在路由解析阶段抛 `No match`——按钮看起来就是坏的，所以干脆不渲染。
+     */
+    action: () => hasPermission('world:read')
+      ? h(
+          NButton,
+          {
+            size: 'small',
+            type: 'primary',
+            secondary: true,
+            onClick: () => {
+              subscribeGuideNotificationRef.value?.destroy()
+              subscribeGuideNotificationRef.value = null
+              if (selectedInstanceId.value) {
+                router.push(routeToDstWorldSettings(selectedInstanceId.value))
+              }
+            },
+          },
+          { default: () => '去开启 Mod' },
+        )
+      : null,
   })
 }
 
@@ -682,49 +688,52 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
     key: 'actions',
     width: 190,
     render: row => h('div', { class: 'flex items-center gap-3' }, [
-      h(
-        NButton,
-        {
-          size: 'tiny',
-          type: row.subscribeStatus === 'failed'
-            ? 'primary'
-            : (row.installed ? 'default' : 'primary'),
-          disabled: !hasSelectedInstance.value
-            || (unsubscribingWorkshopIds.value.has(row.workshopId))
-            || (resolveMarketSubscribeStatus(row) === 'pending'),
-          loading: unsubscribingWorkshopIds.value.has(row.workshopId),
-          class: 'min-w-[4.5rem]',
-          onClick: () => {
-            const status = resolveMarketSubscribeStatus(row)
-            if (row.installed || status === 'ready') {
-              confirmUnsubscribeFromMarket(row)
-              return
-            }
-            if (status === 'failed') {
-              void retryFromMarket(row)
-              return
-            }
-            if (status === 'pending') {
-              return
-            }
-            void installFromSteam(row)
-          },
-        },
-        {
-          default: () => {
-            if (row.installed || resolveMarketSubscribeStatus(row) === 'ready') {
-              return '取消订阅'
-            }
-            if (isPendingWorkshop(row.workshopId)) {
-              return '订阅中'
-            }
-            if (resolveMarketSubscribeStatus(row) === 'failed') {
-              return '重试'
-            }
-            return '订阅'
-          },
-        },
-      ),
+      // 订阅 / 取消订阅 / 重试都是 mod:install：只读账号不该看到这个入口
+      ...(hasPermission('mod:install')
+        ? [h(
+            NButton,
+            {
+              size: 'tiny',
+              type: row.subscribeStatus === 'failed'
+                ? 'primary'
+                : (row.installed ? 'default' : 'primary'),
+              disabled: !hasSelectedInstance.value
+                || (unsubscribingWorkshopIds.value.has(row.workshopId))
+                || (resolveMarketSubscribeStatus(row) === 'pending'),
+              loading: unsubscribingWorkshopIds.value.has(row.workshopId),
+              class: 'min-w-[4.5rem]',
+              onClick: () => {
+                const status = resolveMarketSubscribeStatus(row)
+                if (row.installed || status === 'ready') {
+                  confirmUnsubscribeFromMarket(row)
+                  return
+                }
+                if (status === 'failed') {
+                  void retryFromMarket(row)
+                  return
+                }
+                if (status === 'pending') {
+                  return
+                }
+                void installFromSteam(row)
+              },
+            },
+            {
+              default: () => {
+                if (row.installed || resolveMarketSubscribeStatus(row) === 'ready') {
+                  return '取消订阅'
+                }
+                if (isPendingWorkshop(row.workshopId)) {
+                  return '订阅中'
+                }
+                if (resolveMarketSubscribeStatus(row) === 'failed') {
+                  return '重试'
+                }
+                return '订阅'
+              },
+            },
+          )]
+        : []),
       h(
         NButton,
         {
@@ -826,15 +835,18 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
     title: '启用',
     key: 'enabled',
     width: 90,
-    render: row => h(NSwitch, {
-      size: 'small',
-      value: row.enabled,
-      disabled: !hasSelectedInstance.value
-        || row.installStatus !== 'ready'
-        || isPendingWorkshop(row.workshopId)
-        || unsubscribingWorkshopIds.value.has(row.workshopId),
-      'onUpdate:value': () => void toggleSubscribedMod(row),
-    }),
+    // 没有 mod:toggle 就不给开关：改成只读标签，避免整列看起来是空的
+    render: row => (hasPermission('mod:toggle')
+      ? h(NSwitch, {
+          size: 'small',
+          value: row.enabled,
+          disabled: !hasSelectedInstance.value
+            || row.installStatus !== 'ready'
+            || isPendingWorkshop(row.workshopId)
+            || unsubscribingWorkshopIds.value.has(row.workshopId),
+          'onUpdate:value': () => void toggleSubscribedMod(row),
+        })
+      : h(NTag, { size: 'small', bordered: false }, { default: () => (row.enabled ? '已启用' : '已停用') })),
   },
   {
     title: '操作',
@@ -844,7 +856,7 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
       ...(row.installStatus === 'ready'
         ? [
             // 「更新」只在创意工坊确实有新版本时出现，否则这个按钮点下去毫无意义
-            ...(isModUpdatable(row)
+            ...(isModUpdatable(row) && hasPermission('mod:install')
               ? [h(
                   NButton,
                   {
@@ -858,7 +870,7 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
                 )]
               : []),
             // 版本无法判断时留一个出口：重新下载一次，让本机内容与工坊对齐
-            ...(canRedownloadMod(row)
+            ...(canRedownloadMod(row) && hasPermission('mod:install')
               ? [h(
                   NButton,
                   {
@@ -870,38 +882,42 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
                   { default: () => '重新下载' },
                 )]
               : []),
-            h(
-              NButton,
-              {
-                size: 'tiny',
-                disabled: !hasSelectedInstance.value || isPendingWorkshop(row.workshopId),
-                class: 'w-14',
-                onClick: () => openModConfig(row),
-              },
-              { default: () => '配置' },
-            )]
+            ...(hasPermission('mod:config')
+              ? [h(
+                  NButton,
+                  {
+                    size: 'tiny',
+                    disabled: !hasSelectedInstance.value || isPendingWorkshop(row.workshopId),
+                    class: 'w-14',
+                    onClick: () => openModConfig(row),
+                  },
+                  { default: () => '配置' },
+                )]
+              : [])]
         : []),
-      h(
-        NButton,
-        {
-          size: 'tiny',
-          type: row.installStatus === 'failed' ? 'primary' : 'default',
-          disabled: !hasSelectedInstance.value
-            || unsubscribingWorkshopIds.value.has(row.workshopId)
-            || row.installStatus === 'pending'
-            || isPendingWorkshop(row.workshopId),
-          loading: unsubscribingWorkshopIds.value.has(row.workshopId),
-          class: 'w-16',
-          onClick: () => {
-            if (row.installStatus === 'failed') {
-              void retryFailedInstall(row)
-              return
-            }
-            confirmUnsubscribe(row)
-          },
-        },
-        { default: () => (row.installStatus === 'failed' ? '重试' : '取消订阅') },
-      ),
+      ...(hasPermission('mod:install')
+        ? [h(
+            NButton,
+            {
+              size: 'tiny',
+              type: row.installStatus === 'failed' ? 'primary' : 'default',
+              disabled: !hasSelectedInstance.value
+                || unsubscribingWorkshopIds.value.has(row.workshopId)
+                || row.installStatus === 'pending'
+                || isPendingWorkshop(row.workshopId),
+              loading: unsubscribingWorkshopIds.value.has(row.workshopId),
+              class: 'w-16',
+              onClick: () => {
+                if (row.installStatus === 'failed') {
+                  void retryFailedInstall(row)
+                  return
+                }
+                confirmUnsubscribe(row)
+              },
+            },
+            { default: () => (row.installStatus === 'failed' ? '重试' : '取消订阅') },
+          )]
+        : []),
       h(
         NButton,
         {
@@ -912,26 +928,31 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
         },
         { default: () => '详情' },
       ),
-      h(
-        NButton,
-        {
-          size: 'tiny',
-          text: true,
-          disabled: !canMoveInstalledMod(row, index, -1),
-          onClick: () => void moveInstalledMod(index, -1),
-        },
-        { default: () => '上移' },
-      ),
-      h(
-        NButton,
-        {
-          size: 'tiny',
-          text: true,
-          disabled: !canMoveInstalledMod(row, index, 1),
-          onClick: () => void moveInstalledMod(index, 1),
-        },
-        { default: () => '下移' },
-      ),
+      // 加载顺序调整属于 mod:toggle
+      ...(hasPermission('mod:toggle')
+        ? [
+            h(
+              NButton,
+              {
+                size: 'tiny',
+                text: true,
+                disabled: !canMoveInstalledMod(row, index, -1),
+                onClick: () => void moveInstalledMod(index, -1),
+              },
+              { default: () => '上移' },
+            ),
+            h(
+              NButton,
+              {
+                size: 'tiny',
+                text: true,
+                disabled: !canMoveInstalledMod(row, index, 1),
+                onClick: () => void moveInstalledMod(index, 1),
+              },
+              { default: () => '下移' },
+            ),
+          ]
+        : []),
     ]),
   },
 ]
@@ -939,8 +960,8 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
 async function loadInstances() {
   loadingInstances.value = true
   try {
-    const response = await apiInstance.getInstanceList()
-    const rows = (response.data ?? []) as InstanceItem[]
+    const response = await apiInstance.getInstanceOptions()
+    const rows = (response.data ?? []) as InstanceSummaryItem[]
     instances.value = rows.filter(isInstallableGameInstance)
     if (instances.value.length === 0) {
       selectedInstanceId.value = ''
@@ -1734,7 +1755,7 @@ onMounted(async () => {
             @update:value="onInstanceChange"
           />
           <NButton
-            v-if="!hasInstallableInstances && !loadingInstances"
+            v-if="!hasInstallableInstances && !loadingInstances && hasPermission('instance:read')"
             type="primary"
             @click="router.push(routeToNodeInstance())"
           >
@@ -1889,6 +1910,7 @@ onMounted(async () => {
                       :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
                       :disabled="marketActionDisabled(mod)"
                       @click="handleMarketAction(mod)"
+                      v-if="hasPermission('mod:install')"
                     >
                       {{ marketActionLabel(mod) }}
                     </NButton>
@@ -2063,7 +2085,7 @@ onMounted(async () => {
                     <p v-if="mod.installError" class="text-sm text-rose-600 dark:text-rose-400">{{ mod.installError }}</p>
                     <div class="flex gap-2">
                       <NButton
-                        v-if="isModUpdatable(mod)"
+                        v-if="isModUpdatable(mod) && hasPermission('mod:install')"
                         class="flex-1"
                         type="primary"
                         :disabled="!hasSelectedInstance || isPendingWorkshop(mod.workshopId)"
@@ -2072,7 +2094,7 @@ onMounted(async () => {
                         更新
                       </NButton>
                       <NButton
-                        v-else-if="canRedownloadMod(mod)"
+                        v-else-if="canRedownloadMod(mod) && hasPermission('mod:install')"
                         class="flex-1"
                         :disabled="!hasSelectedInstance || isPendingWorkshop(mod.workshopId)"
                         @click="updateInstalledMod(mod)"
@@ -2080,7 +2102,7 @@ onMounted(async () => {
                         重新下载
                       </NButton>
                       <NButton
-                        v-if="mod.installStatus === 'ready'"
+                        v-if="mod.installStatus === 'ready' && hasPermission('mod:config')"
                         class="flex-1"
                         :disabled="!hasSelectedInstance || isPendingWorkshop(mod.workshopId)"
                         @click="openModConfig(mod)"
@@ -2092,6 +2114,7 @@ onMounted(async () => {
                         :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
                         :disabled="!hasSelectedInstance || mod.installStatus === 'pending' || isPendingWorkshop(mod.workshopId)"
                         @click="handleSubscribedAction(mod)"
+                        v-if="hasPermission('mod:install')"
                       >
                         {{ mod.installStatus === 'failed' ? '重试' : '取消订阅' }}
                       </NButton>
@@ -2099,7 +2122,7 @@ onMounted(async () => {
                         详情
                       </NButton>
                     </div>
-                    <div v-if="installedMods.length > 1" class="flex items-center justify-end gap-2">
+                    <div v-if="installedMods.length > 1 && hasPermission('mod:toggle')" class="flex items-center justify-end gap-2">
                       <span class="text-xs text-muted-foreground">加载顺序</span>
                       <NButton
                         size="small"

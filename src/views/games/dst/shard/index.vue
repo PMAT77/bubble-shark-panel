@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DataTableColumns } from 'naive-ui'
-import type { DstInstanceSummaryDto } from '@/api/modules/dst-summary'
+import type { WorldSummariesDto } from '@/api/modules/dst-summary'
 import { NAlert, NButton, NDataTable, NEmpty, NTag, NTooltip } from 'naive-ui'
 import { computed, h, onMounted, ref } from 'vue'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
@@ -15,8 +15,17 @@ defineOptions({
 })
 
 const router = useRouter()
+// 「前往实例管理」按钮只在有实例管理权限时才渲染：无权限的账号没注册这条路由，
+// 按路由名跳会在解析阶段直接抛 "No match"（守卫兜不住）
+const { auth: hasPermission } = useAppAuth()
 const appSettingsStore = useAppSettingsStore()
-const rows = ref<DstInstanceSummaryDto[]>([])
+/**
+ * 这一页只拿「世界投影」：服务端按 `world:read` 放行，只回分片配置与容器状态。
+ * 所以本页不需要「查看实例」，菜单也不会因为取消「查看实例」而消失。
+ */
+type WorldRow = WorldSummariesDto['items'][number]
+
+const rows = ref<WorldRow[]>([])
 const keywordFilter = ref('')
 const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 
@@ -38,7 +47,7 @@ function renderShardStatusTag(shard: ShardDisplayFacts) {
   )
 }
 
-function shardStatusText(row: DstInstanceSummaryDto, shardId: 'master' | 'caves'): string {
+function shardStatusText(row: WorldRow, shardId: 'master' | 'caves'): string {
   const shard = row.world[shardId]
   return shard ? resolveShardDisplayStatus(shard).label : '—'
 }
@@ -56,7 +65,7 @@ const filteredRows = computed(() => {
 const hasFilteredRows = computed(() => filteredRows.value.length > 0)
 const showFilteredEmpty = computed(() => initialLoadDone.value && !loading.value && rows.value.length > 0 && !hasFilteredRows.value)
 
-const columns: DataTableColumns<DstInstanceSummaryDto> = [
+const columns: DataTableColumns<WorldRow> = [
   {
     title: '实例名称',
     key: 'instanceName',
@@ -148,7 +157,7 @@ function goToInstanceManagement() {
 
 async function loadRows() {
   await runLoad(async () => {
-    const response = await apiDstSummary.getDstInstanceSummaries()
+    const response = await apiDstSummary.getWorldSummaries()
     rows.value = response.data.items
   })
 }
@@ -251,7 +260,7 @@ onMounted(() => {
     </div>
     <NEmpty v-else-if="showEmpty" description="暂无已安装的 DST 实例">
       <template #extra>
-        <NButton type="primary" @click="goToInstanceManagement">
+        <NButton type="primary" @click="goToInstanceManagement" v-if="hasPermission('instance:read')">
           前往实例管理
         </NButton>
       </template>

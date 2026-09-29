@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DataTableColumns } from 'naive-ui'
-import type { DstInstanceSummaryDto } from '@/api/modules/dst-summary'
+import type { PlayerSummariesDto } from '@/api/modules/dst-summary'
 import { NAlert, NButton, NDataTable, NEmpty, NTag } from 'naive-ui'
 import { computed, h, onMounted, ref } from 'vue'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
@@ -15,8 +15,17 @@ defineOptions({
 })
 
 const router = useRouter()
+// 「前往实例管理」按钮只在有实例管理权限时才渲染：无权限的账号没注册这条路由，
+// 按路由名跳会在解析阶段直接抛 "No match"（守卫兜不住）
+const { auth: hasPermission } = useAppAuth()
 const appSettingsStore = useAppSettingsStore()
-const rows = ref<DstInstanceSummaryDto[]>([])
+/**
+ * 这一页只拿「玩家投影」：服务端按 `player:read` 放行，只回房间名（这些玩家在哪个房间）、
+ * 在线人数与上限。所以本页不需要「查看实例」，菜单也不会因为取消「查看实例」而消失。
+ */
+type PlayerRow = PlayerSummariesDto['items'][number]
+
+const rows = ref<PlayerRow[]>([])
 const keywordFilter = ref('')
 const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 
@@ -37,7 +46,7 @@ const filteredRows = computed(() => {
   return rows.value.filter((row) => {
     const haystack = [
       row.instance.name,
-      row.room.clusterName ?? '',
+      row.player.clusterName ?? '',
     ].join(' ').toLowerCase()
     return haystack.includes(keyword)
   })
@@ -46,7 +55,7 @@ const filteredRows = computed(() => {
 const hasFilteredRows = computed(() => filteredRows.value.length > 0)
 const showFilteredEmpty = computed(() => initialLoadDone.value && !loading.value && rows.value.length > 0 && !hasFilteredRows.value)
 
-const columns: DataTableColumns<DstInstanceSummaryDto> = [
+const columns: DataTableColumns<PlayerRow> = [
   {
     title: '实例名称',
     key: 'instanceName',
@@ -55,7 +64,7 @@ const columns: DataTableColumns<DstInstanceSummaryDto> = [
   {
     title: '房间名称',
     key: 'clusterName',
-    render: row => row.room.clusterName ?? '—',
+    render: row => row.player.clusterName ?? '—',
   },
   {
     title: '运行状态',
@@ -102,19 +111,19 @@ function goToInstanceManagement() {
   router.push(routeToNodeInstance())
 }
 
-function formatOnlinePlayers(row: DstInstanceSummaryDto): string {
+function formatOnlinePlayers(row: PlayerRow): string {
   if (row.instance.status !== 'running') {
     return '—'
   }
-  if (row.room.onlinePlayerCount === null || row.room.maxPlayers === null) {
+  if (row.player.onlinePlayerCount === null || row.player.maxPlayers === null) {
     return '—'
   }
-  return `${row.room.onlinePlayerCount} / ${row.room.maxPlayers}`
+  return `${row.player.onlinePlayerCount} / ${row.player.maxPlayers}`
 }
 
 async function loadRows() {
   await runLoad(async () => {
-    const response = await apiDstSummary.getDstInstanceSummaries()
+    const response = await apiDstSummary.getPlayerSummaries()
     rows.value = response.data.items
   })
 }
@@ -183,7 +192,7 @@ onMounted(() => {
                 {{ row.instance.name }}
               </h2>
               <p class="mt-1 text-sm text-muted-foreground truncate">
-                {{ row.room.clusterName || '尚未配置房间名称' }}
+                {{ row.player.clusterName || '尚未配置房间名称' }}
               </p>
             </div>
             <NTag size="small" :bordered="false" :type="statusTagType(getInstanceState(row.instance).tone)">
@@ -197,7 +206,7 @@ onMounted(() => {
             </div>
             <div>
               <dt class="text-muted-foreground">房间</dt>
-              <dd>{{ row.room.clusterName || '—' }}</dd>
+              <dd>{{ row.player.clusterName || '—' }}</dd>
             </div>
           </dl>
           <NButton block @click="openManage(row.instance.id)">
@@ -214,7 +223,7 @@ onMounted(() => {
     </div>
     <NEmpty v-else-if="showEmpty" description="暂无已安装的饥荒（DST）实例">
       <template #extra>
-        <NButton type="primary" @click="goToInstanceManagement">
+        <NButton type="primary" @click="goToInstanceManagement" v-if="hasPermission('instance:read')">
           前往实例管理
         </NButton>
       </template>

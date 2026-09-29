@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { InstanceItem } from '@/api/modules/instance'
+import type { InstanceSummaryItem } from '@/api/modules/instance'
 import type { PlayerListKind, PlayerOnlineEntry, PlayerOnlineRosterDto } from '@/api/modules/player'
 import { NAlert, NButton, NSpin, NTag, useDialog, useMessage } from 'naive-ui'
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
@@ -28,11 +28,13 @@ const LIST_LABELS: Record<PlayerListKind, string> = {
 
 const route = useRoute()
 const router = useRouter()
+/** 按钮级与"这一请求该不该发"的判定；后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
 const dialog = useDialog()
 const message = useMessage()
 
 const instanceId = computed(() => String(route.params.instanceId ?? ''))
-const instance = ref<InstanceItem | null>(null)
+const instance = ref<InstanceSummaryItem | null>(null)
 const instanceLoaded = ref(false)
 const roster = ref<PlayerOnlineRosterDto | null>(null)
 const rosterLoading = ref(false)
@@ -49,7 +51,8 @@ const onlineKuIds = computed(() => (roster.value?.players ?? []).map(player => p
 
 async function loadInstance() {
   try {
-    const response = await apiInstance.getInstanceList() as { data?: InstanceItem[] }
+    // 只拿实例标识：本页在「玩家管理」模块下，不需要也不该要求「查看实例」
+    const response = await apiInstance.getInstanceOptions()
     const list = response.data ?? []
     instance.value = list.find(item => item.id === instanceId.value) ?? null
   }
@@ -62,6 +65,14 @@ async function loadInstance() {
 }
 
 async function loadWhitelistSlots() {
+  /**
+   * 白名单预留位是房间配置（`room:read`），本页只有 `player:read`：
+   * 无权时不发这个请求（会 403），按"未启用"处理——名单面板自己会再校正一次。
+   */
+  if (!hasPermission('room:read')) {
+    whitelistSlots.value = 0
+    return
+  }
   try {
     const { data } = await apiCluster.getClusterConfig(instanceId.value)
     whitelistSlots.value = data.whitelistSlots

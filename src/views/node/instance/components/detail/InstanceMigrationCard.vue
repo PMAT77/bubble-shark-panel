@@ -127,7 +127,7 @@ async function copyReport() {
         <NButton size="small" :loading="loadingReport" @click="loadReport">
           检查迁移报告
         </NButton>
-        <NButton size="small" type="primary" :loading="exporting" @click="exportPack">
+        <NButton size="small" type="primary" :loading="exporting" @click="exportPack" v-if="hasPermission('instance.migration:export')">
           导出迁移包
         </NButton>
         <NButton v-if="reportText" size="small" @click="copyReport">

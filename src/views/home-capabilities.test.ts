@@ -25,7 +25,7 @@ import { HOME_CAPABILITIES } from './home-capabilities.ts'
  * （路由与页面都在，只是入口收起来了），所以留在这份名单里：等它恢复成主导航项时，
  * 主页要不要给它一张卡片是一个需要重新做决定的问题，不该被顺手跳过。
  */
-const ADMIN_ONLY_MODULES = new Set(['系统设置', '插件', '商业支持与 Pro', '成员与角色'])
+const ADMIN_ONLY_MODULES = new Set(['系统设置', '插件', '商业支持与 Pro', '成员管理', '角色管理'])
 
 /** 从菜单里取出「主页应该展示的任务顺序」：只保留面向日常使用的页面，跳过管理类 */
 function expectedHomeOrder(): string[] {
@@ -116,6 +116,25 @@ describe('首页核心能力卡片', () => {
       assert.ok(
         isKnownPermission(card.permission),
         `${card.name} 的权限点未在 shared/constants/permissions.ts 的清单里：${card.permission}`,
+      )
+    }
+  })
+
+  it('卡片的权限点与菜单里该模块的 auth 一致', () => {
+    /**
+     * 首页卡片与左侧菜单是同一类入口，判据必须一致：菜单要 `room:read` 而卡片检查别的，
+     * 卡片就会把账号送进一个路由根本没注册的地址（或反过来，能进的页面被置灰）。
+     * 一个菜单项只由它自己的读权限决定，所以这里是一对一比对。
+     */
+    for (const card of HOME_CAPABILITIES) {
+      const module = menuRouteList.find(item => item.meta.title === card.name)
+      assert.ok(module, `菜单里没有「${card.name}」模块，首页卡片已经过期`)
+      const entry = module.children?.[0]
+      assert.ok(entry, `「${card.name}」在菜单里没有入口项`)
+      assert.equal(
+        card.permission,
+        entry.meta.auth,
+        `「${card.name}」的卡片权限点与菜单的 auth 不一致：卡片 ${card.permission} / 菜单 ${String(entry.meta.auth)}`,
       )
     }
   })

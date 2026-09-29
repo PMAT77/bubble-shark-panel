@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
+const { auth: hasPermission } = useAppAuth()
+
 import type { ShardId } from '@/api/modules/shard'
 import type { MapDto } from '@/api/modules/map'
 import {
@@ -54,6 +57,11 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 const shardLabel = computed(() => props.shard === 'master' ? '地上世界' : '洞穴世界')
 const generating = computed(() => state.value?.status === 'generating')
 const hasImage = computed(() => Boolean(state.value?.imagePath))
+/**
+ * 「查看地形图」是独立权限点（`world.map:read`），与「世界管理」的 `world:read` 不是一回事。
+ * 没有它时不发请求、只说明原因——否则这一屏会静默变成"还没有地形图"，用户点了刷新也没用。
+ */
+const canViewMap = computed(() => hasPermission('world.map:read'))
 
 const imageUrl = computed(() => {
   const path = state.value?.imagePath
@@ -90,7 +98,7 @@ function startPolling() {
 }
 
 async function loadMap(showSpin = true) {
-  if (!props.instanceId) {
+  if (!props.instanceId || !canViewMap.value) {
     return
   }
   if (showSpin) {
@@ -152,6 +160,9 @@ async function generate(force: boolean) {
 watch(() => [props.instanceId, props.shard], () => {
   stopPolling()
   state.value = null
+  if (!canViewMap.value) {
+    return
+  }
   void loadMap()
 }, { immediate: true })
 
@@ -160,8 +171,15 @@ onBeforeUnmount(stopPolling)
 
 <template>
   <div class="mt-2">
+    <!-- 没有「查看地形图」权限：整块收起来，避免"刷新状态"反复请求一个必然 403 的接口 -->
+    <NEmpty
+      v-if="!canViewMap"
+      size="small"
+      description="当前账号没有「查看地形图」权限，地形图不可用"
+    />
+    <template v-else>
     <div class="mb-3 flex flex-wrap items-center gap-2">
-      <NButton size="small" type="primary" :loading="busy || generating" @click="generate(hasImage)">
+      <NButton size="small" type="primary" :loading="busy || generating" @click="generate(hasImage)" v-if="hasPermission('world.map:generate')">
         {{ primaryActionText }}
       </NButton>
       <NButton size="small" :disabled="loading" @click="loadMap()">
@@ -216,5 +234,6 @@ onBeforeUnmount(stopPolling)
         :description="`还没有${shardLabel}的地形图`"
       />
     </NSpin>
+    </template>
   </div>
 </template>

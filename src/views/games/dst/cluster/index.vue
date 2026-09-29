@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DataTableColumns } from 'naive-ui'
 import type { ClusterNetworkMode } from '@/api/modules/cluster'
-import type { DstInstanceSummaryDto } from '@/api/modules/dst-summary'
+import type { RoomSummariesDto } from '@/api/modules/dst-summary'
 import { NAlert, NButton, NDataTable, NEmpty, NTag, NTooltip } from 'naive-ui'
 import { computed, h, onMounted, ref } from 'vue'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
@@ -16,8 +16,18 @@ defineOptions({
 })
 
 const router = useRouter()
+// 「前往实例管理」按钮只在有实例管理权限时才渲染：无权限的账号没注册这条路由，
+// 按路由名跳会在解析阶段直接抛 "No match"（守卫兜不住）
+const { auth: hasPermission } = useAppAuth()
 const appSettingsStore = useAppSettingsStore()
-const rows = ref<DstInstanceSummaryDto[]>([])
+/**
+ * 这一页只拿「房间投影」：服务端按 `room:read` 放行，只回房间名、联网模式、洞穴开关、
+ * 人数这几列要用的字段（房间名与人数之外的世界细节不在这里）。所以本页不需要「查看实例」，
+ * 菜单也不会因为取消「查看实例」而消失。
+ */
+type RoomRow = RoomSummariesDto['items'][number]
+
+const rows = ref<RoomRow[]>([])
 const keywordFilter = ref('')
 const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 
@@ -54,7 +64,7 @@ const filteredRows = computed(() => {
 const hasFilteredRows = computed(() => filteredRows.value.length > 0)
 const showFilteredEmpty = computed(() => initialLoadDone.value && !loading.value && rows.value.length > 0 && !hasFilteredRows.value)
 
-const columns: DataTableColumns<DstInstanceSummaryDto> = [
+const columns: DataTableColumns<RoomRow> = [
   {
     title: '实例名称',
     key: 'instanceName',
@@ -112,7 +122,7 @@ const columns: DataTableColumns<DstInstanceSummaryDto> = [
     title: '洞穴',
     key: 'caves',
     render: (row) => {
-      const summary = buildCavesSummary(row.room.shardEnabled, row.world.caves?.configured)
+      const summary = buildCavesSummary(row.room.shardEnabled, row.room.cavesConfigured ?? undefined)
       return h(NTag, { size: 'small', bordered: false, type: summary.type }, { default: () => summary.label })
     },
   },
@@ -166,7 +176,7 @@ function buildCavesSummary(shardEnabled: boolean | null, cavesConfigured: boolea
   return { label: CAVES_FEATURE_STATUS.on.label, type: statusTagType(CAVES_FEATURE_STATUS.on.tone) }
 }
 
-function formatOnlinePlayers(row: DstInstanceSummaryDto): string {
+function formatOnlinePlayers(row: RoomRow): string {
   if (row.instance.status !== 'running') {
     return '—'
   }
@@ -178,7 +188,7 @@ function formatOnlinePlayers(row: DstInstanceSummaryDto): string {
 
 async function loadRows() {
   await runLoad(async () => {
-    const response = await apiDstSummary.getDstInstanceSummaries()
+    const response = await apiDstSummary.getRoomSummaries()
     rows.value = response.data.items
   })
 }
@@ -265,7 +275,7 @@ onMounted(() => {
             </div>
             <div>
               <dt class="text-muted-foreground">洞穴</dt>
-              <dd>{{ buildCavesSummary(row.room.shardEnabled, row.world.caves?.configured).label }}</dd>
+              <dd>{{ buildCavesSummary(row.room.shardEnabled, row.room.cavesConfigured ?? undefined).label }}</dd>
             </div>
             <div v-if="row.room.error" class="col-span-2 text-amber-600 dark:text-amber-400">
               {{ row.room.error }}
@@ -285,7 +295,7 @@ onMounted(() => {
     </div>
     <NEmpty v-else-if="showEmpty" description="暂无已安装的 DST 实例">
       <template #extra>
-        <NButton type="primary" @click="goToInstanceManagement">
+        <NButton type="primary" @click="goToInstanceManagement" v-if="hasPermission('instance:read')">
           前往实例管理
         </NButton>
       </template>

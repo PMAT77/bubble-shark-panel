@@ -30,7 +30,12 @@ export interface CapabilityCard {
   name: string
   tagline: string
   route: RouteLocationRaw
-  /** 访问该页面需要的权限点，与菜单里该页面的 `auth` 一致；无权时卡片置灰并说明原因 */
+  /**
+   * 访问该页面需要的权限点，与菜单里该模块的 `auth` 一致；不满足时卡片置灰并说明原因。
+   *
+   * 只要**模块自己的**读权限：每个模块的列表接口都按它自己的权限放行（房间页 `room:read`、
+   * 备份页 `backup:read`…），所以卡片不需要再叠一个「查看实例」。
+   */
   permission: PermissionKey
   features: string[]
 }

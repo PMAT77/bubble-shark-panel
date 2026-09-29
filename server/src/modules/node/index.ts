@@ -5,7 +5,7 @@ import os from 'node:os'
 import { collectHostResourceSnapshot } from '../../shared/host-metrics'
 import { listServerNodes, saveServerNode } from '../../shared/db/index'
 import { success } from '../../shared/http/response'
-import { requirePermission } from '../system/auth'
+import { requireAnyReadPermission, requirePermission } from '../system/auth'
 
 const LOCAL_NODE_ID = 'local-node'
 
@@ -89,7 +89,12 @@ export function registerNodeModule(app: FastifyInstance) {
   })
 
   app.post('/app/node/list', async (request): Promise<ApiSuccessResponse<NodeListItem[]> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, 'console.monitor:read')
+    /**
+     * 节点列表有两个消费方：「监控台」的运行环境卡片（`console.monitor:read`）与
+     * 「实例管理」页的节点选择（`instance:read`，创建实例时要选节点）。
+     * 只给实例权限的账号此前拿到 403，节点下拉是空的——**创建实例这一步直接做不下去**。
+     */
+    const authError = await requireAnyReadPermission(request, ['console.monitor:read', 'instance:read'])
     if (authError) {
       return authError
     }

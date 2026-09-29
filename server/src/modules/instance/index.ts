@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
-import type { DstInstanceSummariesDto } from '../../../../shared/contracts/dst-summary'
+import type {
+  PlayerSummariesDto,
+  RoomSummariesDto,
+  WorldSummariesDto,
+} from '../../../../shared/contracts/dst-summary'
 import {
   createInstanceBodySchema,
   instanceActionBodySchema,
@@ -13,6 +17,7 @@ import type {
   InstanceInstallLogPayload,
   InstanceListQuery,
   InstanceStatusCounts,
+  InstanceSummaryItem,
   InstallableGameItem,
 } from '../../../../shared/contracts/instance'
 import { randomUUID } from 'node:crypto'
@@ -90,7 +95,7 @@ import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-l
 import { registerInstanceMetricsRoute } from './metrics'
 import { registerMigrationExportRoutes } from './migration-export-routes'
 import { registerInstanceRoutes } from './instance-routes'
-import { getDstInstanceSummaries } from './dst-summary'
+import { getPlayerSummaries, getRoomSummaries, getWorldSummaries, toInstanceSummaryItem } from './dst-summary'
 import type { InstanceUpdateCheckJobStatus } from './update-check'
 import { readLocalBuildId } from '../../shared/steam-update/build-id'
 import {
@@ -102,7 +107,7 @@ import {
   resolveSteamcmdCommandForUpdateCheck,
   scheduleInstanceUpdateChecks,
 } from './update-check'
-import { authorizeInstance, requirePermission, resolveAuthorizedContext, resolveInstanceScope } from '../system/auth'
+import { authorizeInstance, requirePermission, resolveAnyReadPermission, resolveAuthorizedContext, resolveInstanceScope, resolveVisibleInstanceIds } from '../system/auth'
 import { loadServerConfig } from '../../shared/config'
 
 const LOCAL_NODE_ID = 'local-node'
@@ -409,27 +414,44 @@ async function reconcileInstanceRuntimeState(app: FastifyInstance): Promise<void
   await reconcileStaleInstallingInstances(app)
 }
 
+/**
+ * 列表类路由的公共前半段：**判这张列表自己的读权限** + 按实例授权过滤 + 把运行态同步到最新。
+ *
+ * `permission` 是这张列表自己的读权限点（房间列表 `room:read`、世界列表 `world:read`、
+ * 玩家列表 `player:read`），**不是** `instance:read`——那正是这次解耦的关键：
+ * 一个模块的列表只需要它自己的读权限，否则"看房间"会被迫等于"能看实例管理"。
+ */
+async function resolveVisibleInstances(
+  app: FastifyInstance,
+  request: FastifyRequest,
+  permission: PermissionKey,
+  payload: InstanceListQuery,
+): Promise<{ error?: ApiErrorResponse, instances?: Awaited<ReturnType<typeof listGameInstances>> }> {
+  const scope = await resolveInstanceScope(request, permission)
+  if (scope.error || !scope.instanceIds) {
+    return { error: scope.error ?? businessError('无法确定可见实例范围', request) }
+  }
+  await reconcileInstanceRuntimeState(app)
+  const instances = await listGameInstances({
+    nodeId: payload.nodeId?.trim() || undefined,
+    status: payload.status,
+    keyword: payload.keyword?.trim() || undefined,
+  })
+  // 可见范围是**过滤条件**而不是提示：没被授权的实例，连"存在过"都不该出现
+  const visible = new Set(scope.instanceIds)
+  return { instances: instances.filter(item => visible.has(item.id)) }
+}
+
 async function handleListInstances(
   app: FastifyInstance,
   request: FastifyRequest,
   payload: InstanceListQuery,
 ): Promise<ApiSuccessResponse<Awaited<ReturnType<typeof listGameInstances>>> | ApiErrorResponse> {
-  const scope = await resolveInstanceScope(request, 'instance:read')
-  if (scope.error || !scope.instanceIds) {
-    return scope.error ?? businessError('无法确定可见实例范围', request)
+  const resolved = await resolveVisibleInstances(app, request, 'instance:read', payload)
+  if (resolved.error || !resolved.instances) {
+    return resolved.error ?? businessError('无法确定可见实例范围', request)
   }
-  await reconcileInstanceRuntimeState(app)
-  const status = payload.status
-  const instances = await listGameInstances({
-    nodeId: payload.nodeId?.trim() || undefined,
-    status: status && ['pending_install', 'running', 'stopped', 'installing', 'error'].includes(status)
-      ? status
-      : undefined,
-    keyword: payload.keyword?.trim() || undefined,
-  })
-  // 可见范围是**过滤条件**而不是提示：没被授权的实例，连"存在过"都不该出现
-  const visible = new Set(scope.instanceIds)
-  return success(instances.filter(item => visible.has(item.id)), request)
+  return success(resolved.instances, request)
 }
 
 /** 单次遍历统计各状态实例数（全量口径，供统计卡使用） */
@@ -512,23 +534,85 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     return success(countInstanceStatus(instances.filter(item => visible.has(item.id))), request)
   })
 
-  app.post('/app/instance/dst-summaries', async (request): Promise<ApiSuccessResponse<DstInstanceSummariesDto> | ApiErrorResponse> => {
+  /**
+   * 三个「按模块投影」的列表接口：房间 / 世界 / 玩家。
+   *
+   * 为什么不是一个共用接口：菜单可见性的唯一判据是**读权限点**，而这些列表页各有自己的
+   * 读权限。共用一个要求 `instance:read` 的接口，就会逼出"取消「查看实例」把房间/世界/玩家
+   * （以及 Mod/备份/计划任务/成员管理）的菜单一起收走"这种耦合。拆开之后，每个模块自己的
+   * 读权限就够用，返回的数据也只剩这一页要用的字段。
+   */
+  app.post('/app/instance/room-summaries', async (request): Promise<ApiSuccessResponse<RoomSummariesDto> | ApiErrorResponse> => {
     const body = instanceListQuerySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
     }
-    const scope = await resolveInstanceScope(request, 'instance:read')
-    if (scope.error || !scope.instanceIds) {
-      return scope.error ?? businessError('无法确定可见实例范围', request)
+    const resolved = await resolveVisibleInstances(app, request, 'room:read', body.data)
+    if (resolved.error || !resolved.instances) {
+      return resolved.error ?? businessError('无法确定可见实例范围', request)
     }
+    return success(await getRoomSummaries(resolved.instances), request)
+  })
+
+  app.post('/app/instance/world-summaries', async (request): Promise<ApiSuccessResponse<WorldSummariesDto> | ApiErrorResponse> => {
+    const body = instanceListQuerySchema.safeParse(request.body ?? {})
+    if (!body.success) {
+      return businessError('请求参数无效', request)
+    }
+    const resolved = await resolveVisibleInstances(app, request, 'world:read', body.data)
+    if (resolved.error || !resolved.instances) {
+      return resolved.error ?? businessError('无法确定可见实例范围', request)
+    }
+    return success(await getWorldSummaries(resolved.instances), request)
+  })
+
+  app.post('/app/instance/player-summaries', async (request): Promise<ApiSuccessResponse<PlayerSummariesDto> | ApiErrorResponse> => {
+    const body = instanceListQuerySchema.safeParse(request.body ?? {})
+    if (!body.success) {
+      return businessError('请求参数无效', request)
+    }
+    const resolved = await resolveVisibleInstances(app, request, 'player:read', body.data)
+    if (resolved.error || !resolved.instances) {
+      return resolved.error ?? businessError('无法确定可见实例范围', request)
+    }
+    return success(await getPlayerSummaries(resolved.instances), request)
+  })
+
+  /**
+   * 实例标识选项：给「要在界面上选一个实例」的模块用——Mod 订阅、建存档备份、
+   * 建计划任务、给成员分配实例。
+   *
+   * 只返回 `instanceSummaryItemSchema`（id / 名称 / 游戏 / 状态 / 最近错误），
+   * **不含安装路径、端口与节点**；范围照旧按实例授权过滤。
+   * 权限是"任一能在界面上看到实例的读权限点"，所以这些模块的菜单只需要自己的那个读权限。
+   */
+  app.post('/app/instance/options', async (request): Promise<ApiSuccessResponse<InstanceSummaryItem[]> | ApiErrorResponse> => {
+    const body = instanceListQuerySchema.safeParse(request.body ?? {})
+    if (!body.success) {
+      return businessError('请求参数无效', request)
+    }
+    const auth = await resolveAnyReadPermission(request, [
+      'instance:read',
+      'mod:read',
+      'backup:read',
+      'schedule:read',
+      'member:read',
+      'player:read',
+    ])
+    if (auth.error || !auth.context) {
+      return auth.error ?? businessError('无法确定可见实例范围', request)
+    }
+    const visible = new Set(await resolveVisibleInstanceIds(request, auth.context.user.id))
     await reconcileInstanceRuntimeState(app)
     const instances = await listGameInstances({
       nodeId: body.data.nodeId?.trim() || undefined,
       status: body.data.status,
       keyword: body.data.keyword?.trim() || undefined,
     })
-    const visible = new Set(scope.instanceIds)
-    return success(await getDstInstanceSummaries(instances.filter(item => visible.has(item.id))), request)
+    return success(
+      instances.filter(item => visible.has(item.id)).map(toInstanceSummaryItem),
+      request,
+    )
   })
 
   app.get('/app/instance/games', async (request): Promise<ApiSuccessResponse<InstallableGameItem[]> | ApiErrorResponse> => {

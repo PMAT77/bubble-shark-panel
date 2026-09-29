@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import type {
   DirectoryItem,
@@ -54,12 +54,13 @@ import {
   getSystemNetworkConfig,
   getSystemPanelSettings,
   getSystemSteamcmdConfig,
+  findRoleKindByUserId,
   saveSystemNetworkConfig,
   saveSystemPanelSettings,
   saveSystemSteamcmdConfig,
 } from '../../shared/db/index'
 import { businessError, success } from '../../shared/http/response'
-import { requirePermission } from './auth'
+import { requireAnyReadPermission, requirePermission, resolveAuthorizedContext } from './auth'
 import {
   getDefaultNetworkConfig,
   getDefaultPanelSettings,
@@ -100,6 +101,21 @@ import { collectSelfCheckReport } from './self-check'
 import { createPluginRuntime } from '../../plugins/host'
 import type { PluginRuntime } from '../../plugins/host'
 import { PLUGIN_HOST_API_VERSION } from '../../../../shared/contracts/plugin'
+
+/**
+ * 这个请求是不是来自游客（只读预览）账号。
+ *
+ * 用于把「公开预览不该看到」的字段从响应里摘掉，而不是把整个接口拒掉——
+ * 游客看监控台的价值全在指标本身，摘掉主机指纹不影响它。
+ * 鉴权已经在调用方做过，这里只补一次角色查询（一次单表查询，且请求级已有缓存）。
+ */
+async function requestComesFromGuest(request: FastifyRequest): Promise<boolean> {
+  const auth = await resolveAuthorizedContext(request)
+  if (!auth.context) {
+    return false
+  }
+  return await findRoleKindByUserId(auth.context.user.id) === 'guest'
+}
 
 /**
  * system 模块注册入口
@@ -307,7 +323,13 @@ export function registerSystemModule(app: FastifyInstance) {
     httpProxyConfigured: boolean
     httpsProxyConfigured: boolean
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, 'settings:read')
+    /**
+     * 这一份配置同时服务两个页面：「系统设置」（`settings:read`）与「实例管理」里的
+     * 运行环境面板（`instance:read`，安装 SteamCMD 与游戏服务端）。只给实例权限的账号
+     * 此前拿到 403，界面上表现为"运行环境未就绪"——于是它连"创建实例"都被禁用。
+     * 改配置仍然只认 `settings:write`。
+     */
+    const authError = await requireAnyReadPermission(request, ['settings:read', 'instance:read'])
     if (authError) {
       return authError
     }
@@ -574,10 +596,24 @@ export function registerSystemModule(app: FastifyInstance) {
     runtimeStatus: 'running' | 'stopped'
     dockerStatus: 'running' | 'stopped'
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, 'settings:read')
+    /**
+     * 主机指标的消费方是「监控台」：它的权限点就是 `console.monitor:read`，说明里写的是
+     * "查看主机 CPU / 内存 / 磁盘 / 网络与运行环境信息"，而这里返回的正是这些东西。
+     * 此前只要求 `settings:read`，于是"只看监控"的角色一进监控台就是 403——
+     * 监控权限点等于形同虚设。系统设置页同样消费它，所以两个权限点任一即可。
+     */
+    const authError = await requireAnyReadPermission(request, ['settings:read', 'console.monitor:read'])
     if (authError) {
       return authError
     }
+    /**
+     * 主机指纹对"只读预览"没有价值，对"找目标"很有价值。
+     *
+     * 游客拿到的这份数据里，`hostname` / 内核版本 / CPU 型号是最典型的"这台机器长什么样"，
+     * 而预览真正需要的是 CPU / 内存 / 磁盘 / 网络这些**相对量**——它们照常返回。
+     * 所以这里只对游客收敛指纹字段，不改变任何指标的数值。
+     */
+    const isGuest = await requestComesFromGuest(request)
     const cpuInfo = os.cpus()
     const cpuCores = Math.max(1, cpuInfo.length)
     const cpuUsageRate = getCpuUsageRate()
@@ -639,7 +675,7 @@ export function registerSystemModule(app: FastifyInstance) {
     return success({
       cpu: {
         cores: cpuCores,
-        model: cpuInfo[0]?.model ?? 'unknown',
+        model: isGuest ? '' : (cpuInfo[0]?.model ?? 'unknown'),
         usageRate: cpuUsageRate,
       },
       load,
@@ -655,9 +691,9 @@ export function registerSystemModule(app: FastifyInstance) {
       disk: diskUsage,
       os: {
         platform: os.platform(),
-        release: os.release(),
+        release: isGuest ? '' : os.release(),
         arch: os.arch(),
-        hostname: os.hostname(),
+        hostname: isGuest ? '' : os.hostname(),
       },
       panelVersion: getCachedPanelVersion(),
       runtimeMode: loadServerConfig().runtimeMode,
@@ -678,7 +714,8 @@ export function registerSystemModule(app: FastifyInstance) {
       totalReceivedBytes: number
     }>
   }> | ApiErrorResponse> => {
-    const authError = await requirePermission(request, 'settings:read')
+    // 实时网卡流量也是监控台的一屏：与 `/app/system/info` 同一条口径（任一读权限即可）
+    const authError = await requireAnyReadPermission(request, ['settings:read', 'console.monitor:read'])
     if (authError) {
       return authError
     }

@@ -47,8 +47,17 @@ function maskPreview(configJson: string): NotifyChannelItem['configPreview'] {
   }))
 }
 
-async function authorize(request: FastifyRequest): Promise<ApiErrorResponse | undefined> {
-  const auth = await resolveAuthorizedContext(request, { permissions: 'settings:write' })
+/**
+ * 通知渠道与阈值的读写鉴权。
+ *
+ * **读接口必须只要求 `settings:read`**：通知渠道是系统设置页里的一个 tab，
+ * 只读账号（游客角色）能进系统设置页，若列表/读取也要求 `settings:write`，
+ * 这个 tab 一打开就是 403，与"只读账号能看所有页面"的定位冲突。
+ *
+ * 渠道列表只回显"哪些字段已配置"（`maskPreview`），不回显任何凭据值，读权限足够安全。
+ */
+async function authorize(request: FastifyRequest, permission: 'settings:read' | 'settings:write'): Promise<ApiErrorResponse | undefined> {
+  const auth = await resolveAuthorizedContext(request, { permissions: permission })
   if (auth.error || !auth.context) {
     return auth.error ?? businessError('登录状态失效，请重新登录', request)
   }
@@ -61,7 +70,7 @@ async function authorize(request: FastifyRequest): Promise<ApiErrorResponse | un
  */
 export function registerNotifyModule(app: FastifyInstance) {
   app.post('/app/notify/channel/list', async (request): Promise<ApiSuccessResponse<NotifyChannelItem[]> | ApiErrorResponse> => {
-    const authError = await authorize(request)
+    const authError = await authorize(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -80,7 +89,7 @@ export function registerNotifyModule(app: FastifyInstance) {
   })
 
   app.post('/app/notify/channel/create', async (request): Promise<ApiSuccessResponse<NotifyMutationResult> | ApiErrorResponse> => {
-    const authError = await authorize(request)
+    const authError = await authorize(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -112,7 +121,7 @@ export function registerNotifyModule(app: FastifyInstance) {
   })
 
   app.post('/app/notify/channel/update', async (request): Promise<ApiSuccessResponse<NotifyMutationResult> | ApiErrorResponse> => {
-    const authError = await authorize(request)
+    const authError = await authorize(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -162,7 +171,7 @@ export function registerNotifyModule(app: FastifyInstance) {
   })
 
   app.post('/app/notify/channel/delete', async (request): Promise<ApiSuccessResponse<NotifyMutationResult> | ApiErrorResponse> => {
-    const authError = await authorize(request)
+    const authError = await authorize(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -178,7 +187,7 @@ export function registerNotifyModule(app: FastifyInstance) {
   })
 
   app.post('/app/notify/channel/test', async (request): Promise<ApiSuccessResponse<NotifyTestResult> | ApiErrorResponse> => {
-    const authError = await authorize(request)
+    const authError = await authorize(request, 'settings:write')
     if (authError) {
       return authError
     }
@@ -197,7 +206,7 @@ export function registerNotifyModule(app: FastifyInstance) {
   })
 
   app.post('/app/notify/settings/get', async (request): Promise<ApiSuccessResponse<NotifySettings> | ApiErrorResponse> => {
-    const authError = await authorize(request)
+    const authError = await authorize(request, 'settings:read')
     if (authError) {
       return authError
     }
@@ -210,7 +219,7 @@ export function registerNotifyModule(app: FastifyInstance) {
   })
 
   app.post('/app/notify/settings/save', async (request): Promise<ApiSuccessResponse<NotifySettings> | ApiErrorResponse> => {
-    const authError = await authorize(request)
+    const authError = await authorize(request, 'settings:write')
     if (authError) {
       return authError
     }

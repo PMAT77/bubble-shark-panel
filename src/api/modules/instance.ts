@@ -26,6 +26,7 @@ import type {
   InstanceStatus,
   InstanceStatusCounts,
   InstanceStatusCountsQuery,
+  InstanceSummaryItem,
   InstanceUpdateCheckJobPayload,
   InstanceWorldStateDto,
   InstallableGameItem,
@@ -58,6 +59,7 @@ export type {
   InstanceStatus,
   InstanceStatusCounts,
   InstanceStatusCountsQuery,
+  InstanceSummaryItem,
   InstanceUpdateCheckJobPayload,
   InstallableGameItem,
 }
@@ -72,6 +74,14 @@ export type InstanceMaintenancePushResult = InstanceMaintenancePushResultDto
 
 export default {
   getInstanceList: (data?: InstanceListQuery) => api.post('app/instance/list', data),
+  /**
+   * 实例标识选项：给"要在界面上选一个实例"的模块用（Mod、备份、计划任务、成员授权）。
+   *
+   * 与 `getInstanceList` 的区别：只回 id/名称/游戏/状态/最近错误，**不含安装路径与端口**，
+   * 且只要求调用方有自己模块的读权限点（`mod:read` / `backup:read` / `schedule:read` /
+   * `member:read` / `instance:read` 任一），所以这些页面的菜单不必依赖「查看实例」。
+   */
+  getInstanceOptions: (data?: InstanceListQuery) => api.post('app/instance/options', data) as Promise<{ data: InstanceSummaryItem[] }>,
   getInstanceStatusCounts: (data?: InstanceStatusCountsQuery) => api.post('app/instance/status-counts', data) as Promise<{ data: InstanceStatusCounts }>,
   getInstanceMetrics: (ids?: string[]) => api.post('app/instance/metrics', ids?.length ? { ids } : {}) as Promise<{ data: InstanceMetricsPayload }>,
   getInstallableGames: () => api.get('app/instance/games') as Promise<{ data: InstallableGameItem[] }>,

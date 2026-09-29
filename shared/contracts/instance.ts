@@ -172,6 +172,27 @@ export const instanceItemSchema = z.object({
 })
 export type InstanceItem = z.infer<typeof instanceItemSchema>
 
+/**
+ * 「实例标识」：给**不是实例管理模块**的页面用的最小投影。
+ *
+ * 为什么单独一个 schema：房间/世界/玩家/Mod/备份/计划任务/成员这些页面要列出"我能管的实例"
+ * （或给出目标实例下拉），但它们不需要安装路径、端口、节点这些信息。此前它们直接调
+ * `/app/instance/list`（要求 `instance:read`），于是"看房间"被迫等于"能看实例管理"；
+ * 现在它们走 `/app/instance/options`，只拿这里的字段，权限也只需要自己的那个读权限点。
+ *
+ * 字段恰好够用：`status/lastError/lastCommand` 是 `getInstanceState()` 判定
+ * 「安装失败 / 运行异常」的输入，`gameCode` 用于筛出本游戏的实例。
+ */
+export const instanceSummaryItemSchema = z.object({
+  id: instanceIdSchema,
+  name: z.string(),
+  gameCode: z.string(),
+  status: instanceStatusSchema,
+  lastError: z.string().nullable(),
+  lastCommand: z.string().nullable(),
+})
+export type InstanceSummaryItem = z.infer<typeof instanceSummaryItemSchema>
+
 /** 世界运行时状态查询（通过游戏内指令回读，仅运行中实例可用） */
 export const instanceWorldStateQuerySchema = z.object({
   instanceId: instanceIdSchema,

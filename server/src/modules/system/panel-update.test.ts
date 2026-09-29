@@ -74,6 +74,10 @@ function buildConfig(partial: Partial<ServerConfig>): ServerConfig {
     syncAdminPasswordFromEnv: false,
     passwordRecoveryToken: '',
     corsOrigin: false,
+    // 游客免密登录默认关闭；本文件只测面板更新链路，与它无关
+    guestLoginEnabled: false,
+    guestLoginRequested: false,
+    guestLoginAccount: 'guest',
     ...partial,
   }
 }

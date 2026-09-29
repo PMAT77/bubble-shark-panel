@@ -273,12 +273,54 @@ export function registerConsoleModule(app: FastifyInstance) {
       return
     }
     const { instanceId, streamTicket } = query.data
-    if (!consoleStreamTicketStore.consume(streamTicket, instanceId)) {
+    const ticketRecord = consoleStreamTicketStore.consume(streamTicket, instanceId)
+    if (!ticketRecord) {
       reply.status(401).send(businessError('Console stream authorization expired or is invalid', request))
       return
     }
-    const resolved = await resolveLocalInstance(instanceId, request)
+
+    /**
+     * 同一账号的并发流上限。
+     *
+     * 票据是一次性的，但账号可以反复签票——所以票据制不构成任何并发上限。
+     * 没有这道闸门时，一个已登录的游客就能挂着一串 SSE 长连接，每条都在服务端留一个
+     * 订阅回调与一个 15 秒心跳。上限的取值与理由见 `stream-ticket.ts`。
+     */
+    const streamOwner = consoleStreamTicketStore.openStream(ticketRecord.userId)
+    if (!streamOwner) {
+      reply.status(429).send(businessError(
+        `同时打开的日志流过多（上限 ${consoleStreamTicketStore.maxStreamsPerUser} 条），请关闭其它控制台页面后重试`,
+        request,
+      ))
+      return
+    }
+
+    /**
+     * 从这里开始"名额已占用"，**每条出口都必须释放**。
+     *
+     * 下面所有提前 return 与异常都走 `releaseStream()`；正式建立流之后交给
+     * `request.raw` 的 `close` 事件释放。少释放一次的后果不是"少一条日志"，
+     * 而是那个账号的名额被永久占住——重启面板才能恢复。
+     */
+    let streamReleased = false
+    const releaseStream = () => {
+      if (streamReleased) {
+        return
+      }
+      streamReleased = true
+      consoleStreamTicketStore.closeStream(streamOwner)
+    }
+
+    let resolved: Awaited<ReturnType<typeof resolveLocalInstance>>
+    try {
+      resolved = await resolveLocalInstance(instanceId, request)
+    }
+    catch (error) {
+      releaseStream()
+      throw error
+    }
     if (!resolved.ok) {
+      releaseStream()
       reply.status(400).send(resolved.error)
       return
     }
@@ -310,6 +352,8 @@ export function registerConsoleModule(app: FastifyInstance) {
     request.raw.on('close', () => {
       clearInterval(heartbeat)
       unsubscribe()
+      // 名额释放必须和 openStream 配对：漏掉一处，那个账号就再也开不了日志流
+      releaseStream()
       reply.raw.end()
     })
   })

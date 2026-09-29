@@ -4,6 +4,8 @@
 [![CI](https://github.com/PMAT77/game-serve-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/PMAT77/game-serve-hub/actions/workflows/ci.yml)
 ![Public Beta](https://img.shields.io/badge/status-Public%20Beta-orange)
 
+![Game Server Hub 面板预览](https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/game-server-hub/GameServer_B_0925.png)
+
 面向 Steam 专用服务器的开源运维面板。当前以《饥荒联机版》（DST）为首个完整适配游戏，提供安装、更新、启停、监控、日志、控制台、世界和 Mod 管理。
 
 ## 适合谁

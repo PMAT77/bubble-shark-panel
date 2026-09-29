@@ -61,6 +61,35 @@ describe('单栏菜单模式下的模块入口', () => {
     assert.notEqual(settings.meta?.menu, false, '入口必须是可见项，否则渲染层会直接跳过它')
   })
 
+  it('拆出来的成员管理与角色管理同样是单页模块：single 模式下各自一个可见入口', () => {
+    /**
+     * 本项目 `src/settings.ts` 的菜单布局就是 `single`，所以这两个模块的入口**只**存在于
+     * 这里：它们没有多页模块那样的「容器呈现为可点单项」，页面自身又是 `menu: false`，
+     * 平铺一旦失效，左侧菜单里就会整个少一项（「系统设置」当初就是这样消失的）。
+     */
+    const menus = flattenForSingleMode()
+    const cases = [
+      { title: '成员管理', path: FRONTEND_ROUTE_PATHS.membersList },
+      { title: '角色管理', path: FRONTEND_ROUTE_PATHS.roles },
+    ]
+
+    for (const { title, path } of cases) {
+      const entry = menus.find(menu => menu.path === path)
+      assert.ok(
+        entry,
+        `single 模式下左侧菜单里应当有「${title}」，实际：${visibleTitles(menus).join('、')}`,
+      )
+      assert.equal(entry.meta?.title, title, '入口文字应当取模块名，页面改名不该让它漂移')
+      assert.notEqual(entry.meta?.menu, false, '入口必须是可见项，否则渲染层会直接跳过它')
+      assert.equal(entry.children, undefined, '入口必须是叶子项，不能带出可展开的空子菜单')
+      assert.equal(
+        entry.meta?.auth,
+        menuRouteList.find(module => module.meta.title === title)?.children?.[0]?.meta.auth,
+        '平铺只负责可见性，权限过滤仍由 filterAsyncMenus 按 auth 判断',
+      )
+    }
+  })
+
   it('单页模块的权限点原样保留：只读账号不会多出一个点进去吃 403 的入口', () => {
     const settingsPage = menuRouteList
       .find(module => module.meta.title === '系统设置')

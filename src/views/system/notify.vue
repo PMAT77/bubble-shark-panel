@@ -17,6 +17,9 @@ defineOptions({
 
 const dialog = useDialog()
 
+// 通知渠道与阈值都是面板设置的一部分：只读账号（游客角色）能看列表与阈值，但改不了
+const { auth: hasPermission } = useAppAuth()
+
 const rows = ref<NotifyChannelItem[]>([])
 const settings = ref<NotifySettings>({
   enabled: true,
@@ -261,23 +264,34 @@ const columns = computed<DataTableColumns<NotifyChannelItem>>(() => [
     title: '启用',
     key: 'enabled',
     width: 80,
-    render: row => h(NSwitch, {
-      value: row.enabled,
-      size: 'small',
-      onUpdateValue: (value: boolean) => toggleEnabled(row, value),
-    }),
+    render: (row) => {
+      // 只读账号不给开关：能看渠道是否启用，改不了
+      if (!hasPermission('settings:write')) {
+        return h(NTag, { size: 'small', bordered: false }, { default: () => (row.enabled ? '已启用' : '已停用') })
+      }
+      return h(NSwitch, {
+        value: row.enabled,
+        size: 'small',
+        onUpdateValue: (value: boolean) => toggleEnabled(row, value),
+      })
+    },
   },
   {
     title: '操作',
     key: 'actions',
     width: 190,
-    render: row => h(NSpace, { size: 8, wrap: false }, {
-      default: () => [
-        h(NButton, { size: 'small', secondary: true, disabled: !row.enabled, onClick: () => testChannel(row) }, { default: () => '测试' }),
-        h(NButton, { size: 'small', secondary: true, onClick: () => openEditDialog(row) }, { default: () => '编辑' }),
-        h(NButton, { size: 'small', secondary: true, type: 'error', onClick: () => removeChannel(row) }, { default: () => '删除' }),
-      ],
-    }),
+    render: (row) => {
+      if (!hasPermission('settings:write')) {
+        return ''
+      }
+      return h(NSpace, { size: 8, wrap: false }, {
+        default: () => [
+          h(NButton, { size: 'small', secondary: true, disabled: !row.enabled, onClick: () => testChannel(row) }, { default: () => '测试' }),
+          h(NButton, { size: 'small', secondary: true, onClick: () => openEditDialog(row) }, { default: () => '编辑' }),
+          h(NButton, { size: 'small', secondary: true, type: 'error', onClick: () => removeChannel(row) }, { default: () => '删除' }),
+        ],
+      })
+    },
   },
 ])
 </script>
@@ -300,7 +314,7 @@ const columns = computed<DataTableColumns<NotifyChannelItem>>(() => [
       <NFormItem label="磁盘占用超过（%）时提醒">
         <NInputNumber v-model:value="settings.thresholds.diskPercent" :min="1" :max="100" class="w-full" />
       </NFormItem>
-      <NButton type="primary" :loading="settingsSaving" @click="saveSettings">
+      <NButton type="primary" :loading="settingsSaving" @click="saveSettings" v-if="hasPermission('settings:write')">
         保存设置
       </NButton>
     </NForm>
@@ -309,7 +323,7 @@ const columns = computed<DataTableColumns<NotifyChannelItem>>(() => [
       <div class="text-sm opacity-70">
         告警事件：实例异常退出、CPU / 内存 / 磁盘占用过高、计划任务备份结果。
       </div>
-      <NButton type="primary" @click="openCreateDialog">
+      <NButton type="primary" @click="openCreateDialog" v-if="hasPermission('settings:write')">
         新建渠道
       </NButton>
     </div>
@@ -365,7 +379,7 @@ const columns = computed<DataTableColumns<NotifyChannelItem>>(() => [
           <NButton @click="editorVisible = false">
             取消
           </NButton>
-          <NButton type="primary" @click="submitEditor">
+          <NButton type="primary" @click="submitEditor" v-if="hasPermission('settings:write')">
             {{ editorIsEdit ? '保存' : '创建' }}
           </NButton>
         </NSpace>

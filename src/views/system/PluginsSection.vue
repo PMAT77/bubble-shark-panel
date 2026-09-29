@@ -29,7 +29,12 @@ import {
  *    服务端明确标为可获取的条目上出现，且只负责把人送到面板之外的人工渠道；
  * 2. **尚未开发的能力不给按钮**：`planned` 卡片只有说明，没有入口。
  *    给它配一个能点的按钮，无论叫什么，都是对用户的虚假承诺。
+ *
+ * 权限：启停、导入、卡片上的获取入口都要 `plugin:manage`——只读账号（游客角色）
+ * 能看插件清单与调用记录，但一个都点不动。
  */
+const { auth: hasPermission } = useAppAuth()
+
 defineOptions({
   name: 'SystemPluginsSection',
 })
@@ -162,6 +167,15 @@ async function handleSubscribe() {
   supportLoading.value = true
   try {
     if (!support.value) {
+      /**
+       * 联系方式与购买入口来自 `/app/system/commercial`（license:read）。
+       * 没有这个权限时不必发请求：直接展开本地联系方式卡片——
+       * 用户点「订阅」的意图是"我要怎么联系你们"，而不是"看授权状态"。
+       */
+      if (!hasPermission('license:read')) {
+        contactVisible.value = true
+        return
+      }
       const { data } = await apiSystem.getCommercialSupport()
       support.value = data
     }
@@ -229,7 +243,7 @@ onMounted(loadPlugins)
       <NButton size="small" :loading="loading" @click="loadPlugins">
         刷新
       </NButton>
-      <NButton size="small" type="primary" @click="importVisible = true">
+      <NButton size="small" type="primary" @click="importVisible = true" v-if="hasPermission('plugin:manage')">
         导入插件包
       </NButton>
     </div>
@@ -258,10 +272,14 @@ onMounted(loadPlugins)
                 </NTag>
                 <span class="ml-auto">
                   <NSwitch
+                    v-if="hasPermission('plugin:manage')"
                     :value="entry.item.enabled"
                     :disabled="entry.item.state === 'invalid' || toggling === entry.item.id"
                     @update:value="value => handleToggle(entry.item, value)"
                   />
+                  <NTag v-else size="small" :bordered="false">
+                    {{ entry.item.enabled ? '已启用' : '已停用' }}
+                  </NTag>
                 </span>
               </div>
 
@@ -390,7 +408,7 @@ onMounted(loadPlugins)
                         详情
                       </NButton>
                       <NButton
-                        v-if="entry.action.action === 'subscribe'"
+                        v-if="hasPermission('plugin:manage') && entry.action.action === 'subscribe'"
                         size="tiny"
                         type="primary"
                         :loading="supportLoading"
@@ -399,7 +417,7 @@ onMounted(loadPlugins)
                         {{ entry.action.label }}
                       </NButton>
                       <NButton
-                        v-else-if="entry.action.action === 'import'"
+                        v-else-if="hasPermission('plugin:manage') && entry.action.action === 'import'"
                         size="tiny"
                         type="primary"
                         @click="importVisible = true"

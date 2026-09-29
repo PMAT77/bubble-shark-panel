@@ -182,6 +182,12 @@ export const useAppMenuStore = defineStore(
     function filterAsyncMenus<T extends MenuRecordMainRaw[] | MenuRecordRaw[]>(menus: T): T {
       const res: any = []
       menus.forEach((menu) => {
+        /**
+         * 菜单的可见性只看 `auth`：一个菜单项由它**自己的**读权限决定
+         * （跨模块数据由接口按各自权限放行，不给菜单加别的模块的权限）。
+         * 服务端 `filterMenuRoutes` 已经按同一套规则过滤过一遍，这里是第二道闸：
+         * `routeBaseOn: 'frontend'` 的部署形态下没有服务端菜单接口兜底。
+         */
         if (auth.auth((menu.meta?.auth ?? '') as PermissionKey | PermissionKey[] | '')) {
           const tmpMenu = cloneDeep(menu)
           if (tmpMenu.children && tmpMenu.children.length > 0) {

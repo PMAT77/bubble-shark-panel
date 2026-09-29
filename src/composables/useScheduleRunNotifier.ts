@@ -1,4 +1,4 @@
-import type { InstanceItem } from '@/api/modules/instance'
+import type { InstanceSummaryItem } from '@/api/modules/instance'
 import type { ScheduleRunBaseline, ScheduleTriggerNotice } from '@/views/ops/schedules/scheduleRunNotification'
 import { useNotification } from 'naive-ui'
 import apiInstance from '@/api/modules/instance'
@@ -32,8 +32,12 @@ async function loadInstanceNamesOnce(): Promise<void> {
   if (instanceNamesLoaded) {
     return
   }
-  const response = await apiInstance.getInstanceList()
-  for (const item of (response.data ?? []) as InstanceItem[]) {
+  /**
+   * 只要 id → 名称（通知里把任务目标写成实例名），走标识接口即可：
+   * 它对 `schedule:read` 也放行，所以只有计划任务权限的账号不会在这一步吃 403。
+   */
+  const response = await apiInstance.getInstanceOptions()
+  for (const item of (response.data ?? []) as InstanceSummaryItem[]) {
     instanceNames.set(item.id, item.name)
   }
   instanceNamesLoaded = true

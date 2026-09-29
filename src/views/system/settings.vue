@@ -19,6 +19,9 @@ defineOptions({
 const loading = ref(false)
 const dialog = useDialog()
 
+// 面板设置是写权限：只读账号（游客角色）能看这一页，但保存与面板更新入口不给
+const { auth: hasPermission } = useAppAuth()
+
 const appSettingsStore = useAppSettingsStore()
 const settingsLoaded = ref(false)
 const settingsLoadError = ref<string | null>(null)
@@ -426,6 +429,16 @@ async function resumeUpdatePollingIfNeeded() {
 }
 
 onMounted(async () => {
+  /**
+   * 没有「查看面板设置」权限时一个请求都不发。
+   *
+   * 这一页对「查看操作记录」权限也开着（菜单是任一语义），那种账号进来只该看到
+   * 操作记录 tab——tab 已经按权限过滤，这里再把首屏请求也拦掉，免得刷出一串 403
+   * 并让 `settingsLoadError` 把内容区变成错误提示。
+   */
+  if (!hasPermission('settings:read')) {
+    return
+  }
   await Promise.all([loadSettings(), loadUpdateStatus()])
   await resumeUpdatePollingIfNeeded()
 })
@@ -433,24 +446,30 @@ onMounted(async () => {
 
 <template>
   <FaPageMain class="h-full gap-4">
-    <NSpin v-if="loading" size="large" class="block mx-auto my-8" />
-    <div v-else-if="settingsLoadError || !settingsLoaded" class="space-y-4" role="alert">
-      <NAlert type="error" title="无法加载系统设置">
-        {{ settingsLoadError ?? '当前设置不可用，请重新加载后再编辑。' }}
-      </NAlert>
-      <FaButton :loading="loading" @click="loadSettings">
-        重试加载
-      </FaButton>
+    <div>
+      <h2 class="m-0 text-lg font-semibold">
+        系统设置
+      </h2> 
     </div>
-    <template v-else>
-      <div>
-        <h2 class="m-0 text-lg font-semibold">
-          系统设置
-        </h2> 
-      </div>
-      <SystemSettingsTabs>
-        <template #settings>
-          <div class="space-y-6">
+    <SystemSettingsTabs>
+      <template #settings>
+        <!--
+          加载态与失败态收在「面板设置」这个 tab 里面，而不是顶掉整页。
+
+          为什么：菜单对「系统设置」是任一语义，只勾「查看操作记录」的账号也进得来。
+          此前这两个请求（settings:read）失败后整页显示"无法加载系统设置"，
+          于是**有操作记录权限的账号反而看不到操作记录**——自己有权的那一屏也被挡住了。
+        -->
+        <NSpin v-if="loading" size="large" class="block mx-auto my-8" />
+        <div v-else-if="settingsLoadError || !settingsLoaded" class="space-y-4" role="alert">
+          <NAlert type="error" title="无法加载系统设置">
+            {{ settingsLoadError ?? '当前设置不可用，请重新加载后再编辑。' }}
+          </NAlert>
+          <FaButton :loading="loading" @click="loadSettings">
+            重试加载
+          </FaButton>
+        </div>
+        <div v-else class="space-y-6">
             <AdminSettingsSection
               :title="portFieldTitle"
               :description="portFieldDescription"
@@ -516,7 +535,7 @@ onMounted(async () => {
               </div>
 
               <div class="space-y-2 pt-1">
-                <div class="flex flex-wrap gap-2">
+                <div v-if="hasPermission('settings:write')" class="flex flex-wrap gap-2">
                   <FaButton
                     :loading="updateButtonLoading"
                     :disabled="updateButtonDisabled"
@@ -602,6 +621,7 @@ onMounted(async () => {
             </AdminSettingsSection>
 
             <ConfigActionBar
+              v-if="hasPermission('settings:write')"
               :dirty="settingsDirty"
               :busy="saveLoading"
               :saving="saveLoading"
@@ -610,17 +630,16 @@ onMounted(async () => {
               @reset="loadSettings"
               @save="saveSettings"
             />
-          </div>
-        </template>
+        </div>
+      </template>
 
-        <template #notify>
-          <NotifyPanel />
-        </template>
+      <template #notify>
+        <NotifyPanel />
+      </template>
 
-        <template #audit>
-          <OperationAuditSection />
-        </template>
-      </SystemSettingsTabs>
-    </template>
+      <template #audit>
+        <OperationAuditSection />
+      </template>
+    </SystemSettingsTabs>
   </FaPageMain>
 </template>

@@ -26,6 +26,8 @@ const emit = defineEmits<{
 }>()
 
 const fileInput = ref<HTMLInputElement | null>(null)
+// 导入插件包要 plugin:manage：只读账号看不到入口，这里再兜一层
+const { auth: hasPermission } = useAppAuth()
 const inspecting = ref(false)
 const importing = ref(false)
 const inspected = ref<PluginImportInspectResult | null>(null)
@@ -188,6 +190,7 @@ function readErrorMessage(error: unknown, fallback: string): string {
           :disabled="!analysis"
           :loading="importing"
           @click="confirmImport"
+          v-if="hasPermission('plugin:manage')"
         >
           确认导入
         </NButton>

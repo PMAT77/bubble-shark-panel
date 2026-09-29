@@ -13,6 +13,7 @@ import MainSidebar from './components/MainSidebar/index.vue'
 import SubSidebar from './components/SubSidebar/index.vue'
 import Topbar from './components/Topbar/index.vue'
 import LinkView from './components/views/link.vue'
+import { useGuestModeNotice } from '@/composables/useGuestModeNotice'
 import { usePanelUpdateNotifier } from '@/composables/usePanelUpdateNotifier'
 import { usePanelVersionGuard } from '@/composables/usePanelVersionGuard'
 import { useScheduleRunNotifier } from '@/composables/useScheduleRunNotifier'
@@ -27,6 +28,8 @@ usePanelUpdateNotifier()
 // 面板升级后旧标签页仍跑旧脚本：这里负责把它喊出来（只提示，不自动刷新）
 usePanelVersionGuard()
 useScheduleRunNotifier()
+// 游客角色只读：右上角常驻一条提示，说清"为什么没有操作入口"，手动关闭
+useGuestModeNotice()
 
 const appSettingsStore = useAppSettingsStore()
 const appKeepAliveStore = useAppKeepAliveStore()

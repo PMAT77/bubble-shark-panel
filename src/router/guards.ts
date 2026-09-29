@@ -3,7 +3,6 @@ import type { Router } from 'vue-router'
 import { useNProgress } from '@vueuse/integrations/useNProgress'
 import { warnKeepAliveComponentNameMissing } from 'virtual:fantastic-admin/turbo-console'
 import { ensureDynamicRoutes } from './ensure-dynamic-routes'
-import { FRONTEND_ROUTE_PATHS } from '../../shared/constants/frontend-routes'
 import '@/assets/styles/nprogress.css'
 
 function setupRoutes(router: Router) {
@@ -42,8 +41,10 @@ function setupRoutes(router: Router) {
         }
         // 如果未开启主页，但进入的是主页，则会进入侧边栏导航第一个模块
         else if (!appSettingsStore.settings.app.home.enable && to.fullPath === appSettingsStore.settings.app.home.fullPath && appMenuStore.sidebarMenus.length > 0) {
+          // 用「第一个可访问模块」而不是写死实例管理：没有 instance:read 的账号
+          // 根本没注册这条路由，跳过去只会落在 404
           return {
-            path: FRONTEND_ROUTE_PATHS.nodeInstance,
+            path: appMenuStore.sidebarMenusFirstDeepestPath,
             replace: true,
           }
         }

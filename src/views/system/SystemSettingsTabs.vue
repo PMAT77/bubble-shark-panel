@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { NTabPane, NTabs } from 'naive-ui'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { SYSTEM_SETTINGS_TABS } from './systemSettingsTabs'
+import { resolveVisibleSettingsTab, visibleSettingsTabs } from './systemSettingsTabs'
 import type { SystemSettingsTabName } from './systemSettingsTabs'
 
 /**
@@ -36,13 +36,20 @@ defineOptions({
 
 const route = useRoute()
 
-/** 地址栏里的 tab 参数（非法值一律回落到「面板设置」这个 tab，不给用户一个空页） */
-function resolveTabFromQuery(value: unknown): SystemSettingsTabName {
-  const matched = SYSTEM_SETTINGS_TABS.find(tab => tab.name === value)
-  return matched ? matched.name : 'settings'
-}
+/**
+ * 只渲染当前账号有权限的 tab。
+ *
+ * 菜单对「系统设置」是任一语义（`settings:read` 或 `audit:read`），所以进得来不等于
+ * 三个 tab 都能看：只勾「查看操作记录」的账号点「通知渠道」只会看到一堆 403。
+ */
+const { auth: hasPermission } = useAppAuth()
+const tabs = computed(() => visibleSettingsTabs(hasPermission))
 
-const activeTab = ref<SystemSettingsTabName>('settings')
+/**
+ * 当前 tab。初始为 `null`（还没解析），挂载时由 `resolveVisibleSettingsTab` 定下来——
+ * 用 `?tab=` 指向一个**自己无权**的 tab 时回落到第一个可见 tab，而不是落到空白页。
+ */
+const activeTab = ref<SystemSettingsTabName | null>(null)
 
 /**
  * 点 tab：只切本地状态，不碰路由。
@@ -50,14 +57,14 @@ const activeTab = ref<SystemSettingsTabName>('settings')
  * 宁可停在当前 tab，也不要切到一个没有内容的空页。
  */
 function selectTab(value: string | number) {
-  const matched = SYSTEM_SETTINGS_TABS.find(tab => tab.name === value)
+  const matched = tabs.value.find(tab => tab.name === value)
   if (matched) {
     activeTab.value = matched.name
   }
 }
 
 onMounted(() => {
-  activeTab.value = resolveTabFromQuery(route.query.tab)
+  activeTab.value = resolveVisibleSettingsTab(route.query.tab, hasPermission)
 
   // 参数已消费，把地址栏收拾干净：不经过 vue-router，因此不会重建页面、也不会多出标签页。
   // history.state 是 vue-router 自己的状态，原样带回，否则前进/后退会错乱。
@@ -77,9 +84,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <NTabs :value="activeTab" type="line" size="small" @update:value="selectTab">
+  <NTabs :value="activeTab ?? tabs[0]?.name" type="line" size="small" @update:value="selectTab">
     <NTabPane
-      v-for="item in SYSTEM_SETTINGS_TABS"
+      v-for="item in tabs"
       :key="item.name"
       :name="item.name"
       :tab="item.label"

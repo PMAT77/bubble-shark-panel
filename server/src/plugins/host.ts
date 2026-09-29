@@ -70,8 +70,57 @@ export interface PluginRuntime {
   capabilityBaseUrl: () => string | null
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+/**
+ * 等子进程真正退出。
+ *
+ * 为什么不能只 `kill()` 再 sleep 一个固定值：kill 只是「请求」退出，实际退出是异步的。
+ * 面板退出时若不等，能力服务会在子进程仍持有连接时被关掉，进程也可能残留成孤儿；
+ * 测试里更直接——整个测试进程会在子进程还没退的时候结束，被记成用例失败。
+ * 超时后不再纠缠：子进程已经不可能自己退了，剩下的交给操作系统回收。
+ */
+async function waitForExit(child: ChildProcess | null, timeoutMs: number): Promise<void> {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) {
+        return
+      }
+      settled = true
+      clearTimeout(timer)
+      child.off('close', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, timeoutMs)
+    child.once('close', finish)
+  })
+}
+
+/** 退出时等待单个插件进程自行退出的上限；Windows 上进程退出明显慢于 Linux */
+const STOP_EXIT_TIMEOUT_MS = 3_000
+/** 强杀之后允许它被操作系统回收的时间：给过机会还不退，就不能再等 */
+const STOP_EXIT_KILL_GRACE_MS = 500
+
+/**
+ * 请插件进程退出：先好声好气（SIGTERM / TerminateProcess），宽限期内没退就结束它。
+ *
+ * 为什么必须补最后一刀：`kill()` 只是发出终止请求，进程何时真正回收由操作系统决定。
+ * 实测 Windows 上被终止的插件进程可以拖住父进程的事件循环约 30 秒（子进程句柄仍在），
+ * 会让面板退出、以及测试进程收尾都卡在"跑完了但退不掉"。宽限期一过就不再讲礼貌。
+ */
+async function stopPluginProcess(child: ChildProcess | null): Promise<void> {
+  if (!child) {
+    return
+  }
+  child.kill()
+  await waitForExit(child, STOP_EXIT_TIMEOUT_MS)
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return
+  }
+  child.kill('SIGKILL')
+  await waitForExit(child, STOP_EXIT_KILL_GRACE_MS)
 }
 
 /**
@@ -142,6 +191,15 @@ export async function createPluginRuntime(
   const context: CapabilityContext = { grantedCapabilities: granted }
   const restartBaseDelayMs = options.restartBaseDelayMs ?? RESTART_BASE_DELAY_MS
   const log = (pluginId: string, message: string) => options.onLog?.({ pluginId, message })
+  /**
+   * 退出后不再安排任何重启。
+   *
+   * 只清一遍 `restartTimer` 是不够的：子进程退出是异步的，`kill()` 之后 onExit 仍可能在
+   * shutdown 过程中到达，并挂上新的退避定时器——最长 30 秒。那个定时器会让事件循环一直有活干，
+   * 面板退出与测试进程收尾都要干等它跑完；等它真的触发时数据库已经关了，还会抛
+   * 「SQLite database is not initialized」。所以用显式状态拦住，而不是逐处清理。
+   */
+  let stopped = false
 
   let capability: CapabilityServerHandle | null = null
   try {
@@ -165,7 +223,7 @@ export async function createPluginRuntime(
   }
 
   function scheduleRestart(record: PluginProcessRecord): void {
-    if (record.stopping || !capability) {
+    if (stopped || record.stopping || !capability) {
       return
     }
     if (record.restarts >= RESTART_MAX_ATTEMPTS) {
@@ -191,6 +249,9 @@ export async function createPluginRuntime(
   }
 
   function launch(record: PluginProcessRecord): void {
+    if (stopped) {
+      return
+    }
     if (!capability) {
       record.state = 'crashed'
       record.lastError = '插件能力服务不可用，无法启动插件。'
@@ -339,17 +400,21 @@ export async function createPluginRuntime(
     sync,
     stop,
     async shutdown() {
+      stopped = true
+      const pending: (ChildProcess | null)[] = []
       for (const record of records.values()) {
         record.stopping = true
         clearRestartTimer(record)
-        record.child?.kill()
+        const child = record.child
+        child?.kill()
         record.child = null
         record.pid = null
         record.state = 'stopped'
+        pending.push(child)
       }
       granted.clear()
-      // 给子进程一点退出时间，避免留下孤儿进程
-      await delay(50)
+      // 等子进程真的退出：别把孤儿进程和未关闭的连接留给下一次启动（或留给测试进程收尾）
+      await Promise.all(pending.map(child => stopPluginProcess(child)))
       await capability?.close()
       capability = null
     },

@@ -18,27 +18,16 @@ server/scripts/probe-output/
 # Internal documentation (not published in open-source repo)
 docs_local/
 
-# Public docs: track guides only; other paths under docs/ stay local
+# Public docs: 只发布服主向文档（安装手册、参数速查、内存档位、术语表），
+# 其余路径留在本地。新增公开文档时要在下面补一行 !docs/<文件名>。
 docs/*
-!docs/README.md
-!docs/INSTALL.md
-!docs/DEVELOPMENT.md
-!docs/RELEASE.md
+!docs/install-docker.md
+!docs/install-native.md
+!docs/reference.md
 !docs/MEMORY.md
-!docs/IMAGE_DISTRIBUTION.md
-!docs/ARCHITECTURE.md
-!docs/DST_TUTORIAL.md
-!docs/API.md
-!docs/DATABASE.md
 !docs/GLOSSARY.md
 !docs/assets/
 !docs/assets/**
-!docs/images/
-!docs/images/**
-# 架构图 HTML 随文档发布；archify 目录下的视觉校验产物（png/json）仍留在本地
-!docs/archify/
-docs/archify/*
-!docs/archify/game-server-hub-architecture.html
 
 # Local runtime data & logs
 server/data/

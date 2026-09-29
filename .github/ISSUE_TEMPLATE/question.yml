@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        请先查阅 [INSTALL.md](https://github.com/PMAT77/game-serve-hub/blob/main/docs/INSTALL.md) 与 [DEVELOPMENT.md](https://github.com/PMAT77/game-serve-hub/blob/main/docs/DEVELOPMENT.md)。
+        请先查阅 [Docker 模式安装](https://github.com/PMAT77/game-serve-hub/blob/main/docs/install-docker.md) 与 [Native 模式安装](https://github.com/PMAT77/game-serve-hub/blob/main/docs/install-native.md)。
 
   - type: textarea
     id: question

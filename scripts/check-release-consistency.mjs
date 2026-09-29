@@ -22,13 +22,12 @@ const requiredReferences = new Map([
   // 开发栈准备脚本的镜像兜底默认值：曾停在 v0.2.0 却不在本清单里，无人发现
   ['server/scripts/ensure-steamcmd-image.ts', [unifiedImage]],
   ['README.md', [tag]],
-  ['docs/INSTALL.md', [tag]],
-  ['docs/DST_TUTORIAL.md', [tag]],
+  ['docs/install-docker.md', [tag]],
+  ['docs/reference.md', [unifiedImage]],
   // SECURITY.md 的「验证发布包」一节给出的是 releases/download/<tag>/install-<tag>.sh：
   // 不在清单里时它会静默停在旧版本，用户照着下载到的是上一个 Release
   ['SECURITY.md', [`releases/download/${tag}/install-${tag}.sh`]],
-  // RELEASE.md 自称「四者必须一致」，却不在校验范围内，上一版就是它把版本号写错还一路放行
-  ['docs/RELEASE.md', [`"version": "${version}"`, tag]],
+  // CHANGELOG.md 的发布章节标题
   ['CHANGELOG.md', [`## [${version}]`]],
 ])
 
@@ -54,8 +53,8 @@ const imageTagScanTargets = [
     ...requiredReferences.keys(),
     'scripts/install-linux-smoke.sh',
     'README.md',
-    'docs/INSTALL.md',
-    'docs/DST_TUTORIAL.md',
+    'docs/install-docker.md',
+    'docs/reference.md',
   ]),
 ]
 for (const relativePath of imageTagScanTargets) {

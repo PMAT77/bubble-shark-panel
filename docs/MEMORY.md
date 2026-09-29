@@ -199,4 +199,4 @@ Docker 模式下 SteamCMD 容器 exit 137 有两种来源（Native 模式无容�
 - **面板超时终止**：单次 app_update 超过 `GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS`（默认 60 分钟）后由面板 SIGKILL，日志含 `GSH-STEAMCMD-TIMEOUT`。此时与内存无关，调大该值即可；已下载内容保留，重试会自动断点续传。
 - **内存不足**：容器硬上限或宿主机 OOM。可调高预设或升级规格，并避免安装与多实例同时运行。
 
-更多安装步骤见 [INSTALL.md](INSTALL.md)。
+更多安装步骤见 [Docker 模式安装](install-docker.md)与 [Native systemd 模式安装](install-native.md)。

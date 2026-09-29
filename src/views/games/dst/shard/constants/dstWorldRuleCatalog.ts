@@ -28,7 +28,7 @@ export interface DstWorldRuleCatalogSection {
 }
 
 /**
- * 模块划分对齐 docs/others/master_config.md、caves_config.md 与 leveldataoverride.lua overrides 键。
+ * 模块划分对齐游戏自带的 master_config.md、caves_config.md 与 leveldataoverride.lua overrides 键。
  * - 世界规则 tab → overrides（世界设置）
  * - 世界生成 tab → overrides（地图生成）
  */

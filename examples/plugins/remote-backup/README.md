@@ -96,4 +96,4 @@ pnpm exec tsx scripts/license/sign-license.ts \
 - 能力调用见 `plugin.mjs` 的 `callCapability()`：`POST /capabilities/<能力>`，请求头 `x-gsh-plugin-token`，body 带 `pluginId`；
 - 备份列表返回的是**路径**而不是内容（`/capabilities/backups`），插件与面板同机，自己按需流式读取即可；
 - 常驻插件监听 `SIGTERM` 干净退出；宿主停用插件时会发这个信号，超过退避上限的崩溃会停在「进程异常」不再重启；
-- 完整能力清单与状态语义见仓库 `docs/API.md` 的「插件接口」一节。
+- 完整能力清单与状态语义见仓库 `docs_local/research/API.md` 的「插件接口」一节（内部文档，不在公开仓库内）。

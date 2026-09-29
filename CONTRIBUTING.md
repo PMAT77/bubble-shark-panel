@@ -7,7 +7,7 @@
 ## 开始之前
 
 1. 阅读 [README.md](README.md) 了解项目定位（当前为 **v0.x 公测**，DST 优先）
-2. 查阅 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 搭建本地环境
+2. 按 [README.md](README.md) 的快速开始搭建本地环境；更细的本地开发环境说明在 `docs_local/DEVELOPMENT.md`（内部文档，不在公开仓库内）
 3. 大改动请先开 [Issue](https://github.com/PMAT77/game-serve-hub/issues) 讨论，避免重复劳动
 
 ---
@@ -79,10 +79,8 @@ ci: PR 门禁执行 lint 与 test:unit
 文档与代码同等重要，改动文档时请遵守：
 
 - **语言与排版**：遵循[中文技术文档写作规范](https://github.com/ruanyf/document-style-guide)；中文与英文、数字之间留一个半角空格，并列词用顿号，一个句子构件尽量不超过 40 字。
-- **文件名**：新增文档用小写字母加连字符（如 `advanced-usage.md`）；历史遗留的大写文件名（`INSTALL.md`、`DST_TUTORIAL.md` 等）保持不变，以免破坏外部链接与锚点。
-- **跨文档引用用锚点**：写成 `[标题](INSTALL.md#锚点)`，不要写“见 XXX 第 8 章”这类会随标题漂移的引用。
-- **导航同步**：新增或改名文档时，同步更新 [docs/README.md](docs/README.md) 索引与根 README 的文档表。
-- **截图**放在 `docs/images/`，用相对路径引用并写清 `alt` 文本；界面改版时同步更新。
+- **文件名**：新增文档用小写字母加连字符（如 `advanced-usage.md`）；现有文档沿用原文件名（`install-docker.md`、`install-native.md`、`reference.md` 等），以免破坏外部链接与锚点。
+- **跨文档引用用锚点**：写成 `[标题](install-docker.md#锚点)`，不要写“见 XXX 第 8 章”这类会随标题漂移的引用。
 - **本地校验**：提交前运行 `pnpm run docs:check`，它会校验相对链接、锚点、版本 tag 与索引同步。
 
 ## Code Review 原则

@@ -42,7 +42,7 @@ function entry(relative) {
 
 const STEPS = {
   // `--force`：这个入口跑的是"提交前的门禁"，不能吃增量构建缓存——v0.8.2 第一次推送
-  // 就是本地增量检查放行、CI 全量检查报 TS2345 而变红的（见 docs/DEVELOPMENT.md 的测试与代码检查）。
+  // 就是本地增量检查放行、CI 全量检查报 TS2345 而变红的（见 docs_local/DEVELOPMENT.md 的测试与代码检查）。
   types: { label: '类型检查（vue-tsc -b --force）', command: node, args: [entry('node_modules/vue-tsc/bin/vue-tsc.js'), '-b', '--force'] },
   build: { label: '前端生产构建（vite build）', command: node, args: [entry('node_modules/vite/bin/vite.js'), 'build'] },
   'build-server': { label: '后端构建', command: node, args: [entry('scripts/build-server.mjs')] },

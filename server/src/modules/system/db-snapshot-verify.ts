@@ -51,7 +51,7 @@ function readSqliteHeader(filePath: string): string | null {
  *
  * 检查项按「越早越便宜」排序：文件头 → 完整性 → 表结构 → 迁移版本。
  * 迁移版本这一条挡住的是「把新版本面板的快照塞进旧面板」——那会让库结构与代码对不上，
- * 与 `docs/INSTALL.md` 里「跨版本回滚前先做快照」的告诫是同一个坑。
+ * 与 `docs/install-docker.md` / `docs/install-native.md` 升级一节里「跨版本回滚前先做快照」的告诫是同一个坑。
  */
 export function verifyPanelDatabaseFile(filePath: string, migrationsFolder: string): PanelDatabaseVerifyResult {
   if (!fs.existsSync(filePath)) {

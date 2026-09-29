@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 文档一致性校验：相对链接、锚点、版本 tag 与文档索引同步。
+// 文档一致性校验：相对链接、锚点、版本 tag 与「公开仓库里是否真的存在」。
 // 用法：node scripts/check-docs.mjs（也通过 pnpm run docs:check 调用）
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -9,7 +9,7 @@ import path from 'node:path'
 const repoRoot = path.resolve(import.meta.dirname, '..')
 const docsDir = path.join(repoRoot, 'docs')
 
-const rootDocs = ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'MIGRATION.md', 'CHANGELOG.md']
+const rootDocs = ['README.md', 'CONTRIBUTING.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'CHANGELOG.md']
 const docsFiles = fs.readdirSync(docsDir).filter(f => f.endsWith('.md')).map(f => `docs/${f}`)
 const targets = [...rootDocs, ...docsFiles].filter(f => fs.existsSync(path.join(repoRoot, f)))
 
@@ -22,8 +22,8 @@ const slugify = heading => heading.trim().replace(/`/g, '').toLowerCase().replac
  * 版本控制中被跟踪的文件清单。
  *
  * 为什么需要它：文档校验读的是工作区文件，本地存在即通过。但 docs/ 下有一批文件被
- * .gitignore 排除（API.md、DATABASE.md、GLOSSARY.md 曾长期如此），公开仓库里根本没有，
- * 用户点进去全是 404，而本地怎么跑都发现不了。
+ * .gitignore 排除（白名单外的路径都留在本地），公开仓库里根本没有，用户点进去全是 404，
+ * 而本地怎么跑都发现不了。
  *
  * 判定口径是「能否进入公开仓库」，而不是「此刻是否已提交」：已跟踪 + 未跟踪但未被忽略
  * 都算可发布（后者是待提交的新文件），只有被 .gitignore 命中的才是必然的死链。
@@ -149,21 +149,9 @@ for (const file of targets) {
   }
 }
 
-// 3) docs 下的文档都应出现在 docs/README.md 索引中
-const index = fs.readFileSync(path.join(docsDir, 'README.md'), 'utf8')
-for (const f of docsFiles) {
-  if (f === 'docs/README.md') continue
-  if (!index.includes(`(${path.posix.basename(f)})`)) failures.push(`docs/README.md 未索引：${f}`)
-}
-
-// 4) 根 README 必须指向文档主索引
-if (!fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8').includes('docs/README.md')) {
-  failures.push('README.md 未链接文档主索引 docs/README.md')
-}
-
 if (failures.length > 0) {
   console.error('文档校验失败：')
   for (const f of failures) console.error(` - ${f}`)
   process.exit(1)
 }
-console.log(`文档校验通过：${targets.length} 篇文档，链接、锚点、版本 tag 与索引均一致。`)
+console.log(`文档校验通过：${targets.length} 篇文档，链接、锚点与版本 tag 均一致。`)

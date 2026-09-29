@@ -109,7 +109,7 @@ async function isUsableGuestAccount(userId: string): Promise<boolean> {
  *
  * 为什么在启动时补而不是在请求里补：请求期读写授权表会让"读接口"产生写副作用，
  * 而且并发签发会话时会打架。代价是**新建实例后要重启面板（或重启过一次）游客才看得到它**，
- * 这一点写在 `docs/INSTALL.md` 的游客登录一节里。
+ * 这一点写在 `SECURITY.md` 的游客角色（只读预览）一节里。
  */
 async function syncGuestInstanceGrants(userId: string): Promise<number> {
   const allInstanceIds = await listAllInstanceIds()

@@ -14,7 +14,7 @@ GSH_GITHUB_PROXY="${GSH_GITHUB_PROXY:-}" # 强制指定 GitHub 加速代理（�
 INSTALLER_REPO_MIRRORS="${INSTALLER_REPO_MIRRORS:-}" # 安装资源镜像池；为空时由 init_installer_repo_pool 按代理清单生成。
 # 校验对象是镜像源提供的 git blob 原始字节（LF）；改动 compose 后必须同步更新此处。
 # 历史 pin eb30aeae... 与 v0.1.4 tag 内 compose blob（a34665e2...）不匹配，导致严格校验必然失败。
-INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-2f3cc1ec15ad5ef06454856557aa697e33a112e75e3f5a0afdc3ea97b761dd62}"
+INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-6f40a760c19cddeacae252c406144d37c11a5417024a8eb3a0add0762ede722e}"
 INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML:-525eaf74e17df33887fe47248f414c0de3e6cd94a8d20e072ab5d66284c760ae}"
 # Debian 12 等发行版源不含 Compose v2 时，从 docker/compose GitHub Release 自动补装 CLI 插件。
 # 摘要与官方 .sha256 / checksums.txt 资产双源核对；升级插件版本时需同步替换版本号与两个摘要。
@@ -290,7 +290,7 @@ validate_install_mode_transition() {
     return
   fi
   if [[ "${existing_mode}" != "${RESOLVED_INSTALL_MODE}" ]]; then
-    abort "Existing ${existing_mode} installation detected at ${PANEL_INSTALL_DIR}. Automatic cross-mode migration is not supported; back up data and follow docs/INSTALL.md."
+    abort "Existing ${existing_mode} installation detected at ${PANEL_INSTALL_DIR}. Automatic cross-mode migration is not supported; back up data first. See docs/install-docker.md or docs/install-native.md."
   fi
   log_info "Existing ${existing_mode} installation detected; performing an in-place upgrade."
 }
@@ -1029,7 +1029,7 @@ ensure_compose_plugin() {
   done
 
   log_error "Unable to auto-install the Docker Compose v2 plugin from ${COMPOSE_PLUGIN_VERSION} (all sources failed or checksum mismatch)."
-  log_error "请手动安装 Compose v2 插件后原样重跑本安装器（与 docs/INSTALL.md 路线 B 阶段一兜底一致）："
+  log_error "请手动安装 Compose v2 插件后原样重跑本安装器（命令见 docs/install-docker.md 的「常见错误」）："
   log_error "  sudo mkdir -p /usr/local/lib/docker/cli-plugins"
   log_error "  sudo curl -fL --retry 3 \"https://gh-proxy.com/https://github.com/docker/compose/releases/download/${COMPOSE_PLUGIN_VERSION}/${asset}\" -o /usr/local/lib/docker/cli-plugins/docker-compose"
   log_error "  sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose"
@@ -1547,6 +1547,8 @@ Environment (optional):
   GSH_NATIVE_UPDATE_DIR=PATH    Native panel-update exchange directory (default: <data dir>/panel-update)
   STRICT_INSTALLER_ASSET_CHECKSUM=0  Skip embedded checksum verification (not recommended)
   v0.2.0 unified image: one docker pull provides the panel, DST runtime libraries and SteamCMD.
+
+Full parameter and variable reference: docs/reference.md
 EOF
 }
 
@@ -2162,7 +2164,7 @@ pull_runtime_images() {
     log_error "GHCR 的镜像层域名（pkg-containers.githubusercontent.com）在国内常不可达，表现为 TLS handshake timeout。"
     log_error "请改用 Release 离线镜像包：下载 game-server-hub-${GSH_RELEASE_TAG}-docker-image.tar.gz（同目录有 .sha256），再用 docker load -i 导入，然后重跑本安装器（镜像已在本地，会自动跳过拉取）。"
     log_error "离线包下载页：https://github.com/PMAT77/game-serve-hub/releases/tag/${GSH_RELEASE_TAG}"
-    log_error "完整步骤见仓库 docs/INSTALL.md「路线 B：国内服务器（Debian 12 离线镜像包全程）」，README 快速开始中也有入口。"
+    log_error "完整步骤见仓库 docs/install-docker.md 的「安装（国内服务器）」，README 快速开始中也有入口。"
     log_error "如需强制重新拉取，可设置 GSH_FORCE_IMAGE_PULL=1。"
     return 1
   fi
@@ -2465,7 +2467,7 @@ main() {
   install_base_packages
   if [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
     if ! install_docker; then
-      abort "Docker installation failed. See /var/log/game-server-hub/install.status and the troubleshooting section in docs/INSTALL.md; if the error above contains manual commands, run them and rerun this installer."
+      abort "Docker installation failed. See /var/log/game-server-hub/install.status and the troubleshooting section in docs/install-docker.md; if the error above contains manual commands, run them and rerun this installer."
     fi
     add_user_to_docker_group
     write_status "dependencies" "ok" "Docker dependencies installed"
@@ -2489,7 +2491,7 @@ main() {
   if [[ "${OPEN_DST_PORTS}" -eq 1 ]]; then
     open_firewall_dst_ports
   else
-    log_info "DST UDP ports not opened automatically. Use --open-dst-ports or configure firewall manually (see docs/DST_TUTORIAL.md)."
+    log_info "DST UDP ports not opened automatically. Use --open-dst-ports or configure firewall manually (see docs/install-docker.md)."
   fi
   write_status "network" "ok" "Port and firewall processed"
 

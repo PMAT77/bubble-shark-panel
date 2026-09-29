@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: docker/unified/Dockerfile
       # SteamCMD 下载源可覆盖：国内直连 steamcdn-a.akamaihd.net 常被中断，
-      # 可改用 Steam 的另一条官方 CDN（见 docs/DEVELOPMENT.md）。默认值不变。
+      # 可改用 Steam 的另一条官方 CDN（见 docs_local/DEVELOPMENT.md）。默认值不变。
       # NPM_REGISTRY 留空即官方源（与 GSH_DEV_NPM_REGISTRY 同一口径）；依赖包
       # （@iconify/json 约 60MB）在国内链路上常被 ECONNRESET 打断，可指向 npm 镜像源：
       #   NPM_REGISTRY=https://registry.npmmirror.com docker compose build

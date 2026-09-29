@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 文档结构重整：README 精简为 8 个模块，安装文档按 Docker / Native 拆成两份手册并新增参数速查页，参考价与联系方式并入「赞助与商业合作」。
+
 ## [0.10.0] - 2026-09-29
 
 ### Added
@@ -89,7 +93,7 @@
 - **`panel.env` 里配的多数 `GSH_STEAM_*` 与 `GSH_GITHUB_API_BASE` 根本进不了面板容器**：`docker-compose.yml` 的 `environment` 是一份显式白名单，`--env-file panel.env` 只做文件插值不做映射，于是 `GSH_STEAM_WEBAPI_KEY`、`GSH_STEAM_RELAY_URL`、`GSH_STEAM_WORKSHOP_*` 这些在 `panel.env.example` 里写着「可配」的变量，配了也全部无效——想让 Mod 市场走官方 API 或中继都没有入口。现在这些变量连同 `GSH_GITHUB_API_BASE`、以及宿主机内存判定用的 `GSH_HOST_*` 四个阈值全部补齐映射，dev compose 同步保持一份。
 - **反代地址带路径前缀时会被 URL 拼接吃掉**：`GSH_STEAM_WEBAPI_BASE_URL=https://proxy.example/steam` 实际会打到 `https://proxy.example/IPublishedFileService/...`，前缀整段丢失。现在统一按「基址必须以 `/` 结尾、接口路径按相对路径拼接」处理，`panel.env.example` 里也写明了这个约定。
 - `scripts/check-panel-env-presets.mjs` 增加反向门禁：`panel.env.example` 里有说明的 `GSH_*` 变量必须在 `docker-compose.yml` 的 panel 服务里被映射，否则检查直接失败——上面那类「文档写了、配了没用」的缺口不会再有第二次。
-- **本地构建统一镜像在慢网络下必然失败**：镜像自带 docker CLI 与 compose 插件（约 150MB），国内链路实测只有 60~100 KB/s，下载途中会撞上中间设备处理 HTTP/2 出错（`curl: (92) HTTP/2 stream ... PROTOCOL_ERROR`）；而 curl 的 `--retry` 不重试这类错误，就算重试也是从 0 字节重来，82MB 的包重试不起，一条链路抖动就让整个构建白跑十几分钟。现在这两处下载统一走 HTTP/1.1、协议错误就地重试，并在外层做断点续传——中断后重跑，百分比从上次的位置接着涨，构建失败也不必从头再来（这一段位于 `runtime` 层最后一步，前面的层都在缓存里）。同时容器内的依赖安装调高了 pnpm 的重试次数与超时（`@iconify/json` 这类约 60MB 的包最容易被 ECONNRESET 打断），并可用 `NPM_REGISTRY=https://registry.npmmirror.com docker compose build` 指向 npm 镜像源——**不设置时仍是官方源，行为与之前一致**。排查方法见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#本地构建统一镜像)。
+- **本地构建统一镜像在慢网络下必然失败**：镜像自带 docker CLI 与 compose 插件（约 150MB），国内链路实测只有 60~100 KB/s，下载途中会撞上中间设备处理 HTTP/2 出错（`curl: (92) HTTP/2 stream ... PROTOCOL_ERROR`）；而 curl 的 `--retry` 不重试这类错误，就算重试也是从 0 字节重来，82MB 的包重试不起，一条链路抖动就让整个构建白跑十几分钟。现在这两处下载统一走 HTTP/1.1、协议错误就地重试，并在外层做断点续传——中断后重跑，百分比从上次的位置接着涨，构建失败也不必从头再来（这一段位于 `runtime` 层最后一步，前面的层都在缓存里）。同时容器内的依赖安装调高了 pnpm 的重试次数与超时（`@iconify/json` 这类约 60MB 的包最容易被 ECONNRESET 打断），并可用 `NPM_REGISTRY=https://registry.npmmirror.com docker compose build` 指向 npm 镜像源——**不设置时仍是官方源，行为与之前一致**。排查方法见 docs/DEVELOPMENT.md「本地构建统一镜像」。
 
 ## [0.8.3] - 2026-09-23
 
@@ -108,7 +112,7 @@
 
 ### Changed
 
-- **`dev:compose` 的容器内依赖安装可以换 npm 源了**：Docker Compose 开发栈的 panel 与 web 容器此前固定走官方 registry，lockfile 一变动就要在容器里把整套依赖（含 Linux 平台二进制）重新下一遍，网络不稳时刷出大量 `WARN GET … ECONNRESET` 重试、前端迟迟不到 ready。现在两个容器都读 `GSH_DEV_NPM_REGISTRY`，可指向任意 npm 兼容源；**不设置时仍是官方源，行为与之前完全一致**。排查方法见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 的已知问题一节。
+- **`dev:compose` 的容器内依赖安装可以换 npm 源了**：Docker Compose 开发栈的 panel 与 web 容器此前固定走官方 registry，lockfile 一变动就要在容器里把整套依赖（含 Linux 平台二进制）重新下一遍，网络不稳时刷出大量 `WARN GET … ECONNRESET` 重试、前端迟迟不到 ready。现在两个容器都读 `GSH_DEV_NPM_REGISTRY`，可指向任意 npm 兼容源；**不设置时仍是官方源，行为与之前完全一致**。排查方法见 docs/DEVELOPMENT.md 的已知问题一节。
 
 ### Fixed
 
@@ -526,7 +530,7 @@
 
 ### Upgrade notes
 
-- 从 v0.3.9 及更早版本升级：这些版本的镜像不含 `docker` CLI，若本机也没有 `docker:27-cli`，面板内一键更新仍会失败并给出提示；请按 [INSTALL.md 路线 B](docs/INSTALL.md#路线-b国内服务器debian-12-离线镜像包全程) 用离线镜像包升级到 v0.3.10 一次，之后面板内更新即可离线完成。
+- 从 v0.3.9 及更早版本升级：这些版本的镜像不含 `docker` CLI，若本机也没有 `docker:27-cli`，面板内一键更新仍会失败并给出提示；请按 INSTALL.md 路线 B 用离线镜像包升级到 v0.3.10 一次，之后面板内更新即可离线完成。
 - 世界配置改动需重新生成地图才生效（生成地图后 DST 不会重读这些文件）。
 ## [0.3.9] - 2026-09-12
 
@@ -541,7 +545,7 @@
 
 ### Fixed
 
-- **宿主机在 NAT 转发后面的端口与转发规则说明**：[DST 开服教程](docs/DST_TUTORIAL.md) 新增 5.4 节 —— 明确安全组之外还要在云平台端口转发 / 路由器映射里为主世界与洞穴的 6 个 UDP **各加一条**规则、外部端口必须与内部一致（DST 会按 `server_port` 上报 Klei/Steam，公网端口被改成随机高位会导致「列表搜得到、点不进去」），并说明分片间通信的 `10888` 不需要对外开放。同时修正 6.1 节「公网端口映射到内部 8888」的示例：Docker 模式下应映射**宿主机的面板端口**（生产安装默认 9527）。
+- **宿主机在 NAT 转发后面的端口与转发规则说明**：DST 开服教程新增 5.4 节 —— 明确安全组之外还要在云平台端口转发 / 路由器映射里为主世界与洞穴的 6 个 UDP **各加一条**规则、外部端口必须与内部一致（DST 会按 `server_port` 上报 Klei/Steam，公网端口被改成随机高位会导致「列表搜得到、点不进去」），并说明分片间通信的 `10888` 不需要对外开放。同时修正 6.1 节「公网端口映射到内部 8888」的示例：Docker 模式下应映射**宿主机的面板端口**（生产安装默认 9527）。
 - **安装器提示的文档路径失效**：未启用 `--open-dst-ports` 时提示的 `docs/others/DST.md` 在本仓库已不存在，改为 `docs/DST_TUTORIAL.md`。
 - **SteamCMD 超时被误判为内存 OOM**：单次 `app_update` 超过上限后面板会 SIGKILL 容器，退出码同样是 137，原实现只看退出码就记成「容器可能因硬上限 OOM 被终止」并建议调高 `GSH_STEAMCMD_CONTAINER_MEMORY_MB`——慢速 CDN 下 4 GiB 以上游戏下不完时会被误导去调内存。现在超时终止会写入 `GSH-STEAMCMD-TIMEOUT` 标记，只有面板未主动杀容器时才记录 `oomKilled` 并提示调内存。
 

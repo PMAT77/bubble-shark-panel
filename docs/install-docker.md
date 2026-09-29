@@ -1,0 +1,183 @@
+# Docker 模式安装
+
+面板与游戏都跑在容器里，由 Docker Compose 编排。适合小型游戏社区与托管商。
+
+**环境要求**：Debian 12 或 Ubuntu 22.04 / 24.04（只支持 apt 系），root 或 sudo，至少 4 GiB 内存，根分区至少 4 GiB 空闲——离线镜像包约 227 MB，导入后本地镜像约 560 MB（包可删），另外要给游戏本体（数 GB）和存档备份留地方。
+
+4 GiB 内存的机器先执行 `sudo gsh setup-swap`：分片加载整套 Mod 时内存会短时冲高，不够会被内核在加载途中杀掉，表现为「实例显示运行中但大厅搜不到」。档位参考[内存档位](MEMORY.md)。
+
+Windows 不是部署目标，只用于本机开发调试。
+
+## 安装（海外机器）
+
+一条命令装完，安装器自己装 Docker 与 Compose 插件，再拉取统一镜像并启动面板栈。
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.0/scripts/install.linux.sh" \
+  | sudo bash -s -- --mode docker
+```
+
+GHCR 拉取慢或超时的话，把上面命令里的 `https://raw.githubusercontent.com` 换成 `https://gh-proxy.com/https://raw.githubusercontent.com`，其余不变。
+
+## 安装（国内服务器）
+
+国内要按顺序做四步。**先解决镜像，再跑安装器**：安装器拉的是 GHCR 镜像，它的镜像层域名 `pkg-containers.githubusercontent.com` 国内基本不可达，直接跑几乎必然卡在 `net/http: TLS handshake timeout`，重试没用。
+
+### 1. 下载安装器并确认版本
+
+```bash
+tag=v0.10.0
+# gh-proxy 加速；不可用时换成 https://ghfast.top/ 前缀。
+# 用 curl -o 指定带版本号的文件名：wget 遇到同名文件是另存为 .1，容易继续跑上一次的旧脚本
+curl -fL --retry 3 -o "install-${tag}.sh" \
+  "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/${tag}/scripts/install.linux.sh"
+
+# 自证版本：这一步必须输出 ...:-v0.10.0}}，对不上就停下排查。
+# 这一行的默认 tag 决定安装器要装的镜像版本
+sed -n '9p' "install-${tag}.sh"
+```
+
+### 2. 装 Docker 与 Compose 插件
+
+第一次跑安装器时它会把 Docker 与 Compose 插件装好，这一步结尾报 `Cannot reach GHCR / Image pull failed` 属正常（镜像包还没导入）。
+
+```bash
+sudo GSH_PANEL_ENV_PRESET=small GSH_RELEASE_TAG="${tag}" bash "install-${tag}.sh" --mode docker --network cn
+
+# 期望输出：Docker Compose version v2.39.2
+docker compose version
+```
+
+### 3. 导入离线镜像包
+
+```bash
+base="https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/${tag}"
+
+# 下载镜像包与校验文件（约 227 MB，以 Release 页面显示为准）
+curl -fL --retry 3 -o "game-server-hub-${tag}-docker-image.tar.gz"        "${base}/game-server-hub-${tag}-docker-image.tar.gz"
+curl -fL --retry 3 -o "game-server-hub-${tag}-docker-image.tar.gz.sha256" "${base}/game-server-hub-${tag}-docker-image.tar.gz.sha256"
+
+# 校验完整性，末尾应输出 OK。.sha256 记录的是原始文件名，改过名要先改回
+sha256sum -c "game-server-hub-${tag}-docker-image.tar.gz.sha256"
+
+# 核对包内镜像 tag：RepoTags 应为 ghcr.io/pmat77/game-server-hub:v0.10.0
+tar -xOzf "game-server-hub-${tag}-docker-image.tar.gz" manifest.json | head -c 200; echo
+
+# 导入镜像（约 560 MB）；-i 带进度条，不要用 gunzip 管道。
+# 输出 Loaded image: ghcr.io/pmat77/game-server-hub:v0.10.0 即成功
+docker load -i "game-server-hub-${tag}-docker-image.tar.gz"
+
+# 断言本地 tag 与目标版本一致：安装器只认完整引用字符串，tag 对不上会重新拉取
+docker images --format '{{.Repository}}:{{.Tag}}' | grep "^ghcr.io/pmat77/game-server-hub:${tag}$"
+```
+
+### 4. 重跑安装器完成部署
+
+原样重跑第 2 步那条安装命令。这次镜像已在本地，日志出现 `Runtime image already present locally, skipping pull` 后会一路走完，结尾打印面板地址。
+
+```bash
+docker ps   # game-server-hub-panel 应为 Up
+```
+
+<details>
+<summary>没看到 skipping pull 又在下载，或安装器报 Compose 插件缺失</summary>
+
+**又去下载镜像**：脚本默认 tag 与本地镜像 tag 不一致。两边都要等于 `${tag}`：`sed -n '9p' "install-${tag}.sh"` 与 `docker images | grep game-server-hub`。也可以显式覆盖重跑：
+
+```bash
+sudo GSH_RELEASE_TAG="${tag}" bash "install-${tag}.sh" --mode docker --network cn
+```
+
+**安装器提示自动补装 Compose 插件失败**（加速节点全不可达或校验不过，报错信息里带手动命令）：手动装好插件再重跑安装命令。
+
+```bash
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -fL --retry 3 "https://gh-proxy.com/https://github.com/docker/compose/releases/download/v2.39.2/docker-compose-linux-x86_64" -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+```
+
+这里用的是二进制而不是 `apt install docker-compose`：源里那个是 1.x 旧版（命令叫 `docker-compose`），没有安装器需要的 v2 `docker compose` 子命令。
+
+</details>
+
+## 初始密码
+
+管理员名默认 `superadmin`，初始密码默认不在安装摘要里明文打印，从 `panel.env` 读：
+
+```bash
+sudo sed -n 's/^ADMIN_PASSWORD=//p' /opt/game-server-hub/panel.env
+```
+
+如果登录提示密码错误，说明容器没收到这个变量（旧版 compose 或手动 `docker run` 漏了 `-e`），改读容器内的凭据文件：
+
+```bash
+docker exec game-server-hub-panel cat /app/data/admin-credentials.txt
+```
+
+首次登录会拦到改密页，改完凭据文件自动删除。
+
+## 必须开放的端口
+
+| 用途 | 协议 | 默认端口 | 何时需要 |
+| --- | --- | --- | --- |
+| 面板 Web | TCP | 9527 | 始终需要 |
+| 主世界 · 游戏端口 | UDP | 10999 | 始终需要 |
+| 主世界 · Steam 认证端口 | UDP | 8766 | 始终需要 |
+| 主世界 · Steam 主服端口 | UDP | 12346 | 始终需要 |
+| 洞穴 · 游戏端口 | UDP | 11000 | 开启洞穴时需要 |
+| 洞穴 · Steam 认证端口 | UDP | 8768 | 开启洞穴时需要 |
+| 洞穴 · Steam 主服端口 | UDP | 12348 | 开启洞穴时需要 |
+
+云厂商的安全组默认拒绝入站，要手动放行；游戏端口对全网开放，面板端口建议只对你自己的常用 IP 开放。安装器默认不改本机防火墙，需要时加 `--open-panel-port` / `--open-dst-ports`。
+
+<details>
+<summary>宿主服务器在 NAT 转发后面（云平台端口映射 / 路由器映射）</summary>
+
+这种情况只放行安全组不够，还要在平台或路由器上加转发规则，且必须满足两条：
+
+1. 主世界 3 个加洞穴 3 个 UDP **每个都要一条规则**。只映射 10999 是最常见的漏配，表现为能进主世界、一进洞穴就崩线；
+2. **外部端口必须等于内部端口**（10999→10999、11000→11000）。游戏会把自己配置文件里的端口上报给 Klei / Steam，玩家从列表进服以及从主世界切进洞穴都按上报端口连接，公网端口被平台改成随机高位就会出现「列表里搜得到、点不进去」。平台只给随机高位端口时，把该实例的分片端口改成平台分配的公网端口号（面板「世界设置 → 网络」）。
+
+分片之间通信用的是 10888，走实例专用 bridge 网络，**不需要对外开放**。
+
+</details>
+
+## 常见错误
+
+| 报错关键词 | 怎么处理 |
+| --- | --- |
+| 镜像层下载 `net/http: TLS handshake timeout` | 最常见。先导入离线镜像包（上面第 3 步）再跑安装器 |
+| `Cannot reach GHCR` / `Image pull failed` | 同上。定位用 `curl -I https://ghcr.io/v2/`（返回 401 属正常）；「清单能取到、层下载超时」是网络不可达，不是鉴权问题，重试和换代理都不会成功 |
+| `Docker Compose v2 plugin is required but unavailable` | 按报错里的手动命令装插件后重跑安装器，命令见上面的折叠块 |
+| `download.docker.com` 不可达 | 安装器会自动回退发行版自带的 `docker.io`；apt 慢就加 `--network cn`，其余查 apt 源签名、系统时间与 HTTPS 出站 |
+| `checksum mismatch` | 下载内容与 Release 不一致。清掉代理或 CDN 缓存，确认 `GSH_RELEASE_TAG` 与资源 URL 是同一版本 |
+| 面板不断重启 | `docker logs --tail 100 game-server-hub-panel` 定位，常见为端口占用、`panel.env` 缺键或数据库权限；修正后 `docker compose up -d panel` |
+| 玩家搜不到房间 | 先查安全组是否放行了全部 6 个 UDP 端口，再确认房间没勾「离线」模式、已保存集群令牌 |
+| Mod 市场列表取不到 | 面板的 Steam 请求走自己的代理配置，见[参数速查 · Steam 与 Mod 市场](reference.md#steam-与-mod-市场) |
+
+排查时还能用 `gsh doctor` 做一次全面体检，或用 `gsh logs` 跟面板日志。参数与变量见[参数速查](reference.md)。
+
+## 升级
+
+面板内「系统设置 → 面板与游戏版本」两步走：先「下载更新」，再「立即安装」。下载段默认优先取 Release 离线镜像包（走加速代理并校验同名 `.sha256`），失败才回退 GHCR 拉取；下载中断会断点续传，不影响正在运行的面板。
+
+**安装完成后请刷新浏览器页面**（Ctrl/Cmd+Shift+R），否则还在跑升级前的界面脚本。
+
+不想用面板也可以用旧 tag 重跑安装脚本，或把 `panel.env` 的 `PANEL_IMAGE` 指向旧 tag 后执行 `gsh update`——两种都是同模式原地升级，保留数据库、实例、存档与自定义配置，升级前会自动备份数据库。
+
+> 回滚不碰游戏存档，但**旧版本可能不认识新版本迁移过的数据库**。跨版本回滚前先在面板「备份与恢复」页做一次数据库快照。
+
+需要卸载时，先下载备份，再按顺序执行：
+
+```bash
+cd /opt/game-server-hub
+sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose.bind.yml down
+
+# 游戏实例：建议先在面板里逐个删除，再确认没有遗留容器
+sudo docker ps -a | grep -i gsh
+sudo docker ps -a --filter "name=gsh-" -q | xargs -r sudo docker rm -f
+
+# 确认已备份后再删数据目录（存档、备份与数据库都在这里）
+sudo ls /var/lib/game-server-hub
+sudo rm -rf /var/lib/game-server-hub /opt/game-server-hub
+```

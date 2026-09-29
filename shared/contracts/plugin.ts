@@ -4,7 +4,7 @@ import { licenseCapabilitySchema } from './license'
 /**
  * 插件清单与宿主契约。
  *
- * 边界（与 `docs/ARCHITECTURE.md` 的 Open-Core 一节一致，改动前先读）：
+ * 边界（与 `docs_local/ARCHITECTURE.md` 的 Open-Core 一节一致，改动前先读）：
  *
  * 1. **核心不依赖插件**：没有任何插件时，Community 的全部能力照常可用。
  * 2. **插件进程外运行**：插件是独立进程，通过本机回环 HTTP 与宿主通信。

@@ -37,10 +37,10 @@ Node.js 后端代码位于本目录。前端在 `../src/`，前后端共享契�
 
 - `sudo bash ./scripts/install.linux.sh --mode docker|native`，或 `pnpm run install:linux`
 - 参数与行为以 `sudo bash ./scripts/install.linux.sh --help` 为准；面板默认端口 `9527`
-- 安装、升级、回滚、卸载与排错见 [docs/INSTALL.md](../docs/INSTALL.md)
+- 安装、升级、回滚、卸载与排错见 [docs/install-docker.md](../docs/install-docker.md)（Docker 模式）与 [docs/install-native.md](../docs/install-native.md)（Native systemd 模式）；安装器参数与 `panel.env` 变量速查见 [docs/reference.md](../docs/reference.md)
 
 ## 分层约定
 
 - 调用链：`controller -> service/usecase -> domain -> repository/infra adapter`
-- 业务模块不得直接调用 `dockerode`、执行 `docker` 命令或拼接 systemd 单元，基础设施细节只存在于 `infra/` 的对应 Adapter 中（见 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)）
+- 业务模块不得直接调用 `dockerode`、执行 `docker` 命令或拼接 systemd 单元，基础设施细节只存在于 `infra/` 的对应 Adapter 中（见内部文档 `docs_local/ARCHITECTURE.md`）
 - 避免跨模块深层引用；公共能力统一沉淀到 `server/src/shared/*`

@@ -108,7 +108,7 @@ ARG COMPOSE_PLUGIN_URL=
 # gzip -t / docker compose version 兼作完整性校验：拿到截断的文件就删掉重来。
 # compose 插件必须是可执行的（0755）：docker CLI 判定子命令是否存在，靠的就是执行
 # 这个二进制；少了可执行位它不报权限错误，而是报 `unknown command: docker compose`。
-# 同款做法见 scripts/install.linux.sh 与 docs/INSTALL.md 的手动补装步骤。
+# 同款做法见 scripts/install.linux.sh 与 docs/install-docker.md 的手动补装步骤。
 RUN set -eux; \
   docker_cli_url="${DOCKER_CLI_URL:-https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz}"; \
   compose_url="${COMPOSE_PLUGIN_URL:-https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64}"; \

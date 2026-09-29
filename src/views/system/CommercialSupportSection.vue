@@ -113,28 +113,6 @@ onMounted(loadSupport)
           </p>
         </div>
 
-        <div class="rounded-md border px-3 py-2 text-sm">
-          <div class="font-medium">
-            付费服务不含什么
-          </div>
-          <ul class="mt-1 list-disc space-y-0.5 pl-5 text-muted-foreground">
-            <li v-for="item in support.exclusions" :key="item">
-              {{ item }}
-            </li>
-          </ul>
-        </div>
-
-        <div class="rounded-md border px-3 py-2 text-sm">
-          <span class="font-medium">Pro 能力</span>
-          <span class="text-muted-foreground">（{{ support.proStatus }}）</span>
-          <ul class="mt-2 space-y-1">
-            <li v-for="item in support.proCapabilities" :key="item.id">
-              <span class="font-medium">{{ item.name }}</span>
-              <span class="text-muted-foreground"> —— {{ item.detail }}</span>
-            </li>
-          </ul>
-        </div>
-
         <div class="space-y-2 text-sm">
           <div class="font-medium">
             联系方式

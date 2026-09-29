@@ -32,7 +32,7 @@ export const NATIVE_UPDATE_HELPER_FILE = '/usr/local/lib/game-server-hub/gsh-nat
 export const NATIVE_UPDATE_STATE_MAX_BYTES = 8 * 1024
 
 export const NATIVE_UPDATE_INSTALLER_HINT
-  = '当前安装还没有面板内更新组件。重跑一次安装脚本即可在面板里一键更新（步骤见 docs/INSTALL.md 的升级章节）。'
+  = '当前安装还没有面板内更新组件。重跑一次安装脚本即可在面板里一键更新（步骤见 docs/install-native.md 的升级章节）。'
 
 export type NativeUpdatePhase = 'running' | 'done' | 'failed'
 

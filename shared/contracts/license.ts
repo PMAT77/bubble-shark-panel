@@ -3,7 +3,7 @@ import { z } from 'zod'
 /**
  * Pro 授权的离线许可文件。
  *
- * 设计约束（来自 `docs/ARCHITECTURE.md` 的 Open-Core 边界，改动前先读那一节）：
+ * 设计约束（来自 `docs_local/ARCHITECTURE.md` 的 Open-Core 边界，改动前先读那一节）：
  *
  * 1. **Community 核心能力不因授权缺失而下降**：许可只影响 Pro 插件的可用性；
  *    许可无效、过期或文件缺失时，**绝不停止正在运行的游戏实例**。

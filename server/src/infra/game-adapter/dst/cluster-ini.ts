@@ -185,7 +185,7 @@ function isValidSteamGroupId(value: string): boolean {
   return /^\d+$/.test(value)
 }
 
-/** 结构与 docs/others/cluster.ini 一致（无注释行） */
+/** 结构与上游参考的 cluster.ini 一致（无注释行） */
 export function buildClusterIni(fields: ClusterIniFields): string {
   const safeClusterName = sanitizeInlineText(fields.clusterName) || 'Game Server Hub'
   const safeDescription = sanitizeInlineText(fields.clusterDescription)

@@ -20,7 +20,7 @@
 | `node` | 本地节点心跳与列表；远程节点管理属于规划中的能力，当前未实现 |
 | `system` | 系统设置、面板更新、面板端口与健康检查；**成员与角色（RBAC）**：角色 CRUD、成员 CRUD、实例授权分配，见同目录 `rbac-service.ts` / `rbac-routes.ts` 与 `server/src/shared/db/rbac-repository.ts` |
 
-新增模块时同步更新本表；模块划分与边界变更请同时更新 [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)。
+新增模块时同步更新本表；模块划分与边界变更请同时更新内部文档 `docs_local/ARCHITECTURE.md`（不在公开仓库内）。
 
 ## 组织建议
 

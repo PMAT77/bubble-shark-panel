@@ -11,11 +11,11 @@
 - `server/src/README.md`（后端分层）、`server/src/modules/README.md`、`server/src/infra/README.md`、`server/src/shared/README.md`
 - `shared/README.md`（前后端契约与错误码）、`src/hotkeys/README.md`
 
-需求含糊或涉及架构边界时，再查 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。文档按需取用，不做通读要求。
+需求含糊或涉及架构边界时，再查 `docs_local/ARCHITECTURE.md`（内部文档，不在公开仓库内）。文档按需取用，不做通读要求。
 
 ## 验证
 
-先跑针对本次改动的最小检查，例如相关的单测或检查脚本。准备 PR 前跑一次 [DEVELOPMENT.md](docs/DEVELOPMENT.md) 里的门禁命令即可，不必每步都跑全套。
+先跑针对本次改动的最小检查，例如相关的单测或检查脚本。准备 PR 前跑一次 `docs_local/DEVELOPMENT.md`（内部文档，不在公开仓库内）里的门禁命令即可，不必每步都跑全套。
 
 改动小且可逆时，不需要为了“再确认一次”而扩大测试范围。
 

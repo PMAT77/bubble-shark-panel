@@ -15,14 +15,14 @@
 | **`gsh` CLI** | 安装在宿主机的命令行工具，只管面板栈（`status` / `logs` / `restart` / `update` / `doctor` / `setup-swap`），不管理游戏实例 |
 | **`panel.env`** | 面板的环境变量文件，生产安装后在 `/opt/game-server-hub/panel.env`；模板见仓库根目录 `panel.env.example` |
 | **linger** | systemd 特性：`loginctl enable-linger gsh` 让 `gsh` 的用户服务在无人登录时继续运行 |
-| **运行时（Runtime）/ 适配器（Adapter）** | 代码分层概念：运行时指管理游戏进程的抽象接口，适配器是它的具体实现（Docker、systemd），见[架构文档](ARCHITECTURE.md) |
+| **运行时（Runtime）/ 适配器（Adapter）** | 代码分层概念：运行时指管理游戏进程的抽象接口，适配器是它的具体实现（Docker、systemd） |
 
 ## 镜像与分发
 
 | 术语 | 含义 |
 | --- | --- |
 | **统一镜像** | v0.2.0 起把面板、DST 运行库与 SteamCMD 合并成的单个镜像 `ghcr.io/pmat77/game-server-hub` |
-| **tag 与 digest** | tag（如 `v0.4.2`）是可读的版本标签，digest 是镜像内容的不可变指纹；部署与排查以 digest 为准，见 [IMAGE_DISTRIBUTION.md](IMAGE_DISTRIBUTION.md) |
+| **tag 与 digest** | tag（如 `v0.4.2`）是可读的版本标签，digest 是镜像内容的不可变指纹；部署与排查以 digest 为准 |
 | **离线镜像包** | 每个 Release 附带的 `game-server-hub-<tag>-docker-image.tar.gz`（含同名 `.sha256`），用 `docker load -i` 导入，供 GHCR 不可达时使用 |
 | **安装器** | `scripts/install.linux.sh`，负责系统预检、装 Docker/SteamCMD、写入 `panel.env`、拉取镜像并启动面板 |
 | **网络档位** | 安装器的 `--network auto\|cn\|global`，决定软件源与下载加速策略；`cn` 会临时切换国内软件源并在失败时还原 |
@@ -51,13 +51,13 @@
 | --- | --- |
 | **安全组** | 云厂商在虚拟机之外的一层入站规则，必须手动放行面板 TCP 与游戏 UDP 端口 |
 | **本机防火墙** | 服务器内部的 ufw / firewalld；安装器的 `--open-panel-port` / `--open-dst-ports` 只影响它 |
-| **NAT 转发** | 宿主服务器没有直连公网 IP 时，需要在云平台"端口转发"或路由器上按**与内部相同的端口**再加一层映射，见 [DST 开服教程 5.4](DST_TUTORIAL.md#54-宿主服务器在-nat-转发后面) |
+| **NAT 转发** | 宿主服务器没有直连公网 IP 时，需要在云平台"端口转发"或路由器上按**与内部相同的端口**再加一层映射，见 [Docker 模式安装](install-docker.md#必须开放的端口) |
 | **CGNAT** | 运营商级 NAT：路由器 WAN 口是 `10.` / `100.64.` / `172.16-31.` 开头时，端口映射不会生效 |
 
 ## 项目治理
 
 | 术语 | 含义 |
 | --- | --- |
-| **Open-Core** | 核心功能永久开源（MIT），商业能力以独立插件形式提供，边界见 [ARCHITECTURE.md](ARCHITECTURE.md) |
+| **Open-Core** | 核心功能永久开源（MIT），商业能力以独立插件形式提供 |
 | **Community / Pro** | Community 指当前免费开源的核心；Pro 指规划中的商业插件（多节点管理等），**尚未开发** |
 | **Release 资产** | 每个 tag 附带的 `release-images.json`（镜像 digest）、离线镜像包及其校验和、provenance 与 SBOM |

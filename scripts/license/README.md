@@ -89,7 +89,7 @@ pnpm exec tsx scripts/plugins/sign-plugin.ts \
 
 1. **验签是离线的**：不需要联网，没有授权服务器，也没有「回连检查」。断网环境照样生效。
 2. **许可只影响 Pro 插件**：Community 核心功能不因许可缺失、过期或无效而减少，
-   **正在运行的游戏实例永远不会因为许可问题被停止**（见 `docs/ARCHITECTURE.md` 的 Open-Core 边界）。
+   **正在运行的游戏实例永远不会因为许可问题被停止**（见 `docs_local/ARCHITECTURE.md` 的 Open-Core 边界）。
 3. **到期后**：Pro 插件的操作入口关闭并说明原因；核心与实例继续照常运行，客户随时可以续期，不需要重装。
 
 ## 七、排错

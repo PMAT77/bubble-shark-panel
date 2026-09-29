@@ -17,9 +17,6 @@ const emits = defineEmits<{
   onLogin: [account?: string]
 }>()
 
-/** 管理员在服务器上重置密码的步骤在文档里，登录页只给入口，不贴命令与环境变量 */
-const DOCS_RESET_PASSWORD_URL = 'https://github.com/PMAT77/game-serve-hub/blob/main/docs/DST_TUTORIAL.md'
-
 const loading = ref(false)
 const statusLoading = ref(true)
 const recoveryEnabled = ref(false)
@@ -181,13 +178,7 @@ onMounted(() => {
       <NCollapse v-if="!statusLoading && !recoveryEnabled" class="mt-4">
         <NCollapseItem title="管理员：在服务器上重置密码" name="cli">
           <p class="text-xs text-muted-foreground">
-            重置步骤见
-            <a
-              class="text-primary hover:underline"
-              :href="DOCS_RESET_PASSWORD_URL"
-              target="_blank"
-              rel="noopener"
-            >项目文档</a>；开启在线找回后即可直接在本页重置。
+            忘记密码时，由能登录服务器的人在服务器上重置管理员密码；开启在线找回后即可直接在本页重置。
           </p>
         </NCollapseItem>
       </NCollapse>

@@ -106,7 +106,7 @@ sudo bash install.sh --mode docker
 部署到公网或多人可访问环境时：
 
 1. **立即修改默认密码**；`FORCE_PASSWORD_CHANGE` 默认为 `1`，首次登录会拦截至改密页
-2. 生产环境不要沿用模板里的示例密码：不设置 `ADMIN_PASSWORD` 时面板会随机生成强密码（读取方式见 [INSTALL.md](docs/INSTALL.md)）；`123456` 只是开发环境默认值
+2. 生产环境不要沿用模板里的示例密码：不设置 `ADMIN_PASSWORD` 时面板会随机生成强密码（读取方式见[参数速查 · 账号与安全](docs/reference.md#账号与安全)）；`123456` 只是开发环境默认值
 3. 面板不要直接裸露在公网；使用反向代理、防火墙或 VPN
 4. 定期拉取新版本镜像并阅读 [CHANGELOG.md](CHANGELOG.md)
 5. 勿将 `panel.env`、SQLite 数据库提交到公开仓库
@@ -120,4 +120,4 @@ sudo bash install.sh --mode docker
 2. 在 `panel.env` 设置 `GSH_TRUST_PROXY`（可信代理地址）。不设置时面板只能看到代理的 IP，登录限流与日志来源都会失真。
 3. 代理层再加一层访问控制（IP 白名单、Basic Auth 或 VPN），比只依赖面板登录更稳妥。
 
-更多安装安全提示见 [docs/INSTALL.md](docs/INSTALL.md)。
+更多安装安全提示见[Docker 模式安装](docs/install-docker.md)与 [Native systemd 模式安装](docs/install-native.md)。

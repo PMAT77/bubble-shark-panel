@@ -9,7 +9,7 @@ import Fastify from 'fastify'
 import type { FastifyInstance } from 'fastify'
 import type { PermissionKey } from '../../../../shared/constants/permissions'
 import { registerAuthModule } from '../auth/index'
-import { authorizeInstance, resolveInstanceScope } from './auth'
+import { authorizeInstance, requirePermission, resolveInstanceScope } from './auth'
 import { closeDatabase, initDatabase } from '../../shared/db/index'
 import { ensureDb, nowIso } from '../../shared/db/connection'
 import { gameInstances, instanceGrants, roles, userPermissions, userRoles, users } from '../../shared/db/schema/index'
@@ -23,7 +23,8 @@ import { gameInstances, instanceGrants, roles, userPermissions, userRoles, users
  * 三条必须成立的性质：
  * 1. 权限点与实例授权**同时**满足才放行；
  * 2. 授权失败与实例不存在回**同一句文案**（否则这个接口就是实例 ID 枚举器）；
- * 3. 游客角色即使被误配了写权限点，写操作仍然拒绝（它是公开只读预览的唯一安全阀）。
+ * 3. 游客角色即使被误配了写权限点，写操作仍然拒绝——实例级与**全局**写接口都要拒
+ *    （判断在 `resolveAuthorizedContext` 里，两条路径都经过它）。
  *
  * **本项目的接口断言口径**（`docs_local/module-status.md` 记过，这里再写一遍防止踩第二次）：
  * 业务错误走 **HTTP 200 + `status: 1` + 非空 `error`**；`status: 0` 专指「未登录 / 登录失效」。
@@ -102,6 +103,17 @@ async function call(path: string, instanceId: string, authToken = token) {
   return parseBody<{ ok: boolean }>(response.body)
 }
 
+/** 调不接收实例 ID 的全局接口 */
+async function callGlobal(path: string, authToken = token) {
+  const response = await app.inject({
+    method: 'POST',
+    url: path,
+    headers: { token: authToken },
+    payload: {},
+  })
+  return parseBody<{ ok: boolean }>(response.body)
+}
+
 /** 成功 = status 1 且没有 error（业务失败同样是 status 1，不能只看 status） */
 function isOk(body: ApiEnvelope<{ ok: boolean }>): boolean {
   return body.status === 1 && body.error === ''
@@ -135,6 +147,27 @@ describe('实例级鉴权 authorizeInstance', () => {
         return scope.error
       }
       return { status: 1, error: '', code: 'OK', data: { instanceIds: scope.instanceIds } }
+    })
+    /**
+     * 全局（与具体实例无关）的读写接口。
+     *
+     * 游客禁写必须覆盖到这一层：它原先只写在 `authorizeInstance` 里，
+     * 而面板设置、成员、插件这些写接口走的是 `requirePermission`，
+     * 只读账号能直接调它们。
+     */
+    app.post('/t/global-write', async (request) => {
+      const authError = await requirePermission(request, 'settings:write')
+      if (authError) {
+        return authError
+      }
+      return { status: 1, error: '', code: 'OK', data: { ok: true } }
+    })
+    app.post('/t/global-read', async (request) => {
+      const authError = await requirePermission(request, 'settings:read')
+      if (authError) {
+        return authError
+      }
+      return { status: 1, error: '', code: 'OK', data: { ok: true } }
     })
     await app.ready()
 
@@ -241,6 +274,19 @@ describe('实例级鉴权 authorizeInstance', () => {
 
     const read = await call('/t/room-read', INSTANCE_A)
     assert.equal(isOk(read), true, '游客的读操作应当正常放行')
+  })
+
+  it('游客在全局写接口上同样被拒，全局读接口正常', async () => {
+    await setRole(guestRoleId)
+    // 同样假设权限点被误配上了：全局接口的写保护不能只依赖「游客没有写权限点」
+    await setPermissions(['settings:read', 'settings:write'])
+
+    const write = await callGlobal('/t/global-write')
+    assert.equal(isDenied(write), true, '全局写接口（面板设置等）必须拒绝游客')
+    assert.match(write.error, /游客/)
+
+    const read = await callGlobal('/t/global-read')
+    assert.equal(isOk(read), true, '游客的全局读接口应当正常放行')
   })
 
   it('实例 ID 为空时拒绝', async () => {

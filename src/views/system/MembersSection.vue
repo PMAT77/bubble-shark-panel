@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { NButton, NCard, NDataTable, NEmpty, NForm, NFormItem, NInput, NModal, NPopconfirm, NSelect, NSpace, NSpin, NSwitch, NTag, useMessage } from 'naive-ui'
-import { h, onMounted, reactive, ref } from 'vue'
+import { NButton, NDataTable, NEmpty, NForm, NFormItem, NInput, NModal, NPopconfirm, NSelect, NSpace, NSwitch, NTag, NTooltip, useMessage } from 'naive-ui'
+import { computed, h, onMounted, reactive, ref } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiRbac from '@/api/modules/rbac'
-import type { MemberListItem, RoleListItem } from '@/api/modules/rbac'
+import type { MemberListItem, RoleOptionItem } from '@/api/modules/rbac'
 import { apiErrorMessage } from '@/utils/apiErrorMessage'
 
 /**
@@ -21,15 +21,19 @@ defineOptions({
 })
 
 const message = useMessage()
+const appSettingsStore = useAppSettingsStore()
+const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 
 const loading = ref(false)
 const saving = ref(false)
 const members = ref<MemberListItem[]>([])
-const roles = ref<RoleListItem[]>([])
+const roles = ref<RoleOptionItem[]>([])
 const instances = ref<Array<{ id: string, name: string }>>([])
 
 const editorVisible = ref(false)
 const editingUserId = ref<string | null>(null)
+/** 正在编辑的成员整行；超级管理员在界面上要少几个入口（密码、停用） */
+const editingMember = ref<MemberListItem | null>(null)
 const form = reactive({
   account: '',
   password: '',
@@ -50,8 +54,10 @@ async function loadAll() {
   try {
     const [memberRes, roleRes, instanceRes] = await Promise.all([
       apiRbac.memberList(),
-      apiRbac.roleList(),
-      apiInstance.getInstanceList({}),
+      // 角色下拉只需要"能选一个角色"，所以走最小投影接口：member:read 也够，
+      // 不必为了建成员而拿到「查看角色」权限
+      apiRbac.roleOptions(),
+      apiInstance.getInstanceOptions({}),
     ])
     members.value = memberRes.data ?? []
     roles.value = roleRes.data ?? []
@@ -76,6 +82,7 @@ async function loadAll() {
 
 function openCreate() {
   editingUserId.value = null
+  editingMember.value = null
   form.account = ''
   form.password = ''
   form.roleId = roleOptions.value[0]?.value ?? null
@@ -87,6 +94,7 @@ function openCreate() {
 
 function openEdit(member: MemberListItem) {
   editingUserId.value = member.id
+  editingMember.value = member
   form.account = member.account
   form.password = ''
   form.roleId = member.roleId
@@ -111,7 +119,8 @@ async function submit() {
       await apiRbac.memberUpdate({
         userId: editingUserId.value,
         roleId: form.roleId,
-        status: form.status === 1 ? 1 : 0,
+        // 超级管理员不接受停用（服务端也会拒绝）：干脆不带 status，别去提一个必然被拒的字段
+        ...(editingMember.value?.isAdminAccount ? {} : { status: form.status === 1 ? 1 : 0 }),
       })
       // 实例授权单独一条接口：它与角色是两件事，失败时也要能分别提示
       await apiRbac.memberInstances({ userId: editingUserId.value, instanceIds: form.instanceIds })
@@ -192,7 +201,26 @@ async function removeMember(member: MemberListItem) {
 }
 
 const columns = [
-  { title: '账号', key: 'account', minWidth: 140 },
+  {
+    title: '账号',
+    key: 'account',
+    minWidth: 170,
+    render: (row: MemberListItem) => {
+      if (!row.isAdminAccount) {
+        return row.account
+      }
+      // 带上身份标签并说明为什么这一行没有「重置密码」：否则用户只会觉得按钮少了
+      return h(NSpace, { size: 6, align: 'center', wrap: false }, {
+        default: () => [
+          row.account,
+          h(NTooltip, null, {
+            trigger: () => h(NTag, { size: 'small', type: 'info', bordered: false }, { default: () => '超级管理员' }),
+            default: () => '密码只能本人在「个人设置 → 修改密码」里改，这里不提供重置',
+          }),
+        ],
+      })
+    },
+  },
   {
     title: '角色',
     key: 'roleName',
@@ -226,16 +254,27 @@ const columns = [
     title: '操作',
     key: 'actions',
     width: 260,
-    render: (row: MemberListItem) => h(NSpace, { size: 6 }, {
-      default: () => [
-        h(NButton, { size: 'small', quaternary: true, onClick: () => openEdit(row) }, { default: () => '编辑' }),
-        h(NButton, { size: 'small', quaternary: true, onClick: () => openPasswordReset(row) }, { default: () => '重置密码' }),
-        h(NButton, { size: 'small', quaternary: true, onClick: () => toggleStatus(row) }, { default: () => (row.status === 1 ? '停用' : '启用') }),
-        h(NPopconfirm, { onPositiveClick: () => removeMember(row) }, {
-          trigger: () => h(NButton, { size: 'small', quaternary: true, type: 'error' }, { default: () => '删除' }),
-          default: () => `删除「${row.account}」后不可恢复，确定吗？`,
-        }),
-      ],
+    render: (row: MemberListItem) => h(NSpace, { size: 8, wrap: false }, {
+      default: () => {
+        const actions: ReturnType<typeof h>[] = [
+          h(NButton, { size: 'small', secondary: true, onClick: () => openEdit(row) }, { default: () => '编辑' }),
+        ]
+        // 超级管理员的密码只能本人在个人设置里改（服务端也会拒绝），入口干脆不出现
+        if (!row.isAdminAccount) {
+          actions.push(h(NButton, { size: 'small', secondary: true, onClick: () => openPasswordReset(row) }, { default: () => '重置密码' }))
+        }
+        // 同理不停用超级管理员；它已经是停用状态时保留「启用」，否则那条恢复路径就没了
+        if (!row.isAdminAccount || row.status !== 1) {
+          actions.push(h(NButton, { size: 'small', secondary: true, onClick: () => toggleStatus(row) }, { default: () => (row.status === 1 ? '停用' : '启用') }))
+        }
+        actions.push(
+          h(NPopconfirm, { onPositiveClick: () => removeMember(row) }, {
+            trigger: () => h(NButton, { size: 'small', secondary: true, type: 'error' }, { default: () => '删除' }),
+            default: () => `删除「${row.account}」后不可恢复，确定吗？`,
+          }),
+        )
+        return actions
+      },
     }),
   },
 ]
@@ -244,95 +283,99 @@ onMounted(loadAll)
 </script>
 
 <template>
-  <NCard title="成员" :bordered="false">
-    <template #header-extra>
-      <NButton type="primary" size="small" @click="openCreate">
-        新建成员
-      </NButton>
+  <div class="flex flex-wrap items-center justify-start gap-3">
+    <NButton type="primary" @click="openCreate">
+      新建成员
+    </NButton>
+  </div>
+
+  <NDataTable
+    :columns="columns"
+    :data="members"
+    :loading="loading"
+    :scroll-x="isMobileMode ? 900 : undefined"
+    :pagination="false"
+    :row-key="(row: MemberListItem) => row.id"
+    size="small"
+  >
+    <template #empty>
+      <NEmpty size="large" description="还没有成员。新建一个子账号并分配角色即可。" />
     </template>
+  </NDataTable>
 
-    <NSpin :show="loading">
-      <NDataTable
-        v-if="members.length > 0"
-        :columns="columns"
-        :data="members"
-        :row-key="(row: MemberListItem) => row.id"
-        :bordered="false"
-        size="small"
-      />
-      <NEmpty v-else description="还没有成员。新建一个子账号并分配角色即可。" />
-    </NSpin>
+  <NModal
+    v-model:show="editorVisible"
+    preset="card"
+    :title="editingUserId ? '编辑成员' : '新建成员'"
+    class="max-w-2xl"
+    :mask-closable="false"
+  >
+    <NForm label-placement="top">
+      <NFormItem label="账号" required>
+        <NInput v-model:value="form.account" :disabled="Boolean(editingUserId)" placeholder="登录用的账号名" maxlength="128" />
+      </NFormItem>
+      <NFormItem v-if="!editingUserId" label="初始密码" required>
+        <NInput v-model:value="form.password" type="password" show-password-on="click" placeholder="8-64 位，含大小写字母、数字与特殊字符" />
+      </NFormItem>
+      <NFormItem label="角色" required>
+        <NSelect v-model:value="form.roleId" :options="roleOptions" placeholder="选择角色" />
+      </NFormItem>
+      <NFormItem label="可见实例">
+        <NSelect
+          v-model:value="form.instanceIds"
+          multiple
+          filterable
+          :options="instanceOptions"
+          placeholder="不选则看不到任何实例"
+        />
+      </NFormItem>
+      <NFormItem v-if="!editingUserId" label="首次登录须改密">
+        <NSwitch v-model:value="form.mustChangePassword" />
+      </NFormItem>
+      <NFormItem v-else-if="!editingMember?.isAdminAccount" label="启用">
+        <NSwitch
+          :value="form.status === 1"
+          @update:value="(value: boolean) => { form.status = value ? 1 : 0 }"
+        />
+      </NFormItem>
+      <p v-else class="mt-0 mb-2 text-xs text-muted-foreground">
+        超级管理员账号不能被停用，所以这里没有启用开关。
+      </p>
+    </NForm>
 
-    <NModal
-      v-model:show="editorVisible"
-      preset="card"
-      :title="editingUserId ? '编辑成员' : '新建成员'"
-      class="max-w-2xl"
-    >
-      <NForm label-placement="top">
-        <NFormItem label="账号" required>
-          <NInput v-model:value="form.account" :disabled="Boolean(editingUserId)" placeholder="登录用的账号名" maxlength="128" />
-        </NFormItem>
-        <NFormItem v-if="!editingUserId" label="初始密码" required>
-          <NInput v-model:value="form.password" type="password" show-password-on="click" placeholder="8-64 位，含大小写字母、数字与特殊字符" />
-        </NFormItem>
-        <NFormItem label="角色" required>
-          <NSelect v-model:value="form.roleId" :options="roleOptions" placeholder="选择角色" />
-        </NFormItem>
-        <NFormItem label="可见实例">
-          <NSelect
-            v-model:value="form.instanceIds"
-            multiple
-            filterable
-            :options="instanceOptions"
-            placeholder="不选则看不到任何实例"
-          />
-        </NFormItem>
-        <NFormItem v-if="!editingUserId" label="首次登录须改密">
-          <NSwitch v-model:value="form.mustChangePassword" />
-        </NFormItem>
-        <NFormItem v-else label="启用">
-          <NSwitch
-            :value="form.status === 1"
-            @update:value="(value: boolean) => { form.status = value ? 1 : 0 }"
-          />
-        </NFormItem>
-      </NForm>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="editorVisible = false">
+          取消
+        </NButton>
+        <NButton type="primary" :loading="saving" @click="submit">
+          保存
+        </NButton>
+      </NSpace>
+    </template>
+  </NModal>
 
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="editorVisible = false">
-            取消
-          </NButton>
-          <NButton type="primary" :loading="saving" @click="submit">
-            保存
-          </NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <NModal v-model:show="passwordVisible" preset="card" title="重置密码" class="max-w-lg">
-      <NForm label-placement="top">
-        <NFormItem label="账号">
-          <NInput :value="passwordForm.account" disabled />
-        </NFormItem>
-        <NFormItem label="新密码" required>
-          <NInput v-model:value="passwordForm.password" type="password" show-password-on="click" placeholder="8-64 位，含大小写字母、数字与特殊字符" />
-        </NFormItem>
-        <NFormItem label="要求下次登录改密">
-          <NSwitch v-model:value="passwordForm.mustChangePassword" />
-        </NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="passwordVisible = false">
-            取消
-          </NButton>
-          <NButton type="primary" :loading="saving" @click="submitPassword">
-            重置
-          </NButton>
-        </NSpace>
-      </template>
-    </NModal>
-  </NCard>
+  <NModal v-model:show="passwordVisible" preset="card" title="重置密码" class="max-w-lg" :mask-closable="false">
+    <NForm label-placement="top">
+      <NFormItem label="账号">
+        <NInput :value="passwordForm.account" disabled />
+      </NFormItem>
+      <NFormItem label="新密码" required>
+        <NInput v-model:value="passwordForm.password" type="password" show-password-on="click" placeholder="8-64 位，含大小写字母、数字与特殊字符" />
+      </NFormItem>
+      <NFormItem label="要求下次登录改密">
+        <NSwitch v-model:value="passwordForm.mustChangePassword" />
+      </NFormItem>
+    </NForm>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="passwordVisible = false">
+          取消
+        </NButton>
+        <NButton type="primary" :loading="saving" @click="submitPassword">
+          重置
+        </NButton>
+      </NSpace>
+    </template>
+  </NModal>
 </template>

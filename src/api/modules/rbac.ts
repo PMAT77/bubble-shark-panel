@@ -8,6 +8,7 @@ import type {
   RoleCreatePayload,
   RoleListItem,
   RoleMutationResult,
+  RoleOptionItem,
   RoleUpdatePayload,
 } from '../../../shared/contracts/rbac'
 import api from '../index'
@@ -22,6 +23,7 @@ export type {
   RoleCreatePayload,
   RoleListItem,
   RoleMutationResult,
+  RoleOptionItem,
   RoleUpdatePayload,
 }
 
@@ -33,6 +35,13 @@ export type {
  */
 export default {
   roleList: () => api.get('app/system/roles') as Promise<{ data: RoleListItem[] }>,
+  /**
+   * 角色选项：只够"选一个角色"用。
+   *
+   * 成员管理用它做角色下拉（不需要权限点清单与成员数），因此成员页只需要 `member:read`，
+   * 不必再要求 `role:read`。
+   */
+  roleOptions: () => api.get('app/system/role-options') as Promise<{ data: RoleOptionItem[] }>,
   roleCreate: (data: RoleCreatePayload) => api.post('app/system/roles/create', data) as Promise<{ data: RoleMutationResult }>,
   roleUpdate: (data: RoleUpdatePayload) => api.post('app/system/roles/update', data) as Promise<{ data: RoleMutationResult }>,
   roleDelete: (roleId: string) => api.post('app/system/roles/delete', { roleId }) as Promise<{ data: RoleMutationResult }>,

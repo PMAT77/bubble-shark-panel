@@ -11,6 +11,7 @@ import type {
 } from '../../../../shared/contracts/rbac'
 import { isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../../../../shared/constants/password'
 import { isKnownPermission } from '../../../../shared/constants/permissions'
+import { loadServerConfig } from '../../shared/config'
 import {
   createUserRecord,
   deleteRoleById,
@@ -36,6 +37,7 @@ import {
   updateUserStatusById,
   countActiveUsersWithPermission,
 } from '../../shared/db/index'
+import { isConfiguredGuestAccountName } from '../../shared/db/guest-account'
 
 /**
  * 角色与成员的业务逻辑。
@@ -67,6 +69,44 @@ function validatePermissions(permissions: readonly string[]): string | null {
   return null
 }
 
+/**
+ * 是不是配置里的超级管理员账号（默认 `superadmin`）。
+ *
+ * 这个账号有几条额外底线：密码不能由别人重置、不能被停用。
+ * 判定读的是配置而不是数据库里的标记——种子账号与升级迁移用的也是同一份配置，
+ * 只认一个来源就不会出现"谁才是管理员"两处不一致。
+ */
+function isAdminAccountName(account: string): boolean {
+  return account === loadServerConfig().adminUsername
+}
+
+/**
+ * 内置游客角色只能挂在**配置的那个面板游客账号**上。
+ *
+ * 为什么必须拦：游客角色是"零写权限"的角色，而它的免密入口是公开的
+ * （`POST /app/account/guest-login` 会为这个角色签出会话）。一旦把它配给某个真实运维账号，
+ * 那个账号的后果有两层：
+ *
+ * 1. **能力被静默清空**——他还用原密码登录，但所有按钮都消失、所有写操作返回
+ *    「当前账号是只读的游客角色」，而界面上没有任何地方说明"因为你的角色被改了"；
+ * 2. **被公开入口顶掉**——游客账号是共享的，任何访客都能用它的身份进来；
+ *    如果一个运维账号被误配成游客角色，它就等于多了一个谁都能用的入口。
+ *
+ * 允许的目标是配置里的 `GSH_GUEST_LOGIN_ACCOUNT`（默认 `guest`），
+ * 且**与开关是否开启无关**：`SECURITY.md` 里"手工建一个只读账号挂游客角色"是既有用法，
+ * 它挂的也是这个名字。
+ */
+function assertGuestRoleAssignable(account: string, roleKind: string | null | undefined): string | null {
+  if (roleKind !== 'guest') {
+    return null
+  }
+  if (isConfiguredGuestAccountName(account)) {
+    return null
+  }
+  return '内置游客角色只能分配给面板的游客账号（默认 guest，可用 GSH_GUEST_LOGIN_ACCOUNT 指定）。'
+    + '给运维账号分配只读能力请另建一个只读角色，否则这个账号会失去全部操作能力'
+}
+
 export async function listRoleItems(): Promise<RoleListItem[]> {
   const roles = await listRolesWithPermissions()
   return roles.map(role => ({
@@ -95,6 +135,7 @@ export async function listMemberItems(): Promise<MemberListItem[]> {
     roleKind: member.roleKind,
     instanceIds: member.instanceIds,
     createdAt: member.createdAt,
+    isAdminAccount: isAdminAccountName(member.account),
   }))
 }
 
@@ -250,6 +291,10 @@ export async function createMember(
   if (!role) {
     return { ok: false, message: '选择的角色不存在' }
   }
+  const guestRoleError = assertGuestRoleAssignable(payload.account, role.kind)
+  if (guestRoleError) {
+    return { ok: false, message: guestRoleError }
+  }
 
   const userId = randomUUID()
   await createUserRecord({
@@ -281,6 +326,16 @@ export async function updateMember(
     if (payload.userId === operatorUserId) {
       return { ok: false, message: '不能停用当前登录的账号' }
     }
+    /**
+     * 超级管理员账号不能被停用。
+     *
+     * 它和「密码只能本人改」是同一条底线：停用它同样等于把面板的管理入口交到
+     * 别人手里。这里只拦「停用」不拦「启用」——历史数据里如果是停用状态，
+     * 得留一条把它重新启起来的路径。
+     */
+    if (isAdminAccountName(member.account)) {
+      return { ok: false, message: '超级管理员账号不能被停用' }
+    }
     const blocked = await assertNotLastCriticalHolder(member.id, '停用')
     if (blocked) {
       return { ok: false, message: blocked }
@@ -291,6 +346,10 @@ export async function updateMember(
     const nextRole = await findRoleById(payload.roleId)
     if (!nextRole) {
       return { ok: false, message: '选择的角色不存在' }
+    }
+    const guestRoleError = assertGuestRoleAssignable(member.account, nextRole.kind)
+    if (guestRoleError) {
+      return { ok: false, message: guestRoleError }
     }
     if (payload.userId === operatorUserId) {
       // 自降权：允许换角色，但不允许把自己换成没有角色管理能力的角色——
@@ -322,6 +381,31 @@ export async function resetMemberPassword(
   if (!member) {
     return { ok: false, message: '成员不存在' }
   }
+
+  /**
+   * 超级管理员的密码不允许在成员管理里被重置——**包括管理员给自己重置**。
+   *
+   * 这个入口开着的时候，"谁是超级管理员"实际取决于谁先点了这个按钮：账号一旦被盗，
+   * 攻击者第一件事就是给自己留一个能重置所有人密码的后门。所以它的密码只能由本人
+   * 在「个人设置 → 修改密码」里改（要验旧密码）。忘了密码也不是死路：服务器上可以跑
+   * `server/scripts/reset-admin-password.ts`，或用 `ADMIN_PASSWORD` 配合
+   * `GSH_SYNC_ADMIN_PASSWORD_FROM_ENV` 同步——这两条都要求能登录服务器本身。
+   */
+  if (isAdminAccountName(member.account)) {
+    return { ok: false, message: '超级管理员账号的密码只能由本人在「个人设置 → 修改密码」里改' }
+  }
+
+  /**
+   * 游客账号的口令不允许在这里重置。
+   *
+   * 游客账号的口令是"没人知道"的随机值——它存在的唯一意义是让 `/app/account/login`
+   * 对它登不上。一旦有人给它设一个已知口令，游客身份就变成"谁都能用普通账号密码登录的账号"，
+   * 免密入口上的开关与限流全部作废（绕过按钮直接调 login 即可）。
+   */
+  if (await findRoleKindByUserId(member.id) === 'guest') {
+    return { ok: false, message: '游客账号的口令由面板自动管理（随机值），不能手动重置；它只能通过登录页的「游客登录」进入' }
+  }
+
   if (payload.userId === operatorUserId && payload.mustChangePassword === false) {
     return { ok: false, message: '给自己重置密码时不能关闭「下次登录须改密」' }
   }

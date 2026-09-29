@@ -1,8 +1,8 @@
 import type { FastifyRequest } from 'fastify'
 import type { ApiErrorResponse } from '../../../../shared/contracts/api'
 import { ErrorCode } from '../../../../shared/constants/error-code'
-import type { PermissionKey } from '../../../../shared/constants/permissions'
-import { findPermissionSpec } from '../../../../shared/constants/permissions'
+import type { PermissionKey, ReadPermissionKey } from '../../../../shared/constants/permissions'
+import { isStateChangingPermission } from '../../../../shared/constants/permissions'
 import {
   findPermissionsByUserId,
   findRoleKindByUserId,
@@ -122,6 +122,27 @@ export async function resolveAuthorizedContext(
     }
   }
 
+  /**
+   * 第二道保险：游客角色一律不能执行写操作，也不能调用"读接口但会改状态"的接口。
+   *
+   * 正常路径下游客只有 read 权限点，写接口在权限点校验那一步就过不去；这里再拦一次，
+   * 是因为游客角色是「只读预览」的唯一安全阀——即使有人绕过角色管理接口直接改库给它
+   * 加上写权限点，写操作依然不生效。
+   *
+   * 判据用 `isStateChangingPermission` 而不是 `action === 'write'`：后者会漏掉
+   * `instance.console:read` 这一处——`/app/instance/world-state` 的权限点是读，
+   * 但它会向运行中的游戏下发一条 `print` 指令。漏掉的后果不是"游客少看一页"，
+   * 而是任何匿名访客都能按页面的 30 秒轮询免费放大成对游戏的控制台命令注入。
+   *
+   * 为什么放在这一层：`requirePermission` / `resolveInstanceScope` / `authorizeInstance`
+   * 三条鉴权路径都经过 `resolveAuthorizedContext`，一处就覆盖了全部写接口，
+   * 不用逐个路由加判断。
+   */
+  const stateChangingPermission = requiredPermissions.find(permission => isStateChangingPermission(permission))
+  if (stateChangingPermission && await cachedRoleKind(request, user.id) === 'guest') {
+    return { error: businessError(GUEST_WRITE_DENIED_MESSAGE, request, ErrorCode.FORBIDDEN) }
+  }
+
   return {
     context: {
       token,
@@ -155,6 +176,68 @@ export async function requirePermission(
 
 export async function verifyAuthorized(request: FastifyRequest): Promise<ApiErrorResponse | undefined> {
   return requirePermission(request)
+}
+
+/**
+ * 「任一读权限点即可」的鉴权。
+ *
+ * 用于**同一份只读数据被多个模块共用**的接口：主机信息（`/app/system/info`）既服务
+ * 「监控台」（`console.monitor:read`）也服务「系统设置」（`settings:read`）；节点列表
+ * 既服务「实例管理」（`instance:read`）也服务监控。修这类接口的方式是放行，而不是给菜单
+ * 补 `settings:read`——后者会让"只看监控"的角色被迫拿到整份面板设置读权限。
+ *
+ * 三条约束：
+ * 1. 参数类型是 `ReadPermissionKey[]`（只读权限点），**传写权限点会编译报错**：
+ *    "任一命中即放行"用在写上就是越权，这里不给运行时反悔的机会；
+ * 2. 仍然是**登录 + 权限**两道都要过（走 `resolveAuthorizedContext`，因此
+ *    待改密拦截、令牌校验、游客判断的口径与其它接口完全一致）；
+ * 3. 只用于只读接口。写接口一律继续用 `requirePermission`（数组是 every 语义）。
+ */
+export async function resolveAnyReadPermission(
+  request: FastifyRequest,
+  permissions: readonly [ReadPermissionKey, ...ReadPermissionKey[]],
+): Promise<{ error?: ApiErrorResponse, context?: AuthorizedContext }> {
+  const auth = await resolveAuthorizedContext(request)
+  if (auth.error || !auth.context) {
+    return { error: auth.error ?? unauthorized(request) }
+  }
+  // resolveAuthorizedContext 只在传了权限点时才查权限表，这里需要完整集合，所以显式取一次
+  const granted = new Set(await findPermissionsByUserId(auth.context.user.id))
+  if (permissions.some(permission => granted.has(permission))) {
+    return { context: auth.context }
+  }
+  return {
+    error: businessError('当前账号无权限执行该操作', request, ErrorCode.FORBIDDEN, {
+      requiredPermissions: [...permissions],
+    }),
+  }
+}
+
+/**
+ * 上面那条鉴权的「只要错误」形态，供只需要"过不过"的调用方使用。
+ *
+ * 需要 `context`（例如接着要查这个账号被授权了哪些实例）时用 `resolveAnyReadPermission`，
+ * 别在这里再查一次用户。
+ */
+export async function requireAnyReadPermission(
+  request: FastifyRequest,
+  permissions: readonly [ReadPermissionKey, ...ReadPermissionKey[]],
+): Promise<ApiErrorResponse | undefined> {
+  const auth = await resolveAnyReadPermission(request, permissions)
+  return auth.error
+}
+
+/**
+ * 该账号可见的实例 id 集合（只看实例授权，**不判权限**）。
+ *
+ * 权限由调用方先判（`resolveAnyReadPermission` / `resolveInstanceScope`），这里只回答
+ * "能在哪些实例上做"。列表类接口把返回的集合当**过滤条件**，而不是提示。
+ */
+export async function resolveVisibleInstanceIds(
+  request: FastifyRequest,
+  userId: string,
+): Promise<readonly string[]> {
+  return cachedVisibleInstanceIds(request, userId)
 }
 
 // ── 实例级鉴权 ────────────────────────────────────────────────────────────
@@ -221,14 +304,21 @@ function cachedVisibleInstanceIds(request: FastifyRequest, userId: string): Prom
   return task
 }
 
-/** 游客角色对任何写权限点的统一拒绝文案 */
+/**
+ * 游客角色对任何写操作（写权限点，或标了 `sideEffect` 的读接口）的统一拒绝文案。
+ *
+ * 判断在 `resolveAuthorizedContext` 里，覆盖全局与实例两级接口。
+ */
 const GUEST_WRITE_DENIED_MESSAGE = '当前账号是只读的游客角色，不能执行这项操作'
 
 /**
- * 实例级鉴权：权限点 + 实例授权 + 游客写保护。
+ * 实例级鉴权：权限点 + 实例授权。
  *
  * 仅用于**针对某个具体实例**的路由。列表与聚合接口用 `resolveInstanceScope`，
  * 因为它们的语义是「按可见范围过滤」而不是「对某个实例放行/拒绝」。
+ *
+ * 游客的写保护不在这里：它上移到 `resolveAuthorizedContext`（见该函数里的注释），
+ * 因为除了实例级路由，全局写接口同样需要这道保险。
  */
 export async function authorizeInstance(
   request: FastifyRequest,
@@ -244,13 +334,6 @@ export async function authorizeInstance(
     return { error: auth.error ?? unauthorized(request) }
   }
   const userId = auth.context.user.id
-
-  // 第二道保险：即使有人在角色管理页给游客角色勾上了权限点，写操作仍然拒绝。
-  // 游客角色是将来公开只读预览的唯一安全阀，值得为它多写一次判断。
-  const spec = findPermissionSpec(permission)
-  if (spec?.action === 'write' && await cachedRoleKind(request, userId) === 'guest') {
-    return { error: businessError(GUEST_WRITE_DENIED_MESSAGE, request, ErrorCode.FORBIDDEN) }
-  }
 
   if (!await cachedHasGrant(request, userId, instanceId)) {
     return { error: businessError('没有该实例的访问权限', request, ErrorCode.FORBIDDEN) }

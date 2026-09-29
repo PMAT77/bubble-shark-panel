@@ -8,6 +8,7 @@ import { closeDatabase, findPermissionsByUserId, initDatabase } from '../../shar
 import { ensureDb } from '../../shared/db/connection'
 import { instanceGrants, roles, userRoles, users } from '../../shared/db/schema/index'
 import { eq } from 'drizzle-orm'
+import { loadServerConfig } from '../../shared/config'
 import {
   createMember,
   createRole,
@@ -40,6 +41,9 @@ function db() {
 
 describe('成员与角色服务', () => {
   before(async () => {
+    // 「超级管理员」的判定读的是配置里的管理员账号名：这里固定成种子账号，
+    // 免得开发者本机的 ADMIN_USERNAME 把用例带偏
+    process.env.ADMIN_USERNAME = 'superadmin'
     await initDatabase(dbFilePath, migrationsFolder)
     const d = db()
     const admin = (await d.select().from(users).where(eq(users.account, 'superadmin')))[0]
@@ -92,6 +96,76 @@ describe('成员与角色服务', () => {
       adminUserId,
     )
     assert.equal(reset.ok, false, '重置成弱密码同样要拦')
+  })
+
+  it('超级管理员的密码不能由别人重置，只能本人在个人设置里改', async () => {
+    const blocked = await resetMemberPassword(
+      { userId: adminUserId, password: 'Fresh-Pass#2026' },
+      adminUserId,
+    )
+    assert.equal(blocked.ok, false, '超级管理员账号不接受重置密码，本人从这里重置也不行')
+    if (!blocked.ok) {
+      assert.match(blocked.message, /个人设置/)
+    }
+
+    // 列表里要标出这个身份，界面据此不显示重置入口
+    const members = await listMemberItems()
+    assert.equal(members.find(item => item.id === adminUserId)?.isAdminAccount, true)
+    assert.ok(members.filter(item => item.id !== adminUserId).every(item => !item.isAdminAccount))
+
+    // 其它账号照旧可以重置
+    const role = await createRole({ name: '可重置密码的角色', permissions: ['room:read'] })
+    assert.equal(role.ok, true)
+    if (!role.ok) {
+      return
+    }
+    const member = await createMember({
+      account: `resettable-${randomUUID().slice(0, 8)}`,
+      password: 'Init-Password#2026',
+      roleId: role.data.roleId,
+    })
+    assert.equal(member.ok, true)
+    if (!member.ok) {
+      return
+    }
+    const done = await resetMemberPassword(
+      { userId: member.data.userId, password: 'Fresh-Pass#2026' },
+      adminUserId,
+    )
+    assert.equal(done.ok, true, '普通成员仍然可以重置密码')
+  })
+
+  it('超级管理员账号不能被停用，但允许重新启用', async () => {
+    const role = await createRole({ name: '可停用的角色', permissions: ['room:read'] })
+    assert.equal(role.ok, true)
+    if (!role.ok) {
+      return
+    }
+    const member = await createMember({
+      account: `disable-${randomUUID().slice(0, 8)}`,
+      password: 'Init-Password#2026',
+      roleId: role.data.roleId,
+    })
+    assert.equal(member.ok, true)
+    if (!member.ok) {
+      return
+    }
+
+    // 换个人来停用超管：用超管自己会被「不能停用当前登录的账号」先拦住，测不到这条规则
+    const blocked = await updateMember({ userId: adminUserId, status: 0 }, member.data.userId)
+    assert.equal(blocked.ok, false, '停用超级管理员要拦')
+    if (!blocked.ok) {
+      assert.match(blocked.message, /不能被停用/)
+    }
+
+    // 普通成员照旧可以停用
+    const off = await updateMember({ userId: member.data.userId, status: 0 }, adminUserId)
+    assert.equal(off.ok, true)
+
+    // 历史数据里如果是停用状态，得留一条把它重新启起来的路径（这里直接改库模拟）
+    await db().update(users).set({ status: 0 }).where(eq(users.id, adminUserId))
+    const on = await updateMember({ userId: adminUserId, status: 1 }, adminUserId)
+    assert.equal(on.ok, true, '启用超级管理员要允许，否则停用的历史数据没法恢复')
   })
 
   it('新角色可以被创建，并出现在列表里', async () => {
@@ -208,6 +282,82 @@ describe('成员与角色服务', () => {
     assert.equal(removed.ok, false)
     if (!removed.ok) {
       assert.match(removed.message, /个成员在用/)
+    }
+  })
+
+  /**
+   * 内置游客角色只能挂在配置的那个游客账号上。
+   *
+   * 为什么这是必须的一条：游客角色是"零写权限"的角色，而它的免密入口是公开的
+   * （`POST /app/account/guest-login` 为这个角色签会话）。一旦配给真实运维账号，
+   * 那个账号会**静默失去全部操作能力**（还用自己的密码登录，但所有按钮消失、
+   * 写操作全返回「只读的游客角色」），而界面上没有任何地方说明原因。
+   */
+  it('内置游客角色不能分配给非游客账号（建号与换角色两条路都拦）', async () => {
+    const d = db()
+    const guest = (await d.select().from(roles).where(eq(roles.key, 'guest')))[0]
+    assert.ok(guest, '游客角色应当由迁移建立')
+
+    const account = `ops-${randomUUID().slice(0, 8)}`
+    const created = await createMember({
+      account,
+      password: 'Init-Password#2026',
+      roleId: guest.id,
+    })
+    assert.equal(created.ok, false, '建号时把运维账号挂到游客角色上必须被拒')
+    if (!created.ok) {
+      assert.match(created.message, /游客账号/)
+    }
+
+    // 换角色这条路：先建一个正常账号，再尝试把它改成游客角色
+    const normalRole = await createRole({ name: `普通运维-${randomUUID().slice(0, 8)}`, permissions: ['room:read'] })
+    assert.equal(normalRole.ok, true)
+    if (!normalRole.ok) {
+      return
+    }
+    const member = await createMember({
+      account,
+      password: 'Init-Password#2026',
+      roleId: normalRole.data.roleId,
+    })
+    assert.equal(member.ok, true)
+    if (!member.ok) {
+      return
+    }
+    const switched = await updateMember({ userId: member.data.userId, roleId: guest.id }, adminUserId)
+    assert.equal(switched.ok, false, '把已有运维账号改成游客角色必须被拒')
+    if (!switched.ok) {
+      assert.match(switched.message, /游客账号/)
+    }
+  })
+
+  it('游客角色账号的口令不能在成员管理里重置', async () => {
+    const d = db()
+    const guest = (await d.select().from(roles).where(eq(roles.key, 'guest')))[0]!
+    /**
+     * 直接按配置里的游客账号名建号——这是"手工建一个只读预览账号"的既有用法
+     * （`SECURITY.md` 写明的那条路），守卫允许它。
+     */
+    const guestAccountName = loadServerConfig().guestLoginAccount
+    const existing = await d.select().from(users).where(eq(users.account, guestAccountName))
+    if (existing.length === 0) {
+      await createMember({
+        account: guestAccountName,
+        password: 'Init-Password#2026',
+        roleId: guest.id,
+        mustChangePassword: false,
+      })
+    }
+    const rows = await d.select().from(users).where(eq(users.account, guestAccountName))
+    const guestUserId = rows[0]!.id
+
+    const reset = await resetMemberPassword(
+      { userId: guestUserId, password: 'Another-Password#2026' },
+      adminUserId,
+    )
+    assert.equal(reset.ok, false, '给游客账号设一个已知口令，等于让"谁都能用密码登录"绕过免密入口上的开关与限流')
+    if (!reset.ok) {
+      assert.match(reset.message, /游客账号/)
     }
   })
 

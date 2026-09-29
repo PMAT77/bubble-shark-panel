@@ -15,9 +15,10 @@ import type {
   MemberMutationResult,
   RoleListItem,
   RoleMutationResult,
+  RoleOptionItem,
 } from '../../../../shared/contracts/rbac'
 import { businessError, success, unauthorized } from '../../shared/http/response'
-import { resolveAuthorizedContext } from './auth'
+import { requireAnyReadPermission, resolveAuthorizedContext } from './auth'
 import {
   createMember,
   createRole,
@@ -46,6 +47,22 @@ export function registerRbacRoutes(app: FastifyInstance) {
       return auth.error ?? unauthorized(request)
     }
     return success(await listRoleItems(), request)
+  })
+
+  /**
+   * 角色选项：只够"选一个角色"用（id / 名称 / 是否内置）。
+   *
+   * 为什么单开一条：「成员管理」要分配角色，但它不该因此要求 `role:read`——那等于
+   * "能管成员"就自动能看角色清单与权限矩阵。这里 `role:read` 或 `member:read` 任一即可，
+   * 且只返回选中一个角色所需的最小字段（成员页用它把内置角色标成「只读」）。
+   */
+  app.get('/app/system/role-options', async (request): Promise<ApiSuccessResponse<RoleOptionItem[]> | ApiErrorResponse> => {
+    const authError = await requireAnyReadPermission(request, ['role:read', 'member:read'])
+    if (authError) {
+      return authError
+    }
+    const roles = await listRoleItems()
+    return success(roles.map(role => ({ id: role.id, name: role.name, isBuiltin: role.isBuiltin })), request)
   })
 
   app.post('/app/system/roles/create', async (request): Promise<ApiSuccessResponse<RoleMutationResult> | ApiErrorResponse> => {

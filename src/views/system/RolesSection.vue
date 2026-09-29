@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NCheckbox, NCheckboxGroup, NDataTable, NEmpty, NForm, NFormItem, NInput, NModal, NPopconfirm, NSpace, NSpin, NTag, useMessage } from 'naive-ui'
+import { NButton, NDataTable, NDrawer, NDrawerContent, NEmpty, NForm, NFormItem, NInput, NPopconfirm, NSpace, NTag, useDialog, useMessage } from 'naive-ui'
 import { computed, h, onMounted, reactive, ref } from 'vue'
 import apiRbac from '@/api/modules/rbac'
 import type { RoleListItem } from '@/api/modules/rbac'
 import { apiErrorMessage } from '@/utils/apiErrorMessage'
-import { isKnownPermission, PERMISSION_GROUPS, PERMISSION_SPECS } from '../../../shared/constants/permissions'
-import type { PermissionGroup } from '../../../shared/constants/permissions'
+import { isKnownPermission } from '../../../shared/constants/permissions'
+import RolePermissionPicker from './components/RolePermissionPicker.vue'
 
 /**
  * 角色管理：一个角色 = 一组权限点。
@@ -16,6 +16,9 @@ import type { PermissionGroup } from '../../../shared/constants/permissions'
  * 「能力」与「范围」是两件事：这里配的是能力（能做哪些动作），
  * 成员能作用在哪些实例上由「成员管理」里的实例授权决定。页面上要把这句说清楚，
  * 否则很容易以为勾了权限就等于给了全部实例。
+ *
+ * 权限点怎么勾由 `RolePermissionPicker` 负责（起点模板 + 分模块折叠 + 逐项说明），
+ * 这个文件只管列表、表单与保存。
  */
 
 defineOptions({
@@ -23,6 +26,9 @@ defineOptions({
 })
 
 const message = useMessage()
+const dialog = useDialog()
+const appSettingsStore = useAppSettingsStore()
+const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 
 const loading = ref(false)
 const saving = ref(false)
@@ -30,26 +36,27 @@ const roles = ref<RoleListItem[]>([])
 
 const editorVisible = ref(false)
 const editingRoleId = ref<string | null>(null)
+/** 正在编辑的角色整行：抽屉里要显示「多少成员在用」 */
+const editingRole = ref<RoleListItem | null>(null)
 const form = reactive({
   name: '',
   description: '',
   permissions: [] as string[],
 })
 
-const specsByGroup = computed(() => {
-  const map = new Map<PermissionGroup, typeof PERMISSION_SPECS[number][]>()
-  for (const spec of PERMISSION_SPECS) {
-    const list = map.get(spec.group) ?? []
-    list.push(spec)
-    map.set(spec.group, list)
+const memberUsageLine = computed(() => {
+  if (!editingRole.value) {
+    return ''
   }
-  return map
+  return editingRole.value.memberCount > 0
+    ? `${editingRole.value.memberCount} 位成员在用这个角色，保存后立即对他们生效。`
+    : '还没有成员在用这个角色。'
 })
 
 /**
  * 提交前过滤掉清单外的值。
  *
- * `NCheckboxGroup` 的值类型是 `string`，而接口只收已知权限点（`PermissionKey`）。
+ * `modelValue` 的值类型是 `string`，而接口只收已知权限点（`PermissionKey`）。
  * 用类型守卫过滤既满足类型，也顺手挡住"界面上出现了清单里没有的项"这种情况。
  */
 const permissionsForSubmit = computed(() => form.permissions.filter(isKnownPermission))
@@ -70,6 +77,7 @@ async function loadRoles() {
 
 function openCreate() {
   editingRoleId.value = null
+  editingRole.value = null
   form.name = ''
   form.description = ''
   form.permissions = []
@@ -78,34 +86,40 @@ function openCreate() {
 
 function openEdit(role: RoleListItem) {
   editingRoleId.value = role.id
+  editingRole.value = role
   form.name = role.name
   form.description = role.description
   form.permissions = [...role.permissions]
   editorVisible.value = true
 }
 
-function isGroupAllSelected(group: PermissionGroup): boolean {
-  const specs = specsByGroup.value.get(group) ?? []
-  return specs.length > 0 && specs.every(spec => form.permissions.includes(spec.key))
-}
-
-function toggleGroup(group: PermissionGroup) {
-  const specs = specsByGroup.value.get(group) ?? []
-  // 声明成 string[]：勾选面板的值是 string，而 spec.key 是字面量联合，直接 includes 会类型不匹配
-  const keys: string[] = specs.map(spec => spec.key)
-  if (isGroupAllSelected(group)) {
-    form.permissions = form.permissions.filter(key => !keys.includes(key))
-  }
-  else {
-    form.permissions = [...new Set([...form.permissions, ...keys])]
-  }
-}
-
-async function submit() {
+/**
+ * 没有任何权限的角色照旧允许保存（服务端也允许），但先说清后果：
+ * 成员登录后一个页面都看不到，很容易被当成"面板坏了"。
+ */
+function submit() {
   if (!form.name.trim()) {
     message.warning('请填写角色名称')
     return
   }
+  if (permissionsForSubmit.value.length === 0) {
+    dialog.warning({
+      title: '这个角色没有任何权限',
+      content: editingRoleId.value
+        ? '保存后，用这个角色的成员会看不到任何页面。确定这样保存吗？'
+        : '创建后，用这个角色的成员会看不到任何页面。确定这样创建吗？',
+      positiveText: '仍然保存',
+      negativeText: '回去勾选',
+      onPositiveClick: () => {
+        void doSubmit()
+      },
+    })
+    return
+  }
+  void doSubmit()
+}
+
+async function doSubmit() {
   saving.value = true
   try {
     const payload = {
@@ -115,7 +129,7 @@ async function submit() {
     }
     if (editingRoleId.value) {
       await apiRbac.roleUpdate({ roleId: editingRoleId.value, ...payload })
-      message.success('角色已更新，使用它的成员立即生效')
+      message.success('角色已更新，刷新页面后立即生效')
     }
     else {
       await apiRbac.roleCreate(payload)
@@ -145,7 +159,7 @@ async function removeRole(role: RoleListItem) {
 
 const columns = [
   { title: '角色', key: 'name', minWidth: 140 },
-  { title: '说明', key: 'description', minWidth: 160 },
+  { title: '备注', key: 'description', minWidth: 160 },
   {
     title: '权限点',
     key: 'permissions',
@@ -170,11 +184,11 @@ const columns = [
     title: '操作',
     key: 'actions',
     width: 150,
-    render: (row: RoleListItem) => h(NSpace, { size: 8 }, {
+    render: (row: RoleListItem) => h(NSpace, { size: 8, wrap: false }, {
       default: () => [
         h(NButton, {
           size: 'small',
-          quaternary: true,
+          secondary: true,
           // 内置游客角色不可改：它是公开只读预览的唯一安全阀，改动它等于拆掉那道闸
           disabled: row.isBuiltin,
           onClick: () => openEdit(row),
@@ -184,7 +198,7 @@ const columns = [
         }, {
           trigger: () => h(NButton, {
             size: 'small',
-            quaternary: true,
+            secondary: true,
             type: 'error',
             disabled: row.isBuiltin || row.memberCount > 0,
             onClick: () => {},
@@ -202,66 +216,57 @@ onMounted(loadRoles)
 </script>
 
 <template>
-  <NCard title="角色" :bordered="false">
-    <template #header-extra>
-      <NButton type="primary" size="small" @click="openCreate">
-        新建角色
-      </NButton>
+  <div class="flex flex-wrap items-center justify-start gap-3">
+    <NButton type="primary" @click="openCreate">
+      新建角色
+    </NButton>
+  </div>
+
+  <NDataTable
+    :columns="columns"
+    :data="roles"
+    :loading="loading"
+    :scroll-x="isMobileMode ? 900 : undefined"
+    :pagination="false"
+    :row-key="(row: RoleListItem) => row.id"
+    size="small"
+  >
+    <template #empty>
+      <NEmpty size="large" description="还没有角色。新建一个，勾上需要的权限点即可。" />
     </template>
+  </NDataTable>
 
-    <NAlert type="info" :bordered="false" class="mb-3">
-      角色决定「能做什么」，成员能作用在哪些实例上由「成员管理」里的实例授权决定 —— 两者同时满足才生效。
-    </NAlert>
-
-    <NSpin :show="loading">
-      <NDataTable
-        v-if="roles.length > 0"
-        :columns="columns"
-        :data="roles"
-        :row-key="(row: RoleListItem) => row.id"
-        :bordered="false"
-        size="small"
-      />
-      <NEmpty v-else description="还没有角色。新建一个，勾上需要的权限点即可。" />
-    </NSpin>
-
-    <NModal
-      v-model:show="editorVisible"
-      preset="card"
+  <NDrawer
+    v-model:show="editorVisible"
+    :width="isMobileMode ? '100%' : 720"
+    placement="right"
+    :mask-closable="false"
+  >
+    <NDrawerContent
       :title="editingRoleId ? '编辑角色' : '新建角色'"
-      class="max-w-3xl"
+      closable
+      :native-scrollbar="false"
     >
-      <NForm label-placement="top">
-        <NFormItem label="角色名称" required>
-          <NInput v-model:value="form.name" placeholder="例如：运维、只读看板" maxlength="64" />
-        </NFormItem>
-        <NFormItem label="说明">
-          <NInput v-model:value="form.description" placeholder="这个角色是给谁用的" maxlength="200" />
-        </NFormItem>
-      </NForm>
+      <div class="flex flex-col gap-4">
+        <p v-if="memberUsageLine" class="m-0 text-xs text-muted-foreground">
+          {{ memberUsageLine }}
+        </p>
 
-      <div class="mb-2 text-sm text-muted-foreground">
-        权限点（已选 {{ form.permissions.length }} 项）
-      </div>
-      <div class="max-h-[50vh] overflow-y-auto pr-1">
-        <div v-for="group in PERMISSION_GROUPS" :key="group" class="mb-3">
-          <div class="mb-1 flex items-center justify-between">
-            <span class="text-sm font-medium">{{ group }}</span>
-            <NButton text size="tiny" @click="toggleGroup(group)">
-              {{ isGroupAllSelected(group) ? '全不选' : '全选' }}
-            </NButton>
-          </div>
-          <NCheckboxGroup v-model:value="form.permissions">
-            <NSpace :size="[16, 6]">
-              <NCheckbox
-                v-for="spec in specsByGroup.get(group) ?? []"
-                :key="spec.key"
-                :value="spec.key"
-                :label="spec.label"
-              />
-            </NSpace>
-          </NCheckboxGroup>
-        </div>
+        <!--
+          `:show-feedback="false"` 去掉表单项底部预留的校验反馈位（就是那个
+          `n-form-item-feedback-wrapper`）：这里靠提交前手动校验，用不到它。
+          那个占位同时也是两个输入框之间的间距来源，所以拿掉之后要自己用 `mb-4` 补回来。
+        -->
+        <NForm label-placement="top">
+          <NFormItem label="角色名称" required :show-feedback="false" class="mb-4">
+            <NInput v-model:value="form.name" placeholder="例如：运维、只读看板" maxlength="64" />
+          </NFormItem>
+          <NFormItem label="备注" :show-feedback="false">
+            <NInput v-model:value="form.description" placeholder="这个角色是给谁用的" maxlength="200" />
+          </NFormItem>
+        </NForm>
+
+        <RolePermissionPicker v-model="form.permissions" :disabled="saving" />
       </div>
 
       <template #footer>
@@ -274,6 +279,6 @@ onMounted(loadRoles)
           </NButton>
         </NSpace>
       </template>
-    </NModal>
-  </NCard>
+    </NDrawerContent>
+  </NDrawer>
 </template>

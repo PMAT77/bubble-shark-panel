@@ -28,6 +28,22 @@ export const roleListItemSchema = z.object({
 })
 export type RoleListItem = z.infer<typeof roleListItemSchema>
 
+/**
+ * 角色的最小投影：只够"选一个角色"用。
+ *
+ * 「成员管理」要能分配角色，但它只需要角色的名字（`isBuiltin` 用于标出内置的只读角色），
+ * 不需要权限点清单与成员数——那是「角色管理」页的内容。此前成员页调的是
+ * `GET /app/system/roles`（要求 `role:read`），于是"能管成员"被迫等于"能看角色与权限矩阵"；
+ * 现在走 `GET /app/system/role-options`，`role:read` 或 `member:read` 任一即可。
+ */
+export const roleOptionItemSchema = z.object({
+  id: idSchema,
+  name: z.string(),
+  /** 内置角色不可改权限点、不可删除（成员页据此标出「只读」） */
+  isBuiltin: z.boolean(),
+})
+export type RoleOptionItem = z.infer<typeof roleOptionItemSchema>
+
 export const roleCreatePayloadSchema = z.object({
   name: z.string().trim().min(1).max(64),
   description: z.string().trim().max(200).optional(),
@@ -68,6 +84,13 @@ export const memberListItemSchema = z.object({
   /** 该成员被授权的实例 ID；鉴权时与角色能力相交生效 */
   instanceIds: z.array(idSchema),
   createdAt: z.string(),
+  /**
+   * 是不是配置里的超级管理员账号（默认 `superadmin`）。
+   *
+   * 界面据此不提供「重置密码」入口——它的密码只能本人在「个人设置 → 修改密码」里改。
+   * 真正的拦截在服务端，这个字段只是让入口别出现在那里。
+   */
+  isAdminAccount: z.boolean(),
 })
 export type MemberListItem = z.infer<typeof memberListItemSchema>
 

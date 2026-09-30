@@ -1,103 +1,331 @@
-# Game Server Hub
+# Game Server Hub · 饥荒联机版专用服务器管理面板
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/PMAT77/game-serve-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/PMAT77/game-serve-hub/actions/workflows/ci.yml)
 ![Public Beta](https://img.shields.io/badge/status-Public%20Beta-orange)
-[![在线预览](https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E9%A2%84%E8%A7%88-%E7%82%B9%E6%AD%A4%E6%89%93%E5%BC%80-12B7F5)](http://111.170.172.120:50155)
+
+**在浏览器里管理你的饥荒联机版专用服务器。**
+
+创建实例、安装游戏、管理世界与 Mod、查看控制台、管理玩家和备份，都可以在一个面板里完成。
+
+支持 Docker 与裸机 systemd 两种部署方式。
+
+**开始使用：[在线体验](#在线体验) · [立即安装](#快速安装) · [存档导入](#存档导入)**
 
 ![Game Server Hub 面板预览](https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/game-server-hub/GameServer_B_0925.png)
 
-面向 Steam 专用服务器的开源运维面板。当前以《饥荒联机版》（DST）为首个完整适配游戏，提供安装、更新、启停、监控、日志、控制台、世界和 Mod 管理。**不用装、不用注册**，点上面的「在线预览」即可只读浏览真实面板。
+## 在线体验
+
+不用安装，也不用注册。
+
+打开[在线预览](http://111.170.172.120:50155)，直接查看真实面板中的实例、世界配置、Mod、玩家和备份。
+
+预览环境为只读模式，不会对真实服务器执行操作。
+
+## 为什么用 Game Server Hub
+
+### 浏览器管理服务器
+
+创建实例、安装游戏、启动世界、查看日志，都可以直接在面板中完成。
+
+### 修改世界之前先留一个回退点
+
+修改世界、导入存档、回档或重置世界前自动创建备份；面板数据库支持独立快照与恢复。
+
+### 多人维护服务器，不必共用管理员账号
+
+可以为不同运维成员创建独立账号，分别控制功能权限和实例范围，并记录操作账号。
+
+角色决定能做什么，实例授权决定能管理哪些实例。
+
+### 国内服务器也有安装方案
+
+Steam 与 Mod 请求支持代理和缓存；镜像下载失败时，安装器会尝试使用 Release 离线镜像包完成部署。
+
+### Docker 与裸机都可以部署
+
+Docker 模式运行面板与游戏容器；裸机模式使用 systemd 管理面板和游戏进程。
+
+## 已经在用其他 DST 面板？
+
+可以从下面这些使用场景判断 Game Server Hub 是否适合你：
+
+| 你需要什么                   | Game Server Hub                 |
+| ----------------------- | ------------------------------- |
+| 快速创建 DST 服务器            | 图形化创建实例，SteamCMD 自动安装与更新        |
+| 担心改错世界或丢存档              | 操作前自动备份，支持数据库快照与恢复              |
+| 多人一起维护服务器               | 角色权限与实例授权分开管理                   |
+| 国内服务器访问 Steam / Mod 不稳定 | 支持代理、缓存、镜像回退与离线部署               |
+| 希望服务器完全由自己掌控            | 自托管，运行在自己的服务器上                  |
+| 想选择 Docker 或裸机部署        | 提供 Docker 与 Native systemd 两种方式 |
+| 已经有 DST 存档              | 支持导入既有存档                        |
+
+## 存档导入
+
+已有 DST 存档可以导入现有实例继续使用。
+
+面板支持导入既有集群数据，并在导入过程中处理实例所需的配置。
+
+能自动完成的项目（分片端口重写、玩家名单与 Mod 清单带入）、需要手工处理的项目（安全组放行 6 个 UDP 端口、Mod 内容需重新下载）与不能迁移的数据（其他面板的账号、角色与计划任务），见[从其他面板或裸机迁入](docs/migrate-from-other-panel.md)。
+
+## 快速安装
+
+### Docker
+
+适用于需要容器化部署的服务器。
+
+海外或网络正常的 Linux 服务器，一条命令即可开始安装：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
+  | sudo bash -s -- --mode docker
+```
+
+安装完成后：
+
+```text
+打开浏览器
+→
+首次登录并修改密码
+→
+进入「实例管理」
+→
+创建第一个 DST 实例
+```
+
+安装器会自动安装 Docker 与 Compose 插件，并启动面板。
+
+### 国内服务器或网络受限环境
+
+可以先运行安装体检：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
+  | sudo bash -s -- --check
+```
+
+体检会检查：
+
+* 系统与架构
+* 内存与磁盘空间
+* 网络连通性
+* 镜像源
+* 端口占用
+
+检查通过后执行：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
+  | sudo bash -s -- --mode docker --network cn
+```
+
+当 GHCR 镜像无法正常下载时，安装器会尝试获取 Release 中的离线镜像包、校验并导入，然后继续完成安装。
+
+只有自动下载路径仍然失败时，才需要手动处理离线镜像或镜像源。
+
+详细说明见：
+
+* [Docker 模式安装](docs/install-docker.md)
+* [参数速查](docs/reference.md)
+
+遇到安装问题可以运行：
+
+```bash
+sudo gsh doctor
+```
+
+### 裸机 systemd
+
+不使用 Docker 时：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
+  | sudo bash -s -- --mode native
+```
+
+裸机模式使用 systemd 管理面板和游戏进程。
+
+详细说明见：
+
+* [裸机 systemd 模式安装](docs/install-native.md)
+
+当前版本：
+
+```text
+v0.11.0 · Public Beta
+```
+
+## 能做什么
+
+* **开服** —— 创建实例并安装 DST，之后在面板里更新和启动。
+* **世界管理** —— 修改房间与世界配置，管理现有存档。
+* **Mod 管理** —— 搜索、订阅、启停创意工坊 Mod。
+* **玩家管理** —— 管理管理员、白名单和黑名单，查看、踢出或封禁在线玩家。
+* **备份** —— 定时备份，并在重要操作前创建安全备份。
+* **控制台** —— 实时查看日志，直接向游戏下发命令。
+* **多实例** —— 一台服务器同时运行多个独立实例。
+* **权限管理** —— 角色控制操作权限，实例授权控制可管理范围。
+* **服务器监控** —— 查看 CPU、内存、磁盘和网络状态。
+* **环境自检** —— 检查运行环境、存储空间、实例状态和相关服务。
+* **世界地形图** —— 从游戏地形数据导出世界地图。
+* **面板快照** —— 备份、下载、恢复面板数据库。
+
+## 部署方式
+
+| 部署方式           | 适合场景               | 运行方式                |
+| -------------- | ------------------ | ------------------- |
+| Docker         | 游戏社区、希望使用容器的服务器    | 面板与游戏运行在 Docker 容器中 |
+| Native systemd | 个人服务器、不希望使用 Docker | 面板与游戏直接由 systemd 管理 |
+
+两种方式使用不同的运行环境，安装时选择一种即可。
 
 ## 适合谁
 
-- **已经有一台服务器的服主** —— 云主机、家里的小主机都行：不必为开服换机器或买预装镜像，也不被某一家云厂商或面板服捆绑。
-- **个人服主** —— 不想再开一堆 SSH 窗口改 ini、手动重启世界；想在浏览器里管世界、Mod、玩家名单、存档与定时备份。
-- **小团队 / 游戏社区** —— 需要多实例并存与操作可追溯；面板已内置成员与角色：给每个运维建子账号、分配角色，并限定各自能管哪些实例。
-- **托管商 / 集成方** —— 多节点统一管理属于规划中的 Pro 插件；也可直接联系做定制集成（见文末）。
+* 有自己的 Linux 服务器，希望用浏览器管理 DST。
+* 不想频繁 SSH、修改配置文件和手动重启服务器。
+* 需要多人一起维护服务器，并希望分别控制操作权限。
+* 已经有 DST 存档，希望继续使用现有数据。
 
-**正在开发中的功能**：
+## 当前限制
 
-- **玩家事件统计**：聊天日志与在线时长统计仍在规划中（在线玩家列表、踢出与封禁已经可用）。
-- **多语言界面**：未提供，界面与文档均为简体中文。
-- **插件页面注册协议**：插件宿主已交付（清单与签名校验、独立进程、回环能力服务、调用审计），但**插件还不能往面板里添加自己的界面**，插件包的在线分发渠道也未提供，当前由发布方人工交付、在面板内导入。插件页在侧边栏暂不显示，直接访问 `/plugins` 可打开。
-- **组织 / 租户与 SSO**：属规划中的 Pro 插件。成员与角色支持到「一个账号一个角色 + 一批可见实例」；再往上的按组织分权、按房间授权与 SSO 留在这里（判据是"签下托管商客户后再做"）。
+* **Windows**：目前不支持 Windows 部署，当前部署目标为 Debian 12、Ubuntu 22.04 / 24.04 等 apt 系 Linux。
+* **更多游戏**：目前完整适配的首个游戏是《饥荒联机版》。
+* **多节点与租户能力**：多节点统一管理、组织 / 租户隔离和 SSO 仍在规划中。
 
-如果你需要组织 / 租户级权限隔离，或者要在 Windows 上开服，**建议同时看看同类面板**，例如 [DMP 饥荒管理平台](https://github.com/miracleEverywhere/dst-management-platform-api) 或 [DST Admin Go](https://github.com/carrot-hu23/dst-admin-go)：它们的部署更简单；本项目更适合已经有一台服务器、不想被云厂商绑定、希望自行长期维护的场景。
+## 安全
 
-## 已上线功能
+Docker 模式需要访问 Docker Socket 才能管理游戏容器，因此面板具有较高的宿主机控制能力。
 
-- **一键开服与更新** —— 图形化创建实例，SteamCMD 自动安装与更新，地上 / 洞穴双分片一键拉起。
-- **世界与 Mod 管理** —— 房间参数、世界生成配置、创意工坊 Mod 在线订阅与开关；**世界地形图**一键导出（读的是游戏自己算出来的地形）；存档点回档与重置世界前会自动创建安全备份。
-- **玩家管理与准入** —— 独立的「玩家管理」页面：按游戏名维护管理员、白名单与黑名单（也支持粘贴玩家 ID），查看地上 / 洞穴的在线玩家并踢出或封禁；封禁立刻生效，房间重启后依然有效。
-- **成员与角色** —— 给每个运维建子账号。**能力与范围分开**：角色决定能做什么，实例授权决定能在哪些实例上做。子账号登录后只看到自己该看的东西，操作记录里也能分清是哪个账号做的。
-- **文件与配置** —— 在浏览器里浏览实例目录、直接编辑房间与世界配置文件、上传下载单个文件，保存或覆盖前自动备份；集群令牌等敏感文件不可读写。
-- **实时掌控** —— CPU / 内存 / 磁盘 / 网络监控，SSE 实时日志，游戏控制台直接下发命令。
-- **出问题能自查** —— 环境自检一键检查运行环境、磁盘余量、数据目录可写、实例状态与通知渠道；控制台日志落盘，可查看历史与下载。
-- **存档与备份** —— 定时备份、面板数据库快照、导入既有存档。
-- **两种部署方式** —— Docker Compose 或裸机 systemd，按你的隔离预期选。
-- **升级安全** —— 同模式原地升级，升级前自动备份数据库，保留实例、存档和自定义配置。
+使用 Docker 部署时：
 
-## 快速开始
+* 请为面板设置强密码。
+* 不建议将面板直接暴露在公网。
+* 建议限制面板访问来源，并在反向代理层增加访问控制。
+* 面板中的权限控制只限制面板操作，不等于宿主机隔离。
 
-当前为 `v0.10.1` 公测线。装法与环境要求见安装手册：[Docker 模式](docs/install-docker.md) · [Native systemd 模式](docs/install-native.md)；参数与变量速查见[参数速查](docs/reference.md)。
-
-## 开源与规划
-
-本项目采用 [MIT License](LICENSE)，**Community 核心功能永久开源免费。**
+完整说明见 [SECURITY.md](SECURITY.md)。
 
 ## 常见问题
 
-安装报错、端口与连接问题见[参数速查](docs/reference.md)与[安装手册](docs/install-docker.md)；升级会不会丢存档、重跑安装脚本会不会清空数据、能不能从其他面板迁过来，见[安装手册 · 常见错误](docs/install-docker.md#常见错误)。
+### 可以导入现有 DST 存档吗？
 
-## 交流与反馈
+可以。
 
-![QQ 群：1055694763](https://img.shields.io/badge/QQ%E7%BE%A4-1055694763-12B7F5?logo=tencentqq&logoColor=white)
+把源机器的集群目录打成压缩包，用面板「备份与恢复 → 导入外部存档」导入即可；支持范围与手工步骤见[从其他面板或裸机迁入](docs/migrate-from-other-panel.md)。
 
-公测版本发布、部署安装问题、使用心得与建议都欢迎在群里讨论。
+### 会不会丢存档？
 
-- **部署 / 配置 / 使用问题** → 群里问最快，也方便互相参考
-- **可复现的 Bug、明确的功能请求** → 提 [Issue](https://github.com/PMAT77/game-serve-hub/issues)，不会被聊天记录冲掉，后续也好跟进
+重要操作前会自动创建备份，面板数据库还支持独立快照与恢复。
+
+涉及存档迁移、回档和恢复时，建议先保留一份额外备份。
+
+### 支持 Windows 吗？
+
+目前不支持 Windows 部署。
+
+当前支持 Debian 12、Ubuntu 22.04 / 24.04 等 apt 系 Linux。
+
+### Docker 和裸机有什么区别？
+
+Docker 模式通过容器运行面板和游戏。
+
+Native 模式直接使用 systemd 管理面板和游戏进程。
+
+根据你的服务器环境选择即可。
+
+### 国内服务器可以安装吗？
+
+可以。
+
+安装器支持国内网络环境下的安装路径，并在镜像下载失败时尝试使用 Release 离线镜像包。
+
+详细步骤见[国内服务器安装说明](docs/install-docker.md#安装国内服务器)。
+
+### 为什么 Docker 模式需要 Docker Socket？
+
+面板需要通过 Docker 管理游戏容器，因此必须访问 Docker Socket。
+
+这也是 Docker 部署需要特别注意宿主机安全的原因。
+
+### 为什么现在只支持 DST？
+
+当前先把《饥荒联机版》的开服与日常运维体验做好，之后再逐步增加其他 Steam 专用服务器。
+
+### 升级会不会删除实例和存档？
+
+正常升级会保留现有实例、存档和配置，并在升级前自动备份面板数据库。
+
+具体升级行为见对应部署方式的安装文档。
+
+## Roadmap
+
+当前阶段重点：
+
+* 完善 DST 开服体验
+* 完善 DST 日常运维能力
+* 提升安装与升级稳定性
+* 持续优化国内网络环境下的部署体验
+
+后续方向：
+
+* 更多 Steam 专用服务器适配
+* 多节点管理
+* 组织 / 租户隔离
+* SSO
+* 插件在线分发
 
 ## 参与贡献
 
-欢迎提交 [Issue](https://github.com/PMAT77/game-serve-hub/issues) 与 [Pull Request](https://github.com/PMAT77/game-serve-hub/pulls)；流程与规范见 [CONTRIBUTING.md](CONTRIBUTING.md)，本地开发环境与门禁命令在 `docs_local/DEVELOPMENT.md`（内部文档，不在本仓库），安全问题见 [SECURITY.md](SECURITY.md)。
+欢迎提交 [Issue](https://github.com/PMAT77/game-serve-hub/issues) 与 [Pull Request](https://github.com/PMAT77/game-serve-hub/pulls)。
 
-后端基于 Fastify 与 Drizzle ORM，前端基于 Vue 3、Vite 与 Fantastic-admin。感谢这些项目及所有贡献者。
+开发流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-## 赞助与商业合作
+安全问题见 [SECURITY.md](SECURITY.md)。
 
-项目主要利用业余时间维护。如果它帮你省下了时间，可以请我喝杯咖啡。
+版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+### 技术栈
+
+* 前端：Vue 3、Vite、Fantastic-admin
+* 后端：Fastify、Drizzle ORM
+* 数据库：SQLite
+* 包管理：pnpm
+
+## 交流与反馈
+
+![QQ 群：1055694763](https://img.shields.io/badge/QQ%E7%BE%A4-1055694763-12B7F5?logo=tencentqq\&logoColor=white)
+
+公测版本、安装部署、使用问题和功能建议都可以在群里交流。
+
+* 部署 / 配置 / 使用问题 → QQ 群
+* 可复现 Bug / 功能请求 → [提交 Issue](https://github.com/PMAT77/game-serve-hub/issues)
+
+## 赞助与商业服务
+
+**Community 核心功能永久免费开源。**
+
+如果项目帮你节省了服务器运维时间，可以通过微信支持项目。
 
 <table>
   <tr>
     <td align="center"><img src="https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/common/collection_wechat.jpg" alt="微信赞助" width="200" /><br />微信赞赏</td>
-    <td align="center"><img src="https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/common/WeChat.jpg" alt="微信联系：PMAT77" width="195" /><br />微信：PMAT77</td>
+    <td align="center"><img src="https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/common/WeChat.jpg" alt="微信联系：PMAT77" width="195" /><br />微信联系</td>
   </tr>
 </table>
 
-**联系方式**
+同时提供：
 
-- 微信：`PMAT77`（上方二维码）
-  - 添加时请**备注来意**，建议格式 `身份 / 需求 / 规模`，例如 `个人服主 / DST 开服 / 20 人`、`托管商 / 定制插件 / 多节点`
-- 功能问题与 Bug 见[交流与反馈](#交流与反馈)。项目由我利用业余时间维护、平日有主业在身，回复可能不够及时，但看到都会回
+* 服务器代搭建
+* 存档与面板迁移
+* 私有化部署
+* 其他 Steam 专用服务器适配
+* 功能定制开发
 
-### 付费服务
-
-Community 核心永久免费。另提供部分收费服务，价格参考区间如下，实际按机器环境与工作量确认后报价：
-
-| 服务 | 交付物 | 参考价 |
-| --- | --- | --- |
-| **代搭建（单机）** | 面板安装 + 实例创建 + 开服验证 + 端口/安全组清单 + 交接说明 | 50～200 元/次 |
-| **存档与面板迁移** | 从裸机或其他面板迁到本面板：存档、集群配置、Mod 清单与端口一一对应，迁完能进服 | 150～400 元/次 |
-| **私有化部署** | 内网 / 代理受限 / 无公网环境的部署与反向代理，含离线镜像包与校验流程 | 500～1000 元/次 |
-| **适配其他游戏** | 复用安装、分片、Mod 与控制台链路适配其他 Steam 专用服务器 | 按需求评估 |
-| **功能定制开发** | 按你的玩法或运营需求实现专属功能，交付形式按需求商定 | 1500～10000 元/项目 |
-
+商务联系：微信 `PMAT77`
 
 ## 许可证
 
-Community 源代码采用 [MIT License](LICENSE)：
+Community 源代码采用 [MIT License](LICENSE)。
 
 ```text
 Copyright (c) 2026 Game Server Hub

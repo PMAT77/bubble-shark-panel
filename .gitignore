@@ -26,6 +26,7 @@ docs/*
 !docs/reference.md
 !docs/MEMORY.md
 !docs/GLOSSARY.md
+!docs/migrate-from-other-panel.md
 !docs/assets/
 !docs/assets/**
 

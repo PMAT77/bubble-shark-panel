@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import HeroGeometric from './HeroGeometric.vue'
 import type { AppHelloProps } from './types'
+import { DEFAULT_APP_HELLO } from './types'
 
 defineOptions({
   name: 'AppHello',
 })
 
 const props = withDefaults(defineProps<AppHelloProps>(), {
-  title: 'Game Server Hub',
-  subtitle: 'Instant Deploy',
-  description: '一站式游戏服务器部署与管理平台',
+  title: DEFAULT_APP_HELLO.title,
+  subtitle: DEFAULT_APP_HELLO.subtitle,
+  description: DEFAULT_APP_HELLO.description,
 })
 </script>
 

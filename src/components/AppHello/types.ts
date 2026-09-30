@@ -9,6 +9,18 @@ export interface AppHelloProps {
   compact?: boolean
 }
 
+/**
+ * 欢迎页默认文案：`AppHello` 与 `HeroGeometric` 共用。
+ *
+ * 这两处此前各写了一份默认值，改文案时只改一处就会出现「登录页说 A、别处说 B」。
+ * 定位收窄到 DST 场景后含义更敏感，所以收敛成单一来源。
+ */
+export const DEFAULT_APP_HELLO = {
+  title: 'Game Server Hub',
+  subtitle: '饥荒联机版专用服务器管理面板',
+  description: '3 分钟开服，在浏览器里管世界、Mod、玩家和存档备份。',
+} as const
+
 export interface HeroShapeConfig {
   variant: ShapeVariant
   delay: number

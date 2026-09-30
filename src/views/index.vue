@@ -144,14 +144,14 @@ function goLogin() {
             开源 · 自托管 · 免费
           </div>
           <h1 class="text-2xl leading-tight tracking-tight font-semibold mb-3 md-text-3xl">
-            Steam 专用服务器，可视化管理
+            饥荒联机版专用服，可视化管理
             <div class="text-4xl tracking-tight font-semibold md-text-6xl">
               GameServerHub
             </div>
           </h1>
           <p class="text-sm text-muted-foreground leading-relaxed mb-6 max-w-prose md-text-base">
-            开源、可自托管的 <span class="text-foreground font-medium">游戏服务器面板</span>。目前支持
-            <span class="text-foreground font-medium">饥荒联机版（DST）</span>：一条命令装好，升级面板时玩家不掉线。
+            给自己的服务器装一个真正好用的饥荒后台。一条命令装好，3 分钟开服；在浏览器里管
+            <span class="text-foreground font-medium">世界、Mod、玩家和存档备份</span>，升级面板时玩家不掉线。
           </p>
           <div class="flex flex-wrap gap-3">
             <FaButton size="lg" @click="goLogin">
@@ -172,7 +172,7 @@ function goLogin() {
           <div class="stat-enter border rounded-xl bg-neutral-950/[.012] dark:bg-white/5" :style="{ animationDelay: '100ms' }">
             <div class="p-5 flex flex-col h-full justify-between">
               <div class="text-xs text-muted-foreground tracking-widest font-medium uppercase">
-                一键部署
+                3 分钟开服
               </div>
               <div>
                 <div class="text-3xl tracking-tight font-semibold mb-1 md-text-4xl">
@@ -283,7 +283,7 @@ function goLogin() {
           </div>
         </div>
         <p class="text-xs text-muted-foreground mt-4 text-center">
-          Pro 扩展能力规划中，详见版本发布说明
+          当前以饥荒联机版为首个完整适配游戏，之后逐步扩展到更多 Steam 专用服务器
         </p>
       </div>
     </div>

@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # 安装脚本默认参数与运行时路径
 # -----------------------------------------------------------------------------
 SCRIPT_NAME="$(basename "$0")" # 当前脚本名称（用于日志展示）。
-GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.11.0}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
+GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.12.0}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
 INSTALLER_REPO_RAW="${INSTALLER_REPO_RAW:-}" # 兼容旧变量：指定单一安装资源源（为空时使用 INSTALLER_REPO_MIRRORS）。
 # GitHub 资源加速代理（前缀拼接型）：安装资源与 Native 包共用；GSH_GITHUB_PROXY 可强制指定单一节点。
 GITHUB_PROXY_SITES="${GITHUB_PROXY_SITES:-https://gh-proxy.com/,https://ghfast.top/,https://ghproxy.com/}"
@@ -14,7 +14,7 @@ GSH_GITHUB_PROXY="${GSH_GITHUB_PROXY:-}" # 强制指定 GitHub 加速代理（�
 INSTALLER_REPO_MIRRORS="${INSTALLER_REPO_MIRRORS:-}" # 安装资源镜像池；为空时由 init_installer_repo_pool 按代理清单生成。
 # 校验对象是镜像源提供的 git blob 原始字节（LF）；改动 compose 后必须同步更新此处。
 # 历史 pin eb30aeae... 与 v0.1.4 tag 内 compose blob（a34665e2...）不匹配，导致严格校验必然失败。
-INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-313d652f09aadb6b290a879276b51686d06209ee0ceb1cddb420a89beda9ed33}"
+INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-663a1787872d4b09611396890dfb5ec88f63c538d28368374cd14fbf6159a071}"
 INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML:-525eaf74e17df33887fe47248f414c0de3e6cd94a8d20e072ab5d66284c760ae}"
 # Debian 12 等发行版源不含 Compose v2 时，从 docker/compose GitHub Release 自动补装 CLI 插件。
 # 摘要与官方 .sha256 / checksums.txt 资产双源核对；升级插件版本时需同步替换版本号与两个摘要。

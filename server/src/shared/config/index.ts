@@ -8,7 +8,7 @@ import { loadModeEnv } from './env-file'
 import { resolveRepoRoot } from '../repo-root'
 
 /** v0.2.0 起面板/DST/SteamCMD 共用的统一镜像引用（tag 随版本发布推进）。 */
-export const UNIFIED_IMAGE_REF = 'ghcr.io/pmat77/game-server-hub:v0.11.0'
+export const UNIFIED_IMAGE_REF = 'ghcr.io/pmat77/game-server-hub:v0.12.0'
 
 const envSchema = z.object({
   SERVER_HOST: z.string().trim().min(1).default('0.0.0.0'),

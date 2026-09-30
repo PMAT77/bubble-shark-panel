@@ -36,7 +36,7 @@ const panelPort = process.env.PANEL_PORT?.trim() || readEnvFileVar('PANEL_PORT')
 const webPort = process.env.VITE_DEV_WEB_PORT?.trim() || readEnvFileVar('VITE_DEV_WEB_PORT') || '9527'
 const panelUrl = `http://127.0.0.1:${panelPort}`
 const webUrl = `http://127.0.0.1:${webPort}`
-const steamcmdImage = process.env.GSH_STEAMCMD_IMAGE?.trim() || 'ghcr.io/pmat77/game-server-hub:v0.11.0'
+const steamcmdImage = process.env.GSH_STEAMCMD_IMAGE?.trim() || 'ghcr.io/pmat77/game-server-hub:v0.12.0'
 const account = process.env.ADMIN_USERNAME?.trim() || 'superadmin'
 const password = process.env.ADMIN_PASSWORD ?? '123456'
 

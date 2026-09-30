@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # 安装脚本默认参数与运行时路径
 # -----------------------------------------------------------------------------
 SCRIPT_NAME="$(basename "$0")" # 当前脚本名称（用于日志展示）。
-GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.12.0}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
+GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.12.1}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
 INSTALLER_REPO_RAW="${INSTALLER_REPO_RAW:-}" # 兼容旧变量：指定单一安装资源源（为空时使用 INSTALLER_REPO_MIRRORS）。
 # GitHub 资源加速代理（前缀拼接型）：安装资源与 Native 包共用；GSH_GITHUB_PROXY 可强制指定单一节点。
 GITHUB_PROXY_SITES="${GITHUB_PROXY_SITES:-https://gh-proxy.com/,https://ghfast.top/,https://ghproxy.com/}"
@@ -14,7 +14,7 @@ GSH_GITHUB_PROXY="${GSH_GITHUB_PROXY:-}" # 强制指定 GitHub 加速代理（�
 INSTALLER_REPO_MIRRORS="${INSTALLER_REPO_MIRRORS:-}" # 安装资源镜像池；为空时由 init_installer_repo_pool 按代理清单生成。
 # 校验对象是镜像源提供的 git blob 原始字节（LF）；改动 compose 后必须同步更新此处。
 # 历史 pin eb30aeae... 与 v0.1.4 tag 内 compose blob（a34665e2...）不匹配，导致严格校验必然失败。
-INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-663a1787872d4b09611396890dfb5ec88f63c538d28368374cd14fbf6159a071}"
+INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-4aa55790c94d062449f87ea4da8af8133059f06f71c08d7f3ba3b3189785d05c}"
 INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML:-525eaf74e17df33887fe47248f414c0de3e6cd94a8d20e072ab5d66284c760ae}"
 # Debian 12 等发行版源不含 Compose v2 时，从 docker/compose GitHub Release 自动补装 CLI 插件。
 # 摘要与官方 .sha256 / checksums.txt 资产双源核对；升级插件版本时需同步替换版本号与两个摘要。
@@ -136,7 +136,7 @@ PANEL_PUBLIC_IP_ECHO_URLS=(
 )
 ADMIN_USERNAME="${ADMIN_USERNAME:-superadmin}" # 初始管理员用户名。
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}" # 初始管理员密码（为空时自动生成随机密码）。
-EXPOSE_ADMIN_PASSWORD="${EXPOSE_ADMIN_PASSWORD:-0}" # 是否在安装摘要中明文输出管理员密码（1=输出，0=仅提示凭据文件）。
+HIDE_ADMIN_PASSWORD="${HIDE_ADMIN_PASSWORD:-0}" # 设 1 时不在安装摘要里打印初始密码（无人值守安装把输出重定向到文件时用）。
 ROLLBACK_ENABLED=0 # 是否允许回滚（部署开始后置为 1）。
 INSTALL_COMPLETED=0
 CURRENT_STAGE="bootstrap"
@@ -1794,6 +1794,7 @@ Environment (optional):
   GSH_IMAGE_SOURCE=MODE         Runtime image source: auto (default), offline (always use the
                                 Release image archive), native (always pull from GHCR)
   GSH_FORCE_IMAGE_PULL=1        Pull even when the image already exists locally
+  HIDE_ADMIN_PASSWORD=1         Do not print the initial admin password in the install summary
   DOCKER_PULL_STALL_SECONDS=90  Give up a GHCR pull after this many seconds without progress
   PANEL_HEALTHCHECK_TIMEOUT_SECONDS=90  Maximum wait for panel /health after startup
   PANEL_HEALTHCHECK_INTERVAL_SECONDS=3  Panel /health polling interval
@@ -2958,15 +2959,12 @@ print_summary() {
     printf ' 内网地址   %s（仅同一局域网可访问）\n' "${PANEL_LAN_URL}"
   fi
   printf ' 管理员     %s\n' "${ADMIN_USERNAME}"
-  if [[ "${EXPOSE_ADMIN_PASSWORD}" == "1" ]]; then
-    printf ' 初始密码   %s\n' "${ADMIN_PASSWORD}"
-  else
-    printf ' 初始密码   默认不打印，用下面这条命令读取：\n'
+  if [[ "${HIDE_ADMIN_PASSWORD}" == "1" ]]; then
+    printf ' 初始密码   已按要求隐藏，用下面这条命令读取：\n'
     printf "sudo sed -n 's/^ADMIN_PASSWORD=//p' %s\n" "${PANEL_ENV_FILE}"
-    if [[ "${RESOLVED_INSTALL_MODE}" != "native" ]]; then
-      printf '            该变量由 docker-compose.yml 注入面板容器；若登录提示密码错误，改读容器内初始凭据：\n'
-      printf '            docker exec game-server-hub-panel cat /app/data/admin-credentials.txt\n'
-    fi
+  else
+    printf ' 初始密码   %s\n' "${ADMIN_PASSWORD}"
+    printf '            （首次登录会强制改密；该密码也写在 %s）\n' "${PANEL_ENV_FILE}"
   fi
   printf '%s\n' "${sub_rule}"
   if [[ "${RESOLVED_INSTALL_MODE}" == "native" ]]; then

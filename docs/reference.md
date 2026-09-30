@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | `GSH_INSTALL_MODE` | `auto` | 同 `--mode` |
 | `GSH_NETWORK_PROFILE` | `auto` | 同 `--network` |
-| `GSH_RELEASE_TAG` | 脚本内置 `v0.12.0` | 安装指定版本。升级时填**目标**版本 |
+| `GSH_RELEASE_TAG` | 脚本内置 `v0.12.1` | 安装指定版本。升级时填**目标**版本 |
 | `GSH_PANEL_ENV_PRESET` | `auto` | 内存预设档位：`auto` / `small` / `medium` / `large` / `none` |
 | `PANEL_IMAGE` | GHCR 当前 tag | 统一镜像的完整引用（tag 或 digest），自建仓库时用 |
 | `INSTALL_STEAMCMD_IMAGE` | `1` | 设 `0` 跳过预拉 SteamCMD 镜像 |
@@ -37,7 +37,7 @@
 | `GSH_GITHUB_PROXY` | 内置代理池 | 固定一个 GitHub 加速代理，如 `https://gh-proxy.com/` |
 | `ADMIN_USERNAME` | `superadmin` | 初始管理员用户名 |
 | `ADMIN_PASSWORD` | 随机生成 | 初始管理员密码。留空时面板生成随机强密码 |
-| `EXPOSE_ADMIN_PASSWORD` | `0` | 设 `1` 在安装摘要里明文打印初始密码 |
+| `HIDE_ADMIN_PASSWORD` | `0` | 设 `1` 时不在安装摘要里打印初始密码（输出会被重定向到文件时用） |
 | `STRICT_INSTALLER_ASSET_CHECKSUM` | `1` | 安装资源校验和强校验，**不建议关** |
 | `PANEL_INSTALL_DIR` | `/opt/game-server-hub` | 安装目录（放 `panel.env` 与 compose 文件） |
 | `PANEL_DATA_DIR` | `/var/lib/game-server-hub` | 数据目录（数据库、实例、备份） |
@@ -94,7 +94,7 @@
 
 | 变量 | 默认 | 用途 |
 | --- | --- | --- |
-| `PANEL_IMAGE` | `ghcr.io/pmat77/game-server-hub:v0.12.0` | 统一镜像引用，自建仓库或固定 digest 时用 |
+| `PANEL_IMAGE` | `ghcr.io/pmat77/game-server-hub:v0.12.1` | 统一镜像引用，自建仓库或固定 digest 时用 |
 | `GSH_IMAGE_SOURCE` | `auto` | 安装阶段取运行时镜像的路线：`auto`（国内档或层数据不可达时用离线包，否则直拉）/ `offline`（固定离线包）/ `native`（固定 GHCR 直拉） |
 | `GSH_FORCE_IMAGE_PULL` | `0` | 设为 `1` 时即使本地已有同名镜像也重新拉取 |
 | `DOCKER_PULL_STALL_SECONDS` | `90` | 直拉时连续多少秒没有进度就判定停滞并放弃本次尝试 |

@@ -11,24 +11,24 @@
 一条命令装完。
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.12.0/scripts/install.linux.sh" \
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.12.1/scripts/install.linux.sh" \
   | sudo bash -s -- --mode native
 ```
 
 管道安装的默认模式是 Docker，**Native 必须显式写 `--mode native`**。GitHub Raw 慢的话，把 `https://raw.githubusercontent.com` 换成 `https://gh-proxy.com/https://raw.githubusercontent.com`。
 
-安装器按顺序做这些事：装基础依赖与 32 位运行库 → 创建 `gsh` 系统用户并开启 linger → 下载校验 Native Release（自带 Node 运行时）→ 解压到 `/opt/game-server-hub/releases/v0.12.0` 并原子切换 `current` 符号链接 → 装 SteamCMD → 写 `panel.env` → 启动面板并等待健康检查。
+安装器按顺序做这些事：装基础依赖与 32 位运行库 → 创建 `gsh` 系统用户并开启 linger → 下载校验 Native Release（自带 Node 运行时）→ 解压到 `/opt/game-server-hub/releases/v0.12.1` 并原子切换 `current` 符号链接 → 装 SteamCMD → 写 `panel.env` → 启动面板并等待健康检查。
 
 ## 安装（国内服务器）
 
 Native 不拉容器镜像，境外依赖只有两处：GitHub Raw（安装器组件）与 GitHub Release（Native 包）。安装器自带加速代理池（`gh-proxy.com`、`ghfast.top`、`ghproxy.com`），全部失败才走直连，国内一般可以直接装。先把脚本下载到本地更稳妥：
 
 ```bash
-tag=v0.12.0
+tag=v0.12.1
 curl -fL --retry 3 -o "install-${tag}.sh" \
   "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/${tag}/scripts/install.linux.sh"
 
-# 自证版本：必须输出 ...:-v0.12.0}}，对不上就停下排查
+# 自证版本：必须输出 ...:-v0.12.1}}，对不上就停下排查
 sed -n '9p' "install-${tag}.sh"
 
 # 安装：--network cn 把 apt 源临时切到国内镜像，SteamCMD 走 cn 区域并重试 8 次
@@ -43,7 +43,7 @@ sudo env GSH_RELEASE_TAG="${tag}" bash "install-${tag}.sh" --mode native --netwo
 包旁必须放同名 `.sha256`，也可以用 `GSH_NATIVE_RELEASE_SHA256` 直接给出摘要。
 
 ```bash
-tag=v0.12.0
+tag=v0.12.1
 base="https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/${tag}"
 curl -fL --retry 3 -o "game-server-hub-native-${tag}-linux-x64.tar.gz"        "${base}/game-server-hub-native-${tag}-linux-x64.tar.gz"
 curl -fL --retry 3 -o "game-server-hub-native-${tag}-linux-x64.tar.gz.sha256" "${base}/game-server-hub-native-${tag}-linux-x64.tar.gz.sha256"
@@ -59,7 +59,7 @@ sudo env GSH_RELEASE_TAG="${tag}" \
 ## 初始密码与服务命令
 
 ```bash
-# 初始密码：管理员名 superadmin，首登强制改密
+# 初始密码：安装摘要里已打印；管理员名 superadmin，首登强制改密
 sudo sed -n 's/^ADMIN_PASSWORD=//p' /opt/game-server-hub/panel.env
 
 # 健康检查：服务应为 active，runtime.status 应为 running

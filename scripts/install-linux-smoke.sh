@@ -18,22 +18,22 @@ SMOKE_INSTALLED_TAG='v0.6.0'
 # 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
 SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.12.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${GSH_RELEASE_TAG}" == "v0.12.0" ]]
+# v0.12.1 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${GSH_RELEASE_TAG}" == "v0.12.1" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.12.0"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.12.1"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.12.0" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.12.1" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 
@@ -563,7 +563,8 @@ PANEL_ACCESS_URL='http://192.0.2.10:9527'
 PANEL_LAN_URL='http://192.0.2.10:9527'
 PANEL_PUBLIC_IP_SOURCE='ip_echo'
 ADMIN_USERNAME='superadmin'
-EXPOSE_ADMIN_PASSWORD=0
+ADMIN_PASSWORD='Smoke-Test-Password1'
+HIDE_ADMIN_PASSWORD=0
 PANEL_ENV_FILE="${SMOKE_TMP_DIR}/panel.env"
 # 用变量拼出镜像引用：release:verify 会扫描脚本里所有 ghcr.io/pmat77/game-server-hub:<版本>
 # 形式的字面量并要求它等于当前发布版本，这里写死一个假版本会让发布门禁误判。
@@ -580,6 +581,13 @@ SUMMARY_OUT="$(print_summary)"
 [[ "${SUMMARY_OUT}" == *'创建第一个实例'* ]]
 [[ "${SUMMARY_OUT}" == *'安装耗时'* ]]
 [[ "${SUMMARY_OUT}" != *'安装耗时   0 分 0 秒'* ]]
+# 默认必须打印初始密码；置 HIDE_ADMIN_PASSWORD=1 时只给读取命令
+[[ "${SUMMARY_OUT}" == *'Smoke-Test-Password1'* ]]
+HIDE_ADMIN_PASSWORD=1
+HIDDEN_OUT="$(print_summary)"
+[[ "${HIDDEN_OUT}" != *'Smoke-Test-Password1'* ]]
+[[ "${HIDDEN_OUT}" == *'ADMIN_PASSWORD'* ]]
+HIDE_ADMIN_PASSWORD=0
 
 # 失败收尾的「下一步」必须排在诊断文件之前：用户需要的是动作，不是路径
 NEXT_STEP_LINE="$(grep -n 'log_error "下一步' "${SCRIPT_DIR}/install.linux.sh" | head -1 | cut -d: -f1)"

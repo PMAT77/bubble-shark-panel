@@ -72,8 +72,6 @@ Docker 模式运行面板与游戏容器；Native 模式使用 systemd 管理面
 
 ### Docker
 
-适用于需要容器化部署的服务器。
-
 海外或网络正常的 Linux 服务器，一条命令即可开始安装：
 
 ```bash
@@ -104,16 +102,10 @@ curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scri
   | sudo bash -s -- --mode docker --network cn
 ```
 
-安装器会先打印一份体检报告（系统与架构、内存与磁盘、Docker 状态、GHCR 与 Steam 可达性、端口占用），确认没有阻塞项才继续装，所以不需要额外先跑一次检查。
-
-国内档下镜像默认走 Release 离线包（走加速代理、校验后导入），不需要你手动下载；海外档默认直拉 GHCR，但会先实测层数据能不能拉，测不通就自动改走离线包。直拉连续 90 秒没有进度时安装器会主动中断，不会一直停在 `Waiting` 上。
-
-两条路线都失败时，才需要手动处理离线镜像或镜像源。
-
 <details>
 <summary>只想看这台机器能不能装，先不安装</summary>
 
-加 `--check` 只打印体检报告就退出：不装依赖、不建目录、不写安装状态文件、不拉镜像。适合在还没决定是否安装时先评估一台机器。
+加 `--check` 只打印体检报告就退出：不装依赖、不建目录、不写安装状态文件、不拉镜像。
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
@@ -143,8 +135,6 @@ sudo gsh doctor
 curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
   | sudo bash -s -- --mode native
 ```
-
-裸机模式使用 systemd 管理面板和游戏进程。
 
 详细说明见：
 

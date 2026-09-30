@@ -95,11 +95,17 @@
 | 变量 | 默认 | 用途 |
 | --- | --- | --- |
 | `PANEL_IMAGE` | `ghcr.io/pmat77/game-server-hub:v0.11.0` | 统一镜像引用，自建仓库或固定 digest 时用 |
-| `GSH_IMAGE_MIRRORS` | 空 | 备选 registry 候选，逗号分隔、按顺序尝试 |
+| `GSH_IMAGE_SOURCE` | `auto` | 安装阶段取运行时镜像的路线：`auto`（国内档或层数据不可达时用离线包，否则直拉）/ `offline`（固定离线包）/ `native`（固定 GHCR 直拉） |
+| `GSH_FORCE_IMAGE_PULL` | `0` | 设为 `1` 时即使本地已有同名镜像也重新拉取 |
+| `DOCKER_PULL_STALL_SECONDS` | `90` | 直拉时连续多少秒没有进度就判定停滞并放弃本次尝试 |
+| `GHCR_LAYER_PROBE_MAX_SECONDS` | `20` | 体检里测 GHCR 层数据可用性的单次请求上限；慢于此值即判为不可用 |
+| `GSH_IMAGE_MIRRORS` | 空 | 备选 registry 候选，逗号分隔、按顺序尝试（面板运行时拉游戏镜像用） |
 | `GSH_GITHUB_PROXY` | 内置代理池 | Release 离线镜像包的加速代理，留空则按代理池依次尝试 |
 | `GSH_GITHUB_API_BASE` | `https://api.github.com` | 「检查更新」用的 GitHub API 基址，直连超时时指向兼容反代 |
 | `GSH_PANEL_UPDATE_SOURCE` | `auto` | 「下载更新」的下载源：`auto` / `offline`（只用离线包）/ `pull`（只用 GHCR） |
 | `GSH_PANEL_UPDATER_IMAGE` | 空 | 面板内更新的 updater 容器镜像；留空自动挑选，离线部署无需设置 |
+
+安装阶段选路线时会先实测 GHCR 的层数据能不能拉：**registry 元数据可达（`/v2/` 返回 401）不等于层数据可达**，国内常见的是元数据正常、层下载长时间 `Waiting`。这条路测不通就走 Release 离线镜像包，并可用 `GSH_IMAGE_SOURCE` 强制指定。
 
 面板里的「系统设置 → 面板与游戏版本」选择优先于这里的默认值。
 

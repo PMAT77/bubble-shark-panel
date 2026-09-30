@@ -40,7 +40,24 @@ sed -n '9p' "install-${tag}.sh"
 sudo GSH_PANEL_ENV_PRESET=small bash "install-${tag}.sh" --mode docker --network cn
 ```
 
-**不需要手动下载或导入镜像包**：GHCR 不可达时，安装器会自己从 Release 取离线镜像包（走加速代理）、校验 `.sha256` 并 `docker load` 导入，然后继续部署。
+**不需要手动下载或导入镜像包**：`--network cn` 下安装器默认走 Release 离线镜像包（走加速代理池、校验 `.sha256`、`docker load` 导入）；海外档默认从 GHCR 直拉，但会先实测**层数据**能不能拉——元数据可达不算数，测不通就自动改走离线包。
+
+直拉时若连续 90 秒没有进度，安装器会主动放弃并中断，不再让你盯着 `Waiting`：
+
+```
+[WARN] docker pull 已连续 90s 没有进度，判定停滞并放弃本次尝试。
+[WARN] 已中断停滞的拉取；本地已完成的层会保留，重试或改用离线包都不会从头开始。
+```
+
+想固定走某条路线时用 `GSH_IMAGE_SOURCE`：
+
+```bash
+# 固定用离线包（国内推荐，行为最可预期）
+sudo GSH_IMAGE_SOURCE=offline bash "install-${tag}.sh" --mode docker --network cn
+
+# 固定直拉（自建 registry 或确认 GHCR 层数据可用时）
+sudo GSH_IMAGE_SOURCE=native bash "install-${tag}.sh" --mode docker
+```
 
 装完终端会打印面板地址、管理员账号与后续动作，结尾还会给出这次安装的耗时。
 
@@ -160,7 +177,7 @@ docker exec game-server-hub-panel cat /app/data/admin-credentials.txt
 
 | 报错关键词 | 怎么处理 |
 | --- | --- |
-| 镜像层下载 `net/http: TLS handshake timeout` | 最常见。安装器会自己改用 Release 离线镜像包；它报 `离线镜像包下载或校验失败` 时才需要手动下载与导入（见「安装（国内服务器）」的折叠块） |
+| 镜像层下载 `net/http: TLS handshake timeout` 或长时间 `Waiting` | 国内最常见的形态：registry 元数据正常、层数据拉不动。`--network cn` 下默认已走离线包；若仍卡在直拉，用 `GSH_IMAGE_SOURCE=offline` 重跑。安装器连续 90 秒无进度会主动中断，不会永久挂住 |
 | `Cannot reach GHCR` / `Image pull failed` | 同上。定位用 `curl -I https://ghcr.io/v2/`（返回 401 属正常）；「清单能取到、层下载超时」是网络不可达，不是鉴权问题，重试和换代理都不会成功 |
 | `Docker Compose v2 plugin is required but unavailable` | 按报错里的手动命令装插件后重跑安装器，命令见「安装（国内服务器）」的折叠块 |
 | 装之前想知道会走哪条路线 | `sudo bash "install-${tag}.sh" --check`：只打印体检报告（系统、架构、内存、磁盘、Docker、GHCR 与 Steam CDN 可达性、端口占用），不改动系统 |

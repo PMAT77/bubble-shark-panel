@@ -392,39 +392,91 @@ rm -rf "${NATIVE_HELPER_TEST_DIR}"
 
 rm -rf "${COMPOSE_PLUGIN_TEST_DIR}"
 
-# ---- 镜像路线判定（纯逻辑：GHCR 可达 / 本地已有 / 覆盖引用 / 需离线兜底）----
-# resolve_image_route 只读全局标志，不碰网络与 Docker，适合直接断言四种组合。
+# ---- 镜像路线判定 ----
+# resolve_image_route 会读网络档、GSH_IMAGE_SOURCE 与层数据探测结论，并问一次本地镜像。
+# 这里把 docker 固定成「本地没有该镜像」，其余按分支逐个断言。
 RESOLVED_INSTALL_MODE='docker'
+RESOLVED_NETWORK_PROFILE='global'
 PANEL_IMAGE_OVERRIDE=''
+GSH_IMAGE_SOURCE='auto'
 GHCR_REACHABLE=1
-OFFLINE_IMAGE_IMPORTED=0
+GHCR_LAYER_ACCESSIBLE=1
+GSH_FORCE_IMAGE_PULL=0
+docker() { return 1; }
+
+# 海外 + 层数据可用 → 直拉
 resolve_image_route
 [[ "${IMAGE_ROUTE}" == 'ghcr' ]]
 [[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
 
+# 国内档 → 离线包优先（即使层数据可用）
+RESOLVED_NETWORK_PROFILE='cn'
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'offline' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
+
+# 海外但层数据实测不可用 → 也走离线包（元数据可达不代表拉得动）
+RESOLVED_NETWORK_PROFILE='global'
+GHCR_LAYER_ACCESSIBLE=0
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'offline' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
+
+# registry 元数据都拿不到 → 走离线包
 GHCR_REACHABLE=0
 resolve_image_route
 [[ "${IMAGE_ROUTE}" == 'offline' ]]
 [[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
 
-OFFLINE_IMAGE_IMPORTED=1
+# 显式指定 native → 无论网络档都直拉
+GSH_IMAGE_SOURCE='native'
+RESOLVED_NETWORK_PROFILE='cn'
+GHCR_REACHABLE=1
+GHCR_LAYER_ACCESSIBLE=1
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'ghcr' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
+
+# 显式指定 offline → 无论网络档都走离线包
+GSH_IMAGE_SOURCE='offline'
+RESOLVED_NETWORK_PROFILE='global'
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'offline' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
+GSH_IMAGE_SOURCE='auto'
+
+# 本地已有目标镜像 → 跳过下载
+docker() { return 0; }
 resolve_image_route
 [[ "${IMAGE_ROUTE}" == 'offline-present' ]]
 [[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
 
-OFFLINE_IMAGE_IMPORTED=0
+# 强制拉取时跳过「本地已有」判断，改由网络档决定路线
+GSH_FORCE_IMAGE_PULL=1
+RESOLVED_NETWORK_PROFILE='cn'
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'offline' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
+GSH_FORCE_IMAGE_PULL=0
+RESOLVED_NETWORK_PROFILE='global'
+
+# 覆盖引用 → 按指定引用走，不判定 registry
+docker() { return 1; }
 PANEL_IMAGE_OVERRIDE='registry.example.com/gsh:test'
 resolve_image_route
 [[ "${IMAGE_ROUTE}" == 'custom' ]]
 [[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
 PANEL_IMAGE_OVERRIDE=''
 
+# native 模式不涉及镜像路线
 RESOLVED_INSTALL_MODE='native'
-GHCR_REACHABLE=0
 resolve_image_route
 [[ -z "${IMAGE_ROUTE}" ]]
 [[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
 RESOLVED_INSTALL_MODE='docker'
+RESOLVED_NETWORK_PROFILE='global'
+GHCR_REACHABLE=1
+GHCR_LAYER_ACCESSIBLE=1
 
 # ---- 离线镜像包：下载 + 校验成功 ----
 # 两条注意：

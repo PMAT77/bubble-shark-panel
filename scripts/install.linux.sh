@@ -150,10 +150,16 @@ CHECK_ONLY=0 # --check：只打印前置体检报告后退出，不改动系统�
 CHECK_REPORT_FILE="${CHECK_REPORT_FILE:-}" # 体检报告落盘路径（仅 --check 生效；为空则只打印到终端）。
 # 前置体检的探测结论：在体检阶段算一次，安装阶段直接复用，避免同一机器上重复探测。
 GHCR_REACHABLE=0
+GHCR_LAYER_ACCESSIBLE=0 # GHCR 的层数据是否真的拉得动（元数据可达 ≠ 层可达）。
+GHCR_LAYER_PROBE_SECONDS=-1 # 层数据探测耗时（秒）；-1 表示没测出来。
 DOCKER_REPO_REACHABLE=0
 SYSTEMCTL_AVAILABLE=0
 STEAM_CDN_REACHABLE=0
 HOST_IPV4=""
+# 镜像获取偏好：auto（按网络档决定）| offline（强制 Release 离线包）| native（强制 GHCR 直拉）。
+GSH_IMAGE_SOURCE="${GSH_IMAGE_SOURCE:-auto}"
+GHCR_LAYER_PROBE_MAX_SECONDS="${GHCR_LAYER_PROBE_MAX_SECONDS:-20}" # 层数据探测单次请求上限（秒）。
+DOCKER_PULL_STALL_SECONDS="${DOCKER_PULL_STALL_SECONDS:-90}" # 直拉时多久没有进度就判定停滞（秒）。
 RELEASE_OFFLINE_IMAGE_PATH="" # Release 离线镜像包落盘路径（自动兜底或手动指定时设置）。
 OFFLINE_IMAGE_IMPORTED=0 # 离线镜像包是否已导入本地 Docker。
 IMAGE_ROUTE="" # 镜像获取路线：ghcr | offline | offline-present | custom。
@@ -223,16 +229,63 @@ resolve_host_ipv4() {
   printf '%s' "${source_ip}"
 }
 
+# 探测 GHCR 的「层数据」是否真的拉得动。
+#
+# registry 元数据可达（/v2/ 返回 401）不代表层数据可达：层数据在 pkg-containers.githubusercontent.com
+# 上，国内常表现为元数据正常、层下载挂住。此前预检只看元数据，于是被判定「可达」走了直拉，
+# 用户卡在 Waiting 上无限等待。这里取一次匿名 token 并真拉一个小 blob（镜像配置，几百字节），
+# 实测通过才算层数据可用；整段有硬超时，慢的就是不可用。
+probe_ghcr_layer_access() {
+  GHCR_LAYER_ACCESSIBLE=0
+  GHCR_LAYER_PROBE_SECONDS=-1
+
+  local repository="pmat77/game-server-hub" token digest started elapsed
+  local max_seconds="${GHCR_LAYER_PROBE_MAX_SECONDS}"
+  local manifest_url="https://ghcr.io/v2/${repository}/manifests/${PANEL_IMAGE_TAG}"
+  local accept='Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'
+
+  token="$(curl -fsSL --connect-timeout 5 --max-time "${max_seconds}" \
+    "https://ghcr.io/token?scope=repository:${repository}:pull&service=ghcr.io" 2>/dev/null \
+    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  if [[ -z "${token}" ]]; then
+    return
+  fi
+
+  digest="$(curl -fsSL --connect-timeout 5 --max-time "${max_seconds}" \
+    -H "Authorization: Bearer ${token}" -H "${accept}" "${manifest_url}" 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*"digest":"\(sha256:[0-9a-f]*\)".*/\1/p' | head -1)"
+  if [[ -z "${digest}" ]]; then
+    return
+  fi
+
+  started="$(date +%s)"
+  if curl -fsS --connect-timeout 5 --max-time "${max_seconds}" \
+    -H "Authorization: Bearer ${token}" -o /dev/null \
+    "https://ghcr.io/v2/${repository}/blobs/${digest}" 2>/dev/null; then
+    elapsed=$(( $(date +%s) - started ))
+    GHCR_LAYER_PROBE_SECONDS="${elapsed}"
+    if (( elapsed <= max_seconds )); then
+      GHCR_LAYER_ACCESSIBLE=1
+    fi
+  fi
+}
+
 # 探测每项独立超时并各自打点：弱网下最坏耗时 = 各项超时之和 * 站点数，不能无限等。
 probe_reachability() {
   GHCR_REACHABLE=0
+  GHCR_LAYER_ACCESSIBLE=0
+  GHCR_LAYER_PROBE_SECONDS=-1
   DOCKER_REPO_REACHABLE=0
   STEAM_CDN_REACHABLE=0
   SYSTEMCTL_AVAILABLE=0
   HOST_IPV4="$(resolve_host_ipv4)"
 
-  if [[ -z "${PANEL_IMAGE_OVERRIDE}" ]] && check_registry_reachability "ghcr.io" >/dev/null 2>&1; then
-    GHCR_REACHABLE=1
+  if [[ -z "${PANEL_IMAGE_OVERRIDE}" ]]; then
+    if check_registry_reachability "ghcr.io" >/dev/null 2>&1; then
+      GHCR_REACHABLE=1
+      # 元数据可达才值得再花时间测层数据：探不通就没必要测。
+      probe_ghcr_layer_access
+    fi
   fi
 
   # 这两个开关此前只有定义、没有调用点：预检永远走不到它们，只能等 install_docker 自己失败。
@@ -264,8 +317,12 @@ probe_reachability() {
   fi
 }
 
-# 判定这次安装该走哪条镜像路线。已导入离线包时不再探测 registry：本地有镜像就不会拉取。
-# 设置 OFFLINE_IMAGE_ROUTE=1 表示需要安装器自己去下载并导入 Release 离线镜像包。
+# 判定这次安装该走哪条镜像路线。
+#
+# 三条路线：custom（用户指定引用）| ghcr（直拉）| offline（Release 离线镜像包）。
+# 离线包优先于直拉的两个理由：它走加速代理池（国内比 GHCR 的层域名可靠），且带 .sha256 校验、
+# 失败能立刻判定；直拉在国外更快，所以海外档仍默认直拉。OFFLINE_IMAGE_ROUTE=1 表示
+# 安装阶段要去下载并导入离线包，失败时由 ensure_panel_image_available 降级成直拉。
 resolve_image_route() {
   OFFLINE_IMAGE_ROUTE=0
   IMAGE_ROUTE=""
@@ -276,16 +333,45 @@ resolve_image_route() {
     IMAGE_ROUTE="custom"
     return
   fi
-  if [[ "${GHCR_REACHABLE}" -eq 1 ]]; then
-    IMAGE_ROUTE="ghcr"
-    return
-  fi
-  if [[ "${OFFLINE_IMAGE_IMPORTED}" -eq 1 ]]; then
+  # 本地已有目标镜像：后面会跳过拉取，路线无关紧要。
+  if [[ "${GSH_FORCE_IMAGE_PULL:-0}" != "1" ]] \
+    && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
     IMAGE_ROUTE="offline-present"
     return
   fi
-  IMAGE_ROUTE="offline"
-  OFFLINE_IMAGE_ROUTE=1
+
+  local prefer
+  case "${GSH_IMAGE_SOURCE}" in
+    offline)
+      prefer="offline"
+      ;;
+    native)
+      prefer="ghcr"
+      ;;
+    auto)
+      # 国内档默认离线包；层数据实测不可达时也走离线包（元数据可达不代表拉得动）。
+      if [[ "${RESOLVED_NETWORK_PROFILE}" == "cn" || "${GHCR_LAYER_ACCESSIBLE}" -ne 1 ]]; then
+        prefer="offline"
+      else
+        prefer="ghcr"
+      fi
+      ;;
+    *)
+      abort "Invalid GSH_IMAGE_SOURCE '${GSH_IMAGE_SOURCE}'. Expected auto, offline or native."
+      ;;
+  esac
+
+  # GHCR 连元数据都拿不到时不必先试直拉。
+  if [[ "${prefer}" == "ghcr" && "${GHCR_REACHABLE}" -ne 1 ]]; then
+    prefer="offline"
+  fi
+
+  if [[ "${prefer}" == "offline" ]]; then
+    IMAGE_ROUTE="offline"
+    OFFLINE_IMAGE_ROUTE=1
+  else
+    IMAGE_ROUTE="ghcr"
+  fi
 }
 
 # 以 root 执行命令；若非 root 则自动走 sudo。
@@ -1705,6 +1791,10 @@ Environment (optional):
   GSH_GAME_DST_IMAGE=REF        Kept for compatibility; defaults to PANEL_IMAGE (v0.2.0 unified image)
   GSH_STEAMCMD_IMAGE=REF        Kept for compatibility; defaults to PANEL_IMAGE (v0.2.0 unified image)
   GSH_GITHUB_PROXY=URL          Force one GitHub accelerator (e.g. https://gh-proxy.com/)
+  GSH_IMAGE_SOURCE=MODE         Runtime image source: auto (default), offline (always use the
+                                Release image archive), native (always pull from GHCR)
+  GSH_FORCE_IMAGE_PULL=1        Pull even when the image already exists locally
+  DOCKER_PULL_STALL_SECONDS=90  Give up a GHCR pull after this many seconds without progress
   PANEL_HEALTHCHECK_TIMEOUT_SECONDS=90  Maximum wait for panel /health after startup
   PANEL_HEALTHCHECK_INTERVAL_SECONDS=3  Panel /health polling interval
   USE_CN_DEBIAN_MIRROR=1        Enable CN Debian/Ubuntu mirror
@@ -2206,16 +2296,31 @@ preflight_checks() {
   if [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
     if [[ -n "${PANEL_IMAGE_OVERRIDE}" ]]; then
       report_item 0 "镜像来源" "使用你指定的镜像引用，不做 registry 预检"
-    elif [[ "${GHCR_REACHABLE}" -eq 1 ]]; then
-      report_item 0 "GHCR" "可达，安装阶段直接拉取 ${PANEL_IMAGE}"
-    elif [[ "${OFFLINE_IMAGE_IMPORTED}" -eq 1 ]]; then
-      report_item 0 "GHCR" "不可达，但本地已有 ${PANEL_IMAGE}，跳过拉取"
+    elif [[ "${GHCR_REACHABLE}" -ne 1 ]]; then
+      report_item 1 "GHCR" "元数据不可达（https://ghcr.io/v2/ 探不通）"
+    elif [[ "${GHCR_LAYER_ACCESSIBLE}" -eq 1 ]]; then
+      report_item 0 "GHCR" "元数据可达，层数据实测可用（配置 blob 用时 ${GHCR_LAYER_PROBE_SECONDS}s）"
     else
-      report_item 1 "GHCR" "不可达或超时，安装阶段会自动改用 Release 离线镜像包"
-      if [[ "${CHECK_ONLY}" -eq 0 && -z "${PREFLIGHT_NEXT_STEP}" ]]; then
-        PREFLIGHT_NEXT_STEP="无需手工操作：安装器会自动下载并导入离线镜像包（约 227 MB）；下载慢时可设置 GSH_GITHUB_PROXY 指定加速节点。"
-      fi
+      # 元数据能通、层数据拉不动是国内最常见的形态：直接拉会挂在 Waiting 上不报错。
+      report_item 1 "GHCR" "元数据可达但层数据拉不动，镜像会改走 Release 离线包"
     fi
+
+    case "${IMAGE_ROUTE}" in
+      custom)
+        report_item 0 "镜像路线" "按你指定的引用拉取"
+        ;;
+      offline-present)
+        report_item 0 "镜像路线" "本地已有 ${PANEL_IMAGE}，跳过下载"
+        ;;
+      ghcr)
+        report_item 0 "镜像路线" "GHCR 直拉（超过 ${DOCKER_PULL_STALL_SECONDS}s 无进度会主动放弃）"
+        ;;
+      offline)
+        report_item 0 "镜像路线" "Release 离线镜像包（走加速代理 + .sha256 校验）"
+        ;;
+      *)
+        ;;
+    esac
   fi
 
   if [[ "${DOCKER_REPO_REACHABLE}" -eq 1 ]]; then
@@ -2462,19 +2567,90 @@ pull_runtime_images() {
     log_warn "若上面就是你要的版本，用 GSH_RELEASE_TAG=<对应的版本 tag> 重跑本安装器即可跳过下载。"
   fi
 
-  if ! run_with_retry "docker pull ${PANEL_IMAGE}" run_as_root docker pull "${PANEL_IMAGE}"; then
+  if [[ "${IMAGE_ROUTE}" == "ghcr" ]]; then
+    log_warn "直拉时若超过 ${DOCKER_PULL_STALL_SECONDS}s 没有进度，安装器会主动放弃，不再无限等下去。"
+  fi
+
+  if ! pull_with_stall_detection; then
     log_error "Failed to pull runtime image: ${PANEL_IMAGE}"
-    log_error "GHCR 的镜像层域名（pkg-containers.githubusercontent.com）在国内常不可达，表现为 TLS handshake timeout。"
-    if [[ "${OFFLINE_IMAGE_ROUTE}" -eq 1 ]]; then
-      log_error "自动兜底未能完成，请手动执行：下载 $(release_offline_image_filename) 与其 .sha256，校验后 docker load -i 导入，再重跑本安装器。"
-    else
-      log_error "请改用 Release 离线镜像包：下载 $(release_offline_image_filename)（同目录有 .sha256），再用 docker load -i 导入，然后重跑本安装器（镜像已在本地，会自动跳过拉取）。"
-    fi
+    log_error "GHCR 的镜像层域名（pkg-containers.githubusercontent.com）在国内常不可达，表现为 TLS handshake timeout 或长时间 Waiting。"
+    log_error "请改用 Release 离线镜像包：下载 $(release_offline_image_filename)（同目录有 .sha256），再用 docker load -i 导入，然后重跑本安装器（镜像已在本地，会自动跳过拉取）。"
     log_error "离线包下载页：https://github.com/PMAT77/game-serve-hub/releases/tag/${GSH_RELEASE_TAG}"
     log_error "完整步骤见仓库 docs/install-docker.md 的「安装（国内服务器）」。"
-    log_error "如需强制重新拉取，可设置 GSH_FORCE_IMAGE_PULL=1。"
+    log_error "如需强制重新拉取，可设置 GSH_FORCE_IMAGE_PULL=1；想固定走直拉可设置 GSH_IMAGE_SOURCE=native。"
     return 1
   fi
+}
+
+# 在后台启动 docker pull 并把进度写进日志文件：停滞检测只能靠观察它的输出来判断。
+# 重定向的目标是文件而不是管道，进程间管道在受限环境（如 Windows 沙箱）会被拒绝。
+start_pull_in_background() {
+  local log_path="$1"
+  local pid_var="$2"
+  run_as_root docker pull "${PANEL_IMAGE}" >"${log_path}" 2>&1 &
+  printf -v "${pid_var}" '%s' "$!"
+}
+
+# 带停滞检测的直拉：docker pull 卡在传输中不会超时，会把用户挂在 Waiting 上，
+# 所以这里盯住进度输出，超过 DOCKER_PULL_STALL_SECONDS 没有新内容就放弃本次尝试。
+pull_with_stall_detection() {
+  local attempt
+  for ((attempt = 1; attempt <= RETRY_MAX; attempt++)); do
+    if run_pull_attempt_with_stall_detection; then
+      return 0
+    fi
+    if (( attempt == RETRY_MAX )); then
+      log_error "docker pull ${PANEL_IMAGE} failed after ${RETRY_MAX} attempts."
+      return 1
+    fi
+    log_warn "docker pull 第 ${attempt} 次未完成，${RETRY_DELAY_SECONDS}s 后重试（已下载的层会被复用）。"
+    sleep "${RETRY_DELAY_SECONDS}"
+  done
+}
+
+run_pull_attempt_with_stall_detection() {
+  local pull_log pull_pid waited last_size current_size stall_seconds
+  pull_log="$(run_as_root mktemp /tmp/gsh-pull-XXXXXX)"
+  waited=0
+  stall_seconds=0
+
+  start_pull_in_background "${pull_log}" pull_pid
+  if [[ -z "${pull_pid}" ]]; then
+    log_error "无法启动 docker pull（没能取得后台进程号）。"
+    return 1
+  fi
+
+  last_size=0
+  while kill -0 "${pull_pid}" 2>/dev/null; do
+    sleep 5
+    waited=$((waited + 5))
+    current_size="$(run_as_root wc -c < "${pull_log}" 2>/dev/null || printf '0')"
+    current_size="${current_size//[^0-9]/}"
+    if [[ -z "${current_size}" ]]; then
+      current_size=0
+    fi
+    if [[ "${current_size}" != "${last_size}" ]]; then
+      last_size="${current_size}"
+      stall_seconds=0
+    else
+      stall_seconds=$((stall_seconds + 5))
+      # 行缓冲模式下进度行会立刻落盘，所以「文件不再增长」等价于「没有新层完成或推进」。
+      if (( stall_seconds >= DOCKER_PULL_STALL_SECONDS )); then
+        log_warn "docker pull 已连续 ${stall_seconds}s 没有进度，判定停滞并放弃本次尝试。"
+        run_as_root kill "${pull_pid}" 2>/dev/null || true
+        sleep 2
+        run_as_root kill -9 "${pull_pid}" 2>/dev/null || true
+        log_warn "已中断停滞的拉取；本地已完成的层会保留，重试或改用离线包都不会从头开始。"
+        return 1
+      fi
+    fi
+  done
+
+  if wait "${pull_pid}"; then
+    log_info "docker pull completed in ${waited}s: ${PANEL_IMAGE}"
+    return 0
+  fi
+  return 1
 }
 
 # Release 离线镜像包名（与 .github/workflows/docker-publish.yml 的资产名保持一致）。
@@ -2559,7 +2735,11 @@ import_release_offline_image() {
   return 0
 }
 
-# 镜像路线兜底：GHCR 不可达时自动走 Release 离线包，失败才把用户交回手动步骤。
+# 镜像准备：按选定路线取镜像，离线包失败时降级到直拉。
+#
+# 两个方向都留后路：国内默认离线包（代理由加速池跳，比 GHCR 层域名可靠），
+# 离线包拿不到时若层数据可达就退回直拉；反过来海外默认直拉，直拉失败由
+# pull_runtime_images 负责，它的失败信息会指向离线包。
 ensure_panel_image_available() {
   if [[ "${RESOLVED_INSTALL_MODE}" != "docker" ]]; then
     return 0
@@ -2575,18 +2755,22 @@ ensure_panel_image_available() {
     return 0
   fi
 
-  log_warn "ghcr.io 不可达；改用 Release 离线镜像包自动兜底（无需手工下载与导入）。"
-  if ! download_release_offline_image; then
-    log_error "离线镜像包下载或校验失败。"
-    log_error "手动下载：https://github.com/PMAT77/game-serve-hub/releases/tag/${GSH_RELEASE_TAG}"
-    log_error "文件名：$(release_offline_image_filename)（同目录有 .sha256），下载后校验并 docker load -i 导入，再重跑本安装器。"
-    return 1
+  log_info "本次走 Release 离线镜像包（走加速代理，带 .sha256 校验；可用 GSH_IMAGE_SOURCE=native 强制直拉）。"
+  if download_release_offline_image && import_release_offline_image; then
+    return 0
   fi
-  if ! import_release_offline_image; then
-    log_error "离线镜像包导入失败；可手动执行：sudo docker load -i ${RELEASE_OFFLINE_IMAGE_PATH}"
-    return 1
+
+  log_warn "离线镜像包不可用。"
+  if [[ "${GHCR_LAYER_ACCESSIBLE}" -eq 1 ]]; then
+    log_warn "GHCR 层数据实测可达，改为直拉。"
+    IMAGE_ROUTE="ghcr"
+    return 0
   fi
-  return 0
+
+  log_error "离线镜像包下载或导入失败，且 GHCR 的层数据不可达（预检 ${GHCR_LAYER_PROBE_SECONDS}s/-1 未通过）。"
+  log_error "手动下载：https://github.com/PMAT77/game-serve-hub/releases/tag/${GSH_RELEASE_TAG}"
+  log_error "文件名：$(release_offline_image_filename)（同目录有 .sha256），下载后校验并 docker load -i 导入，再重跑本安装器。"
+  return 1
 }
 
 wait_for_panel_health() {
@@ -2905,6 +3089,8 @@ main() {
   CURRENT_STAGE="preflight"
   resolve_check_report_path
   probe_reachability
+  # 路线要在体检之前定下来：报告里会说明这次走 GHCR 直拉还是离线镜像包。
+  resolve_image_route
   preflight_checks
 
   if [[ "${CHECK_ONLY}" -eq 1 ]]; then
@@ -2919,8 +3105,6 @@ main() {
   if [[ "${PREFLIGHT_FAILURES}" -gt 0 ]]; then
     abort "Preflight checks failed: ${PREFLIGHT_FAILURES} item(s) must be fixed before installing. See the report above."
   fi
-
-  resolve_image_route
 
   begin_stage "dependencies" "Installing base dependencies"
   install_base_packages

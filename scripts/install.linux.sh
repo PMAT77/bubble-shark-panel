@@ -1249,8 +1249,8 @@ ensure_compose_plugin() {
     for ((attempt = 1; attempt <= REPO_DOWNLOAD_MAX_ATTEMPTS; attempt++)); do
       tmp_file="$(mktemp)"
       log_info "Downloading Compose v2 plugin from ${source} (attempt ${attempt}/${REPO_DOWNLOAD_MAX_ATTEMPTS}; progress below)..."
-      # 不加 -s：弱网下让 curl 输出进度，避免“看似卡死”。
-      if curl -fL \
+      # 不加 -s：弱网下让 curl 输出进度，避免“看似卡死”；--retry-all-errors 让同一源上的断流自己重试。
+      if curl -fL --progress-bar --retry 3 --retry-delay 3 --retry-all-errors \
         --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
         --max-time "${COMPOSE_PLUGIN_MAX_TIME_SECONDS}" \
         -o "${tmp_file}" \
@@ -1446,7 +1446,7 @@ download_native_release_archive() {
     for source in "${raw_sources[@]}"; do
       source="${source%/}"
       log_info "Trying Native Release source: ${source}"
-      if curl -fL \
+      if curl -fL --progress-bar --retry 3 --retry-delay 3 --retry-all-errors \
         --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
         --max-time 600 \
         -o "${archive_dest}" \
@@ -2679,7 +2679,7 @@ download_release_offline_image() {
   # 当成一个 URL（"a,b,c" 里的逗号不是分隔符），下载必然失败。
   for source in $(build_github_url_variants "${asset_url}" | tr ',' '\n'); do
     for ((attempt = 1; attempt <= REPO_DOWNLOAD_MAX_ATTEMPTS; attempt++)); do
-      if run_as_root curl -fL \
+      if run_as_root curl -fL --progress-bar --retry 3 --retry-delay 3 --retry-all-errors \
         --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
         --max-time "${OFFLINE_IMAGE_MAX_TIME_SECONDS}" \
         -o "${target_path}" "${source}"; then

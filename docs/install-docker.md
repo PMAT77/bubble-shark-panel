@@ -10,10 +10,10 @@ Windows 不是部署目标，只用于本机开发调试。
 
 ## 安装（海外机器）
 
-一条命令装完，安装器自己装 Docker 与 Compose 插件，再拉取统一镜像并启动面板栈。
+一条命令装完，安装器自己装 Docker 与 Compose 插件，再拉取统一镜像并启动面板栈。想先确认环境再动手，可以加 `--check`：它只打印体检报告，不改动系统。
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.1/scripts/install.linux.sh" \
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
   | sudo bash -s -- --mode docker
 ```
 
@@ -21,38 +21,41 @@ GHCR 拉取慢或超时的话，把上面命令里的 `https://raw.githubusercon
 
 ## 安装（国内服务器）
 
-国内要按顺序做四步。**先解决镜像，再跑安装器**：安装器拉的是 GHCR 镜像，它的镜像层域名 `pkg-containers.githubusercontent.com` 国内基本不可达，直接跑几乎必然卡在 `net/http: TLS handshake timeout`，重试没用。
+国内的问题集中在镜像下载：安装器拉的是 GHCR 镜像，而它的镜像层域名 `pkg-containers.githubusercontent.com` 国内基本不可达，直接跑常卡在 `net/http: TLS handshake timeout`。
 
-### 1. 下载安装器并确认版本
+**先体检，再安装。** 体检会判断发行版、架构、内存、根分区余量、Docker 状态、GHCR 与 Steam CDN 可达性、面板端口占用，并给出这次要走哪条下载路线。它不改动系统，也不写任何安装状态文件。
 
 ```bash
-tag=v0.10.1
+tag=v0.11.0
 # gh-proxy 加速；不可用时换成 https://ghfast.top/ 前缀。
 # 用 curl -o 指定带版本号的文件名：wget 遇到同名文件是另存为 .1，容易继续跑上一次的旧脚本
 curl -fL --retry 3 -o "install-${tag}.sh" \
   "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/${tag}/scripts/install.linux.sh"
 
-# 自证版本：这一步必须输出 ...:-v0.10.1}}，对不上就停下排查。
+# 自证版本：这一步必须输出 ...:-v0.11.0}}，对不上就停下排查。
 # 这一行的默认 tag 决定安装器要装的镜像版本
 sed -n '9p' "install-${tag}.sh"
+
+# 体检（不改动系统）；末尾会打印报告路径
+sudo bash "install-${tag}.sh" --check
 ```
 
-### 2. 装 Docker 与 Compose 插件
-
-第一次跑安装器时它会把 Docker 与 Compose 插件装好，这一步结尾报 `Cannot reach GHCR / Image pull failed` 属正常（镜像包还没导入）。
+体检通过后直接安装，**不需要手动下载或导入镜像包**：GHCR 不可达时，安装器会自己从 Release 取离线镜像包（走加速代理）、校验 `.sha256` 并 `docker load` 导入，然后继续部署。
 
 ```bash
-sudo GSH_PANEL_ENV_PRESET=small GSH_RELEASE_TAG="${tag}" bash "install-${tag}.sh" --mode docker --network cn
-
-# 期望输出：Docker Compose version v2.39.2
-docker compose version
+# 国内档位：发行版换国内镜像源，SteamCMD 重试次数翻倍
+sudo GSH_PANEL_ENV_PRESET=small bash "install-${tag}.sh" --mode docker --network cn
 ```
 
-### 3. 导入离线镜像包
+装完终端会打印面板地址、管理员账号与后续动作，结尾还会给出这次安装的耗时。
+
+<details>
+<summary>自动兜底失败时：手动下载并导入离线镜像包</summary>
+
+安装器已经把能试的代理都试过才会退回这里。手动路径是它做过的同一套动作：
 
 ```bash
 base="https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/${tag}"
-
 # 下载镜像包与校验文件（约 227 MB，以 Release 页面显示为准）
 curl -fL --retry 3 -o "game-server-hub-${tag}-docker-image.tar.gz"        "${base}/game-server-hub-${tag}-docker-image.tar.gz"
 curl -fL --retry 3 -o "game-server-hub-${tag}-docker-image.tar.gz.sha256" "${base}/game-server-hub-${tag}-docker-image.tar.gz.sha256"
@@ -60,24 +63,27 @@ curl -fL --retry 3 -o "game-server-hub-${tag}-docker-image.tar.gz.sha256" "${bas
 # 校验完整性，末尾应输出 OK。.sha256 记录的是原始文件名，改过名要先改回
 sha256sum -c "game-server-hub-${tag}-docker-image.tar.gz.sha256"
 
-# 核对包内镜像 tag：RepoTags 应为 ghcr.io/pmat77/game-server-hub:v0.10.1
-tar -xOzf "game-server-hub-${tag}-docker-image.tar.gz" manifest.json | head -c 200; echo
-
-# 导入镜像（约 560 MB）；-i 带进度条，不要用 gunzip 管道。
-# 输出 Loaded image: ghcr.io/pmat77/game-server-hub:v0.10.1 即成功
+# 导入镜像（约 560 MB）；-i 带进度条，不要用 gunzip 管道
 docker load -i "game-server-hub-${tag}-docker-image.tar.gz"
 
 # 断言本地 tag 与目标版本一致：安装器只认完整引用字符串，tag 对不上会重新拉取
 docker images --format '{{.Repository}}:{{.Tag}}' | grep "^ghcr.io/pmat77/game-server-hub:${tag}$"
 ```
 
-### 4. 重跑安装器完成部署
+然后原样重跑安装命令。这次镜像已在本地，日志出现 `Runtime image already present locally, skipping pull` 后会一路走完。
 
-原样重跑第 2 步那条安装命令。这次镜像已在本地，日志出现 `Runtime image already present locally, skipping pull` 后会一路走完，结尾打印面板地址。
+</details>
 
-```bash
-docker ps   # game-server-hub-panel 应为 Up
-```
+<details>
+<summary>指定镜像源、代理或强制重新拉取</summary>
+
+`--network cn` 之外的参数见[参数速查](reference.md#安装器参数)与[镜像与更新](reference.md#镜像与更新)。常用三个：
+
+- `GSH_GITHUB_PROXY=https://gh-proxy.com/`：固定一个加速节点，不再按内置代理池回退；
+- `GSH_IMAGE_MIRRORS=mirror.example.com`：改用你控制的镜像源；
+- `GSH_FORCE_IMAGE_PULL=1`：本地已有同名镜像也强制重新拉取。
+
+</details>
 
 <details>
 <summary>没看到 skipping pull 又在下载，或安装器报 Compose 插件缺失</summary>
@@ -146,14 +152,16 @@ docker exec game-server-hub-panel cat /app/data/admin-credentials.txt
 
 | 报错关键词 | 怎么处理 |
 | --- | --- |
-| 镜像层下载 `net/http: TLS handshake timeout` | 最常见。先导入离线镜像包（上面第 3 步）再跑安装器 |
+| 镜像层下载 `net/http: TLS handshake timeout` | 最常见。安装器会自己改用 Release 离线镜像包；它报 `离线镜像包下载或校验失败` 时才需要手动下载与导入（见「安装（国内服务器）」的折叠块） |
 | `Cannot reach GHCR` / `Image pull failed` | 同上。定位用 `curl -I https://ghcr.io/v2/`（返回 401 属正常）；「清单能取到、层下载超时」是网络不可达，不是鉴权问题，重试和换代理都不会成功 |
-| `Docker Compose v2 plugin is required but unavailable` | 按报错里的手动命令装插件后重跑安装器，命令见上面的折叠块 |
+| `Docker Compose v2 plugin is required but unavailable` | 按报错里的手动命令装插件后重跑安装器，命令见「安装（国内服务器）」的折叠块 |
+| 装之前想知道会走哪条路线 | `sudo bash "install-${tag}.sh" --check`：只打印体检报告（系统、架构、内存、磁盘、Docker、GHCR 与 Steam CDN 可达性、端口占用），不改动系统 |
 | `download.docker.com` 不可达 | 安装器会自动回退发行版自带的 `docker.io`；apt 慢就加 `--network cn`，其余查 apt 源签名、系统时间与 HTTPS 出站 |
 | `checksum mismatch` | 下载内容与 Release 不一致。清掉代理或 CDN 缓存，确认 `GSH_RELEASE_TAG` 与资源 URL 是同一版本 |
 | 面板不断重启 | `docker logs --tail 100 game-server-hub-panel` 定位，常见为端口占用、`panel.env` 缺键或数据库权限；修正后 `docker compose up -d panel` |
 | 玩家搜不到房间 | 先查安全组是否放行了全部 6 个 UDP 端口，再确认房间没勾「离线」模式、已保存集群令牌 |
 | Mod 市场列表取不到 | 面板的 Steam 请求走自己的代理配置，见[参数速查 · Steam 与 Mod 市场](reference.md#steam-与-mod-市场) |
+| 从其他面板或裸机迁过来 | 把源机器的集群目录打成压缩包，再用面板「备份与恢复 → 导入外部存档」导入；能自动完成与需手工处理的项目见[从其他面板或裸机迁入](migrate-from-other-panel.md) |
 
 排查时还能用 `gsh doctor` 做一次全面体检，或用 `gsh logs` 跟面板日志。参数与变量见[参数速查](reference.md)。
 

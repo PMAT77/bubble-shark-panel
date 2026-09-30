@@ -11,24 +11,24 @@
 一条命令装完。
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.10.1/scripts/install.linux.sh" \
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
   | sudo bash -s -- --mode native
 ```
 
 管道安装的默认模式是 Docker，**Native 必须显式写 `--mode native`**。GitHub Raw 慢的话，把 `https://raw.githubusercontent.com` 换成 `https://gh-proxy.com/https://raw.githubusercontent.com`。
 
-安装器按顺序做这些事：装基础依赖与 32 位运行库 → 创建 `gsh` 系统用户并开启 linger → 下载校验 Native Release（自带 Node 运行时）→ 解压到 `/opt/game-server-hub/releases/v0.10.1` 并原子切换 `current` 符号链接 → 装 SteamCMD → 写 `panel.env` → 启动面板并等待健康检查。
+安装器按顺序做这些事：装基础依赖与 32 位运行库 → 创建 `gsh` 系统用户并开启 linger → 下载校验 Native Release（自带 Node 运行时）→ 解压到 `/opt/game-server-hub/releases/v0.11.0` 并原子切换 `current` 符号链接 → 装 SteamCMD → 写 `panel.env` → 启动面板并等待健康检查。
 
 ## 安装（国内服务器）
 
 Native 不拉容器镜像，境外依赖只有两处：GitHub Raw（安装器组件）与 GitHub Release（Native 包）。安装器自带加速代理池（`gh-proxy.com`、`ghfast.top`、`ghproxy.com`），全部失败才走直连，国内一般可以直接装。先把脚本下载到本地更稳妥：
 
 ```bash
-tag=v0.10.1
+tag=v0.11.0
 curl -fL --retry 3 -o "install-${tag}.sh" \
   "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/${tag}/scripts/install.linux.sh"
 
-# 自证版本：必须输出 ...:-v0.10.1}}，对不上就停下排查
+# 自证版本：必须输出 ...:-v0.11.0}}，对不上就停下排查
 sed -n '9p' "install-${tag}.sh"
 
 # 安装：--network cn 把 apt 源临时切到国内镜像，SteamCMD 走 cn 区域并重试 8 次
@@ -43,7 +43,7 @@ sudo env GSH_RELEASE_TAG="${tag}" bash "install-${tag}.sh" --mode native --netwo
 包旁必须放同名 `.sha256`，也可以用 `GSH_NATIVE_RELEASE_SHA256` 直接给出摘要。
 
 ```bash
-tag=v0.10.1
+tag=v0.11.0
 base="https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/${tag}"
 curl -fL --retry 3 -o "game-server-hub-native-${tag}-linux-x64.tar.gz"        "${base}/game-server-hub-native-${tag}-linux-x64.tar.gz"
 curl -fL --retry 3 -o "game-server-hub-native-${tag}-linux-x64.tar.gz.sha256" "${base}/game-server-hub-native-${tag}-linux-x64.tar.gz.sha256"
@@ -108,6 +108,7 @@ Native 模式下游戏进程直接监听宿主机端口，没有容器这一层�
 | Docker 与 Native 混装报 `cross-mode migration is not supported` | 两种模式之间不自动迁移。保留数据目录后按目标模式重装，再手工迁移 `/var/lib/game-server-hub` 下的数据 |
 | 玩家搜不到房间 | 先查安全组是否放行了全部 6 个 UDP 端口，再确认房间没勾「离线」模式、已保存集群令牌 |
 | Mod 市场列表取不到 | 面板的 Steam 请求走自己的代理配置，见[参数速查 · Steam 与 Mod 市场](reference.md#steam-与-mod-市场) |
+| 从其他面板或裸机迁过来 | 把源机器的集群目录打成压缩包，再用面板「备份与恢复 → 导入外部存档」导入；能自动完成与需手工处理的项目见[从其他面板或裸机迁入](migrate-from-other-panel.md) |
 
 `systemd user manager` 那一类的修复命令：
 

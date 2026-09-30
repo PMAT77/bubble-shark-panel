@@ -2909,8 +2909,6 @@ main() {
 
   if [[ "${CHECK_ONLY}" -eq 1 ]]; then
     # 只体检：不改动系统，所以到此为止（上面除 detect_distro/ensure_apt 的只读探测外没有任何写操作）。
-    append_install_report "已跳过安装（--check）：面板地址将是 http://${HOST_IPV4:-<本机地址>}:${PANEL_PORT}，模式 ${RESOLVED_INSTALL_MODE}。"
-    append_install_report "确认无误后去掉 --check 重跑同一条命令即可开始安装。"
     INSTALL_COMPLETED=1
     if [[ "${PREFLIGHT_FAILURES}" -gt 0 ]]; then
       exit 1

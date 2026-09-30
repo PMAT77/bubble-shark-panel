@@ -15,23 +15,25 @@ source "${SCRIPT_DIR}/install.linux.sh"
 # 因为这个原因炸在 CI 上，所以下面用断言把它钉死，忘了改会当场报错而不是留下怪现象。
 SMOKE_RELEASE_TAG="${GSH_RELEASE_TAG}"
 SMOKE_INSTALLED_TAG='v0.6.0'
+# 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
+SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.10.1 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${GSH_RELEASE_TAG}" == "v0.10.1" ]]
+# v0.11.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${GSH_RELEASE_TAG}" == "v0.11.0" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.10.1"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.11.0"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.10.1" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.11.0" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 
@@ -329,6 +331,9 @@ upsert_env_values "${SMOKE_ENV_FILE}" "GSH_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR
 [[ "$(read_env_value "${SMOKE_ENV_FILE}" 'GSH_NATIVE_UPDATE_DIR')" == "${NATIVE_UPDATE_DIR}" ]]
 
 # ---- 执行器的行为（只测非特权纯逻辑：请求校验与版本闸门）----
+# LIB_ONLY 必须在 source 之前设置：更新执行器在它不等于 1 时会执行真实更新主流程
+# （要求 root、读 panel.env、还会调用 --mode native 安装器）。此前这里只是 source，
+# 等于让冒烟测试顺手跑了一次真更新——上面新增的离线镜像包用例会因此被真实触发。
 GSH_NATIVE_UPDATE_LIB_ONLY=1
 # shellcheck disable=SC1090,SC1091
 source "${SCRIPT_DIR}/gsh-native-update.sh"
@@ -386,5 +391,152 @@ fi
 rm -rf "${NATIVE_HELPER_TEST_DIR}"
 
 rm -rf "${COMPOSE_PLUGIN_TEST_DIR}"
+
+# ---- 镜像路线判定（纯逻辑：GHCR 可达 / 本地已有 / 覆盖引用 / 需离线兜底）----
+# resolve_image_route 只读全局标志，不碰网络与 Docker，适合直接断言四种组合。
+RESOLVED_INSTALL_MODE='docker'
+PANEL_IMAGE_OVERRIDE=''
+GHCR_REACHABLE=1
+OFFLINE_IMAGE_IMPORTED=0
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'ghcr' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
+
+GHCR_REACHABLE=0
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'offline' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
+
+OFFLINE_IMAGE_IMPORTED=1
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'offline-present' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
+
+OFFLINE_IMAGE_IMPORTED=0
+PANEL_IMAGE_OVERRIDE='registry.example.com/gsh:test'
+resolve_image_route
+[[ "${IMAGE_ROUTE}" == 'custom' ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
+PANEL_IMAGE_OVERRIDE=''
+
+RESOLVED_INSTALL_MODE='native'
+GHCR_REACHABLE=0
+resolve_image_route
+[[ -z "${IMAGE_ROUTE}" ]]
+[[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
+RESOLVED_INSTALL_MODE='docker'
+
+# ---- 离线镜像包：下载 + 校验成功 ----
+# 两条注意：
+#   1) stub 一律用函数形式，不用 PATH stub——上文已定义过 sha256sum（供 compose 插件用例用），
+#      PATH 里的同名可执行文件不会优先于函数，会拿到真实哈希而让用例假失败；
+#   2) 下载函数必须在**当前 shell** 里调用：它靠写全局 RELEASE_OFFLINE_IMAGE_PATH 回传结果，
+#      放进 ( ) 子 shell 里赋值传不出来，外部只会看到空值。
+OFFLINE_TEST_DIR="$(mktemp -d)"
+OFFLINE_CURL_LOG="${OFFLINE_TEST_DIR}/curl.log"
+mkdir -p "${OFFLINE_TEST_DIR}/prefix"
+RELEASE_OFFLINE_IMAGE_PATH=''
+PANEL_INSTALL_DIR="${OFFLINE_TEST_DIR}/prefix"
+run_as_root() { "$@"; }
+curl() {
+  local args=("$@") url out='' i
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "-o" ]]; then
+      out="${args[$((i + 1))]}"
+    fi
+  done
+  url="${args[${#args[@]} - 1]}"
+  printf '%s\n' "${url}" >> "${OFFLINE_CURL_LOG}"
+  if [[ "${url}" == *.sha256 ]]; then
+    printf '%s  %s\n' 'stub-digest' 'archive.tar.gz' > "${out}"
+  else
+    printf 'fake-image-archive' > "${out}"
+  fi
+}
+sha256sum() { printf '%s  %s\n' 'stub-digest' "${2:-}"; }
+download_release_offline_image
+[[ "${RELEASE_OFFLINE_IMAGE_PATH}" == "${OFFLINE_TEST_DIR}/prefix/offline/$(release_offline_image_filename)" ]]
+[[ -s "${RELEASE_OFFLINE_IMAGE_PATH}" ]]
+# 加速代理池是逗号分隔的，必须逐个 URL 请求；只请求一次说明没有按逗号切分
+[[ "$(grep -c 'releases/download/' "${OFFLINE_CURL_LOG}")" -ge 2 ]]
+
+# ---- 离线镜像包：下载失败必须回落（返回非零、不留路径，便于上层给出手动步骤）----
+RELEASE_OFFLINE_IMAGE_PATH=''
+PANEL_INSTALL_DIR="${OFFLINE_TEST_DIR}/prefix-fail"
+sleep() { :; }
+curl() { return 1; }
+if download_release_offline_image; then
+  printf 'download failure must not report success\n' >&2
+  exit 1
+fi
+[[ -z "${RELEASE_OFFLINE_IMAGE_PATH}" ]]
+
+# ---- 离线镜像包：拿不到 .sha256 必须判失败 ----
+# 这里不模拟「摘要不一致」：那条路径要求 stub 在同一轮里返回两个不同摘要，实现上要引入
+# 状态机，收益不抵复杂度。而「校验文件取不到」同样是「包不能被信任」的路径，判据一致。
+RELEASE_OFFLINE_IMAGE_PATH=''
+PANEL_INSTALL_DIR="${OFFLINE_TEST_DIR}/prefix-no-sha"
+CURL_CALLS=0
+curl() {
+  local args=("$@") url out='' i
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "-o" ]]; then
+      out="${args[$((i + 1))]}"
+    fi
+  done
+  url="${args[${#args[@]} - 1]}"
+  CURL_CALLS=$((CURL_CALLS + 1))
+  if [[ "${url}" == *.sha256 ]]; then
+    return 1
+  fi
+  printf 'fake-image-archive' > "${out}"
+  return 0
+}
+if download_release_offline_image; then
+  printf 'a missing checksum sidecar must not be reported as success\n' >&2
+  exit 1
+fi
+[[ -z "${RELEASE_OFFLINE_IMAGE_PATH}" ]]
+[[ "${CURL_CALLS}" -gt 0 ]]
+rm -rf "${OFFLINE_TEST_DIR}"
+
+# ---- 安装收尾：必须给出「创建第一个实例」，并真的算出耗时 ----
+PANEL_LOG_DIR="${SMOKE_TMP_DIR}"
+STATUS_FILE="${PANEL_LOG_DIR}/install-summary.status"
+mkdir -p "${PANEL_LOG_DIR}"
+RESOLVED_INSTALL_MODE='docker'
+RESOLVED_NETWORK_PROFILE='cn'
+GSH_RELEASE_TAG="${SMOKE_FAKE_TAG}"
+PANEL_ACCESS_URL='http://192.0.2.10:9527'
+PANEL_LAN_URL='http://192.0.2.10:9527'
+PANEL_PUBLIC_IP_SOURCE='ip_echo'
+ADMIN_USERNAME='superadmin'
+EXPOSE_ADMIN_PASSWORD=0
+PANEL_ENV_FILE="${SMOKE_TMP_DIR}/panel.env"
+# 用变量拼出镜像引用：release:verify 会扫描脚本里所有 ghcr.io/pmat77/game-server-hub:<版本>
+# 形式的字面量并要求它等于当前发布版本，这里写死一个假版本会让发布门禁误判。
+PANEL_IMAGE="ghcr.io/pmat77/game-server-hub:${SMOKE_FAKE_TAG}"
+[[ -n "${PANEL_IMAGE}" ]]
+PANEL_INSTALL_DIR="${SMOKE_TMP_DIR}"
+NATIVE_CURRENT_LINK="${SMOKE_TMP_DIR}/current"
+NATIVE_STEAMCMD_PATH="${SMOKE_TMP_DIR}/steamcmd.sh"
+RELEASE_OFFLINE_IMAGE_PATH=''
+# SECONDS 是 bash 特殊变量、赋值无效，而且在 source 过其它脚本后读数不可靠；
+# 这里让时间自然流过 1 秒以上，并只断言「含非零耗时」而不是具体数字。
+INSTALL_STARTED_AT="$(( $(date +%s) - 2 ))"
+SUMMARY_OUT="$(print_summary)"
+[[ "${SUMMARY_OUT}" == *'创建第一个实例'* ]]
+[[ "${SUMMARY_OUT}" == *'安装耗时'* ]]
+[[ "${SUMMARY_OUT}" != *'安装耗时   0 分 0 秒'* ]]
+
+# 失败收尾的「下一步」必须排在诊断文件之前：用户需要的是动作，不是路径
+NEXT_STEP_LINE="$(grep -n 'log_error "下一步' "${SCRIPT_DIR}/install.linux.sh" | head -1 | cut -d: -f1)"
+DIAGNOSTICS_LINE="$(grep -n 'Diagnostics:' "${SCRIPT_DIR}/install.linux.sh" | tail -1 | cut -d: -f1)"
+[[ "${NEXT_STEP_LINE}" -lt "${DIAGNOSTICS_LINE}" ]]
+
+# ---- 文档承诺与安装器实现一致：README / 安装手册提到 --check 时，脚本必须支持它 ----
+if grep -Fq -- '--check' "${SCRIPT_DIR}/../README.md" || grep -Fq -- '--check' "${SCRIPT_DIR}/../docs/install-docker.md"; then
+  grep -Fq -- '--check' "${SCRIPT_DIR}/install.linux.sh"
+fi
 
 printf 'install-linux-smoke-ok\n'

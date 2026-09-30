@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # 安装脚本默认参数与运行时路径
 # -----------------------------------------------------------------------------
 SCRIPT_NAME="$(basename "$0")" # 当前脚本名称（用于日志展示）。
-GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.10.1}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
+GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.11.0}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
 INSTALLER_REPO_RAW="${INSTALLER_REPO_RAW:-}" # 兼容旧变量：指定单一安装资源源（为空时使用 INSTALLER_REPO_MIRRORS）。
 # GitHub 资源加速代理（前缀拼接型）：安装资源与 Native 包共用；GSH_GITHUB_PROXY 可强制指定单一节点。
 GITHUB_PROXY_SITES="${GITHUB_PROXY_SITES:-https://gh-proxy.com/,https://ghfast.top/,https://ghproxy.com/}"
@@ -14,7 +14,7 @@ GSH_GITHUB_PROXY="${GSH_GITHUB_PROXY:-}" # 强制指定 GitHub 加速代理（�
 INSTALLER_REPO_MIRRORS="${INSTALLER_REPO_MIRRORS:-}" # 安装资源镜像池；为空时由 init_installer_repo_pool 按代理清单生成。
 # 校验对象是镜像源提供的 git blob 原始字节（LF）；改动 compose 后必须同步更新此处。
 # 历史 pin eb30aeae... 与 v0.1.4 tag 内 compose blob（a34665e2...）不匹配，导致严格校验必然失败。
-INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-8ed9dfdac188e0fc1e44164b2058b02093bc229756059159ee56f65886ace2ba}"
+INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-313d652f09aadb6b290a879276b51686d06209ee0ceb1cddb420a89beda9ed33}"
 INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML:-525eaf74e17df33887fe47248f414c0de3e6cd94a8d20e072ab5d66284c760ae}"
 # Debian 12 等发行版源不含 Compose v2 时，从 docker/compose GitHub Release 自动补装 CLI 插件。
 # 摘要与官方 .sha256 / checksums.txt 资产双源核对；升级插件版本时需同步替换版本号与两个摘要。
@@ -146,6 +146,25 @@ LAST_ERROR_MESSAGE="Unexpected installer failure"
 INSTALLER_REPO_POOL_INITIALIZED=0
 declare -a INSTALLER_REPO_POOL=()
 STRICT_INSTALLER_ASSET_CHECKSUM="${STRICT_INSTALLER_ASSET_CHECKSUM:-1}" # 安装资源校验是否强制（1=校验失败即中止，0=仅告警）。
+CHECK_ONLY=0 # --check：只打印前置体检报告后退出，不改动系统（不建目录、不写状态文件、不装依赖）。
+CHECK_REPORT_FILE="${CHECK_REPORT_FILE:-}" # 体检报告落盘路径（仅 --check 生效；为空则只打印到终端）。
+# 前置体检的探测结论：在体检阶段算一次，安装阶段直接复用，避免同一机器上重复探测。
+GHCR_REACHABLE=0
+DOCKER_REPO_REACHABLE=0
+SYSTEMCTL_AVAILABLE=0
+STEAM_CDN_REACHABLE=0
+HOST_IPV4=""
+RELEASE_OFFLINE_IMAGE_PATH="" # Release 离线镜像包落盘路径（自动兜底或手动指定时设置）。
+OFFLINE_IMAGE_IMPORTED=0 # 离线镜像包是否已导入本地 Docker。
+IMAGE_ROUTE="" # 镜像获取路线：ghcr | offline | offline-present | custom。
+OFFLINE_IMAGE_ROUTE=0 # 是否需要在安装阶段自动下载并导入 Release 离线镜像包。
+PREFLIGHT_FAILURES=0 # 体检中「不通过」的条目数（>0 时安装中止）。
+PREFLIGHT_WARNINGS=0 # 体检中「警告」的条目数（只提示，不中止）。
+PREFLIGHT_NEXT_STEP="" # 体检给出的第一步建议；失败时由收尾逻辑打印出来。
+PREFLIGHT_REPORT_LINES=() # 体检报告的每一行；安装模式下整段追加到状态文件。
+INSTALL_STARTED_AT=0 # 体检通过时的 epoch 秒，用于摘要里的安装耗时。
+# 离线镜像包约 227 MB，远大于安装资源；单次下载上限必须单独放宽，否则弱网下会被 45 秒掐断。
+OFFLINE_IMAGE_MAX_TIME_SECONDS="${OFFLINE_IMAGE_MAX_TIME_SECONDS:-1800}"
 
 # 基础日志函数，统一输出格式。
 log_info() {
@@ -168,6 +187,105 @@ abort() {
   LAST_ERROR_LINE="${BASH_LINENO[0]:-unknown}"
   log_error "$*"
   exit 1
+}
+
+# -----------------------------------------------------------------------------
+# 前置探测：体检与网络路线判定共用，所以放在日志函数之后、业务函数之前。
+# -----------------------------------------------------------------------------
+probe_https_url() {
+  local url="$1"
+  local timeout_seconds="${2:-6}"
+  curl -fsSL -o /dev/null --connect-timeout 3 --max-time "${timeout_seconds}" "${url}" >/dev/null 2>&1
+}
+
+# registry 连通性预检：探测 registry v2 端点（200/401/403 视为可达），避免 HEAD / 405 误报。
+check_registry_reachability() {
+  local registry="${1:-ghcr.io}"
+  local status_code
+
+  status_code="$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" --max-time "${GHCR_CHECK_TIMEOUT_SECONDS}" "https://${registry}/v2/")" || return 1
+  case "${status_code}" in
+    200|401|403|404|405|30[0-9])
+      log_info "Registry preflight check passed via https://${registry}/v2/ (HTTP ${status_code})."
+      return 0
+      ;;
+    *)
+      log_warn "Registry preflight returned HTTP ${status_code} on https://${registry}/v2/."
+      return 1
+      ;;
+  esac
+}
+
+# 本机出口 IPv4；取不到时留空（诊断信息，缺失不影响判定）。
+resolve_host_ipv4() {
+  local source_ip
+  source_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+  printf '%s' "${source_ip}"
+}
+
+# 探测每项独立超时并各自打点：弱网下最坏耗时 = 各项超时之和 * 站点数，不能无限等。
+probe_reachability() {
+  GHCR_REACHABLE=0
+  DOCKER_REPO_REACHABLE=0
+  STEAM_CDN_REACHABLE=0
+  SYSTEMCTL_AVAILABLE=0
+  HOST_IPV4="$(resolve_host_ipv4)"
+
+  if [[ -z "${PANEL_IMAGE_OVERRIDE}" ]] && check_registry_reachability "ghcr.io" >/dev/null 2>&1; then
+    GHCR_REACHABLE=1
+  fi
+
+  # 这两个开关此前只有定义、没有调用点：预检永远走不到它们，只能等 install_docker 自己失败。
+  local docker_repo_status
+  docker_repo_status="$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" --max-time "${DOCKER_REPO_CHECK_TIMEOUT_SECONDS}" "https://download.docker.com/linux/" 2>/dev/null || true)"
+  case "${docker_repo_status}" in
+    200|30[0-9])
+      DOCKER_REPO_REACHABLE=1
+      ;;
+    *)
+      # 解析命令缺失时也走这里：宁可报「不可达」由上层提示回退，也不要让用户以为预检过了。
+      if [[ "${docker_repo_status}" != "" ]]; then
+        log_warn "Docker 官方源预检未通过（HTTP ${docker_repo_status}）：将回退到发行版自带的 docker.io 包。"
+      fi
+      ;;
+  esac
+
+  if command -v systemctl >/dev/null 2>&1; then
+    SYSTEMCTL_AVAILABLE=1
+  fi
+
+  # 游戏本体与 Mod 走 Steam CDN，此前完全没有探测点：国内不可达时故障要等玩家进服才暴露。
+  local steam_ok=0
+  if probe_https_url "https://steamcdn-a.akamaihd.net/" 8 || probe_https_url "https://steamcommunity.com/" 8; then
+    steam_ok=1
+  fi
+  if [[ "${steam_ok}" -eq 1 ]]; then
+    STEAM_CDN_REACHABLE=1
+  fi
+}
+
+# 判定这次安装该走哪条镜像路线。已导入离线包时不再探测 registry：本地有镜像就不会拉取。
+# 设置 OFFLINE_IMAGE_ROUTE=1 表示需要安装器自己去下载并导入 Release 离线镜像包。
+resolve_image_route() {
+  OFFLINE_IMAGE_ROUTE=0
+  IMAGE_ROUTE=""
+  if [[ "${RESOLVED_INSTALL_MODE}" != "docker" ]]; then
+    return
+  fi
+  if [[ -n "${PANEL_IMAGE_OVERRIDE}" ]]; then
+    IMAGE_ROUTE="custom"
+    return
+  fi
+  if [[ "${GHCR_REACHABLE}" -eq 1 ]]; then
+    IMAGE_ROUTE="ghcr"
+    return
+  fi
+  if [[ "${OFFLINE_IMAGE_IMPORTED}" -eq 1 ]]; then
+    IMAGE_ROUTE="offline-present"
+    return
+  fi
+  IMAGE_ROUTE="offline"
+  OFFLINE_IMAGE_ROUTE=1
 }
 
 # 以 root 执行命令；若非 root 则自动走 sudo。
@@ -354,6 +472,10 @@ write_status() {
   stage="$1"
   status="$2"
   message="$3"
+  # --check 承诺不改动系统：连状态文件都不写（它位于 /var/log 下，需要提权创建）。
+  if [[ "${CHECK_ONLY}" -eq 1 ]]; then
+    return 0
+  fi
   timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
   run_as_root mkdir -p "${PANEL_LOG_DIR}"
   printf '%s [%s] [%s] %s\n' "${timestamp}" "${stage}" "${status}" "${message}" | run_as_root tee -a "${STATUS_FILE}" >/dev/null
@@ -362,6 +484,57 @@ write_status() {
 begin_stage() {
   CURRENT_STAGE="$1"
   write_status "$1" "start" "$2"
+}
+
+# -----------------------------------------------------------------------------
+# 前置体检：报告同时打印到终端与落盘，用户与事后排查看到的是同一份内容。
+# -----------------------------------------------------------------------------
+# 重置报告文件（不删除由调用方通过 CHECK_REPORT_FILE 指定的路径，--check 结束要打印它）。
+reset_check_report() {
+  if [[ -n "${CHECK_REPORT_FILE}" ]]; then
+    : > "${CHECK_REPORT_FILE}" 2>/dev/null || true
+  fi
+}
+
+# 追加一行报告：始终打印，同时尽力写入报告文件；写不进去不能影响安装主流程。
+# 每行都记进 PREFLIGHT_REPORT_LINES，安装模式下再整段写进状态文件，事后排查看到的是同一份内容。
+append_install_report() {
+  local line="$*"
+  printf '%s\n' "${line}"
+  PREFLIGHT_REPORT_LINES+=("${line}")
+  if [[ -n "${CHECK_REPORT_FILE}" ]]; then
+    printf '%s\n' "${line}" >> "${CHECK_REPORT_FILE}" 2>/dev/null || true
+  fi
+}
+
+# 报告默认只打印到终端：落盘会创建目录或文件，与 --check「不改动系统」的承诺冲突，
+# 所以要让报告留档时由调用方显式给出 CHECK_REPORT_FILE。
+resolve_check_report_path() {
+  if [[ "${CHECK_ONLY}" -ne 1 ]]; then
+    return
+  fi
+  if [[ -n "${CHECK_REPORT_FILE}" ]]; then
+    reset_check_report
+  fi
+}
+
+# 三态条目：0=通过，1=警告，2=不通过（安装会被中止）。
+report_item() {
+  local level="$1"
+  local label="$2"
+  local detail="$3"
+  local mark
+  case "${level}" in
+    0) mark="OK   " ;;
+    1) mark="WARN " ;;
+    *) mark="FAIL " ;;
+  esac
+  append_install_report "  [${mark}] ${label}：${detail}"
+}
+
+# 失败时给一条能照着做的下一步，而不是让用户面对诊断日志。
+report_next_step() {
+  append_install_report "  下一步：$*"
 }
 
 record_install_error() {
@@ -421,6 +594,17 @@ handle_install_exit() {
     return
   fi
 
+  # --check 只体检：失败时报告已经打印过原因与下一步，这里不再生成诊断、更不执行回滚。
+  if [[ "${CHECK_ONLY}" -eq 1 ]]; then
+    if [[ -n "${PREFLIGHT_NEXT_STEP}" ]]; then
+      log_error "下一步：${PREFLIGHT_NEXT_STEP}"
+    fi
+    if [[ -n "${CHECK_REPORT_FILE}" ]]; then
+      log_error "体检报告：${CHECK_REPORT_FILE}"
+    fi
+    return
+  fi
+
   set +e
   if try_as_root mkdir -p "${PANEL_LOG_DIR}"; then
     printf '%s [%s] [error] %s; exit=%s; line=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${CURRENT_STAGE}" "${LAST_ERROR_MESSAGE}" "${exit_code}" "${LAST_ERROR_LINE}" | try_as_root tee -a "${STATUS_FILE}" >/dev/null || true
@@ -428,6 +612,10 @@ handle_install_exit() {
   collect_install_diagnostics "${exit_code}" "${LAST_ERROR_LINE}" || true
   rollback_install || true
   log_error "Installation failed during stage '${CURRENT_STAGE}' (exit ${exit_code}, line ${LAST_ERROR_LINE})."
+  # 先给「下一步」再给诊断文件：用户需要的是动作，不是路径。
+  if [[ -n "${PREFLIGHT_NEXT_STEP}" ]]; then
+    log_error "下一步：${PREFLIGHT_NEXT_STEP}"
+  fi
   log_error "Diagnostics: ${DIAGNOSTICS_FILE}"
   log_error "Status history: ${STATUS_FILE}"
 }
@@ -698,24 +886,6 @@ EOF
   return 0
 }
 
-# registry 连通性预检：探测 registry v2 端点（200/401/403 视为可达），避免 HEAD / 405 误报。
-check_registry_reachability() {
-  local registry="${1:-ghcr.io}"
-  local status_code
-
-  status_code="$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" --max-time "${GHCR_CHECK_TIMEOUT_SECONDS}" "https://${registry}/v2/")" || return 1
-  case "${status_code}" in
-    200|401|403|404|405|30[0-9])
-      log_info "Registry preflight check passed via https://${registry}/v2/ (HTTP ${status_code})."
-      return 0
-      ;;
-    *)
-      log_warn "Registry preflight returned HTTP ${status_code} on https://${registry}/v2/."
-      return 1
-      ;;
-  esac
-}
-
 # 兼容旧调用点：network profile 打分仍以 GHCR 可达性作为 global 档位信号。
 check_ghcr_reachability() {
   check_registry_reachability "ghcr.io"
@@ -738,12 +908,6 @@ finalize_image_refs() {
   log_info "Panel image: ${PANEL_IMAGE}"
   log_info "DST image: ${GSH_GAME_DST_IMAGE}"
   log_info "SteamCMD image: ${GSH_STEAMCMD_IMAGE}"
-}
-
-probe_https_url() {
-  local url="$1"
-  local timeout_seconds="${2:-6}"
-  curl -fsSL -o /dev/null --connect-timeout 3 --max-time "${timeout_seconds}" "${url}" >/dev/null 2>&1
 }
 
 # 基于实际连通性选择网络档位，不通过 IP 地理接口收集服务器位置。
@@ -1524,6 +1688,7 @@ Usage: ${SCRIPT_NAME} [options]
 Options:
   --mode MODE         Deployment mode: auto, docker or native
   --network PROFILE   Network profile: auto, cn or global
+  --check            Print the preflight report and exit without changing the system
   --open-panel-port  Open panel TCP port (${PANEL_PORT}) via ufw/firewalld
   --open-dst-ports   Open default DST UDP ports for master (${DST_GAME_PORT}, ${DST_AUTH_PORT}, ${DST_MASTER_PORT}) and caves (${DST_CAVES_GAME_PORT}, ${DST_CAVES_AUTH_PORT}, ${DST_CAVES_MASTER_PORT}) via ufw/firewalld
   -h, --help         Show this help
@@ -1929,37 +2094,175 @@ append_panel_env_preset() {
 }
 
 # 在生成配置与部署前，先校验主机前置条件。
+record_preflight_result() {
+  PREFLIGHT_FAILURES="$1"
+  PREFLIGHT_WARNINGS="$2"
+}
+
+# 安装模式的中文说明只在体检报告里用；判定逻辑仍以 RESOLVED_INSTALL_MODE 为准，不要在此处做选择。
+install_mode_label() {
+  case "${RESOLVED_INSTALL_MODE}" in
+    docker)
+      printf '%s' 'docker（容器化，面板与游戏都在容器里）'
+      ;;
+    native)
+      printf '%s' 'native（systemd 托管，少一层容器）'
+      ;;
+    *)
+      printf '%s' "${RESOLVED_INSTALL_MODE}"
+      ;;
+  esac
+}
+
+# 面板端口是否已被占用；ss 与 netstat 都没有时按「未占用」放行（后面 check_port_conflict 还会兜底）。
+panel_port_in_use() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${PANEL_PORT}\$" && return 0
+    return 1
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${PANEL_PORT}\$" && return 0
+    return 1
+  fi
+  return 1
+}
+
 preflight_checks() {
   local arch free_disk_mb host_mem_total_mb
+  # 用标量收集「下一步」而不是数组：空数组在 set -u 下的展开会直接中止脚本。
+  # 这里不能声明成 local：安装失败时由 handle_install_exit 读出来打印。
+  PREFLIGHT_NEXT_STEP=""
+  PREFLIGHT_REPORT_LINES=()
+  PREFLIGHT_FAILURES=0
+  PREFLIGHT_WARNINGS=0
+
   arch="$(uname -m)"
   free_disk_mb="$(df -Pm / | awk 'NR == 2 { print $4 }')"
   host_mem_total_mb="$(read_host_mem_total_mb)"
 
+  resolve_check_report_path
   write_status "preflight" "start" "Collecting host information"
-  log_info "OS: ${DISTRO_ID} (${DISTRO_CODENAME})"
-  log_info "Architecture: ${arch}"
-  log_info "Free disk on /: ${free_disk_mb} MB"
-  warn_host_memory_tier "${host_mem_total_mb}"
 
-  if [[ "${arch}" != "x86_64" && "${arch}" != "aarch64" ]]; then
-    abort "Unsupported architecture ${arch}. Only x86_64/aarch64 are supported."
-  fi
-  if [[ "${RESOLVED_INSTALL_MODE}" == "native" && "${arch}" != "x86_64" ]]; then
-    abort "Native Release is currently available for x86_64 only."
+  append_install_report ""
+  append_install_report "前置体检报告"
+  append_install_report "  时间：$(date '+%Y-%m-%d %H:%M:%S')    安装器版本：${GSH_RELEASE_TAG}"
+  append_install_report "  机器：${DISTRO_ID:-unknown} ${DISTRO_CODENAME:-}（${arch}）"
+  append_install_report ""
+
+  # 1) 系统与硬件
+  report_item 0 "操作系统" "${DISTRO_ID:-unknown} ${DISTRO_CODENAME:-}（仅支持 apt 系的 Debian 12 与 Ubuntu 22.04 / 24.04）"
+  report_item 0 "本机地址" "${HOST_IPV4:-未能解析；用域名访问时请在 panel.env 设置 PANEL_PUBLIC_URL}"
+
+  if [[ "${arch}" == "x86_64" || "${arch}" == "aarch64" ]]; then
+    report_item 0 "CPU 架构" "${arch}"
+  else
+    report_item 2 "CPU 架构" "${arch}（仅支持 x86_64 与 aarch64）"
+    report_next_step "换一台 x86_64 或 aarch64 的机器；其他架构没有可用的运行时。"
   fi
 
-  if [[ "${free_disk_mb}" -lt "${MIN_FREE_DISK_MB}" ]]; then
-    abort "Insufficient disk space on /. Require >= ${MIN_FREE_DISK_MB} MB."
+  if [[ "${free_disk_mb}" -ge "${MIN_FREE_DISK_MB}" ]]; then
+    report_item 0 "根分区余量" "${free_disk_mb} MB（要求不少于 ${MIN_FREE_DISK_MB} MB）"
+  else
+    report_item 2 "根分区余量" "${free_disk_mb} MB（低于要求的 ${MIN_FREE_DISK_MB} MB）"
+    report_next_step "清理根分区或扩容后重跑安装器。"
   fi
 
-  if [[ "${RESOLVED_INSTALL_MODE}" == "docker" && -z "${PANEL_IMAGE_OVERRIDE}" ]] && ! check_registry_reachability "ghcr.io"; then
-    if [[ "${STRICT_GHCR_CHECK}" == "1" ]]; then
-      abort "Cannot reach GHCR endpoint https://ghcr.io/v2/ within ${GHCR_CHECK_TIMEOUT_SECONDS}s. Check outbound network, use the offline image archive from the Release page, or set PANEL_IMAGE to a mirror you control."
+  if [[ "${host_mem_total_mb}" -ge "${HOST_MEMORY_WARN_MIN_MB}" ]]; then
+    report_item 0 "内存" "${host_mem_total_mb} MB"
+  else
+    report_item 1 "内存" "${host_mem_total_mb} MB（低于 ${HOST_MEMORY_WARN_MIN_MB} MB）"
+    PREFLIGHT_NEXT_STEP="安装完成后执行 sudo gsh setup-swap：分片加载整套 Mod 时会短时冲高内存。"
+  fi
+
+  # 2) 平台与运行时
+  report_item 0 "部署模式" "$(install_mode_label)"
+
+  if command -v docker >/dev/null 2>&1; then
+    local docker_server_version
+    docker_server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+    if [[ -n "${docker_server_version}" ]]; then
+      report_item 0 "Docker" "已安装且可用（${docker_server_version}）"
+    else
+      report_item 1 "Docker" "已安装但当前不可用（未启动，或当前账号没有权限）"
     fi
-    log_warn "Cannot reach GHCR endpoint https://ghcr.io/v2/ within ${GHCR_CHECK_TIMEOUT_SECONDS}s during preflight. Consider the offline image archive (Release assets) or PANEL_IMAGE override."
+  elif [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
+    report_item 1 "Docker" "未安装；安装阶段会自动装好（需要能访问软件源）"
+  else
+    report_item 0 "Docker" "未安装（native 模式不需要）"
   fi
-  if [[ "${RESOLVED_INSTALL_MODE}" == "native" ]] && ! command -v systemctl >/dev/null 2>&1; then
-    abort "Native mode requires systemd/systemctl."
+
+  if [[ "${RESOLVED_INSTALL_MODE}" == "native" ]]; then
+    if [[ "${SYSTEMCTL_AVAILABLE}" -eq 1 ]]; then
+      report_item 0 "systemd" "systemctl 可用"
+    else
+      report_item 2 "systemd" "缺少 systemctl"
+      report_next_step "换用容器化部署：把 --mode 改成 docker（或直接去掉 --mode）。"
+    fi
+  fi
+
+  # 3) 网络可达性与镜像路线
+  report_item 0 "网络档位" "${RESOLVED_NETWORK_PROFILE}（auto 时按实际连通性判定，可用 --network 覆盖）"
+
+  if [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
+    if [[ -n "${PANEL_IMAGE_OVERRIDE}" ]]; then
+      report_item 0 "镜像来源" "使用你指定的镜像引用，不做 registry 预检"
+    elif [[ "${GHCR_REACHABLE}" -eq 1 ]]; then
+      report_item 0 "GHCR" "可达，安装阶段直接拉取 ${PANEL_IMAGE}"
+    elif [[ "${OFFLINE_IMAGE_IMPORTED}" -eq 1 ]]; then
+      report_item 0 "GHCR" "不可达，但本地已有 ${PANEL_IMAGE}，跳过拉取"
+    else
+      report_item 1 "GHCR" "不可达或超时，安装阶段会自动改用 Release 离线镜像包"
+      if [[ "${CHECK_ONLY}" -eq 0 && -z "${PREFLIGHT_NEXT_STEP}" ]]; then
+        PREFLIGHT_NEXT_STEP="无需手工操作：安装器会自动下载并导入离线镜像包（约 227 MB）；下载慢时可设置 GSH_GITHUB_PROXY 指定加速节点。"
+      fi
+    fi
+  fi
+
+  if [[ "${DOCKER_REPO_REACHABLE}" -eq 1 ]]; then
+    report_item 0 "Docker 官方源" "可达"
+  elif [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
+    report_item 1 "Docker 官方源" "不可达，安装阶段回退到发行版自带的 docker.io 包"
+  else
+    report_item 0 "Docker 官方源" "不可达（native 模式不依赖）"
+  fi
+
+  if [[ "${STEAM_CDN_REACHABLE}" -eq 1 ]]; then
+    report_item 0 "Steam CDN" "可达，游戏本体与 Mod 可正常下载"
+  else
+    report_item 1 "Steam CDN" "不可达"
+    report_next_step "装好后到 panel.env 配置 Steam 出站代理与镜像，参数见 docs/reference.md 的「Steam 与 Mod 市场」。"
+  fi
+
+  # 4) 端口
+  if panel_port_in_use; then
+    report_item 2 "面板端口" "TCP ${PANEL_PORT} 已被占用"
+    report_next_step "换一个端口重跑：PANEL_PORT=8889，或先停掉占用该端口的服务。"
+  else
+    report_item 0 "面板端口" "TCP ${PANEL_PORT} 当前未被占用"
+  fi
+
+  if [[ "${PREFLIGHT_FAILURES}" -eq 0 && "${PREFLIGHT_WARNINGS}" -eq 0 ]]; then
+    append_install_report ""
+    append_install_report "体检结论：可以继续安装。"
+  elif [[ "${PREFLIGHT_FAILURES}" -eq 0 ]]; then
+    append_install_report ""
+    append_install_report "体检结论：可以继续安装，但有 ${PREFLIGHT_WARNINGS} 项需要留意。"
+    if [[ -n "${PREFLIGHT_NEXT_STEP}" ]]; then
+      report_next_step "${PREFLIGHT_NEXT_STEP}"
+    fi
+  else
+    append_install_report ""
+    append_install_report "体检结论：有 ${PREFLIGHT_FAILURES} 项不满足安装条件，先按下面的提示处理后重跑。"
+  fi
+  append_install_report ""
+
+  # 安装模式把同一份报告写进状态文件，便于事后排查；--check 不改动系统，所以不写。
+  if [[ "${CHECK_ONLY}" -eq 0 ]]; then
+    if try_as_root mkdir -p "${PANEL_LOG_DIR}" \
+      && printf '\n----- 前置体检报告（%s）-----' "$(date '+%Y-%m-%d %H:%M:%S')" | try_as_root tee -a "${STATUS_FILE}" >/dev/null \
+      && printf '%s\n' "${PREFLIGHT_REPORT_LINES[@]}" | try_as_root tee -a "${STATUS_FILE}" >/dev/null; then
+      log_info "Preflight report appended to ${STATUS_FILE}"
+    fi
   fi
 
   write_status "preflight" "ok" "Host checks passed"
@@ -2162,12 +2465,128 @@ pull_runtime_images() {
   if ! run_with_retry "docker pull ${PANEL_IMAGE}" run_as_root docker pull "${PANEL_IMAGE}"; then
     log_error "Failed to pull runtime image: ${PANEL_IMAGE}"
     log_error "GHCR 的镜像层域名（pkg-containers.githubusercontent.com）在国内常不可达，表现为 TLS handshake timeout。"
-    log_error "请改用 Release 离线镜像包：下载 game-server-hub-${GSH_RELEASE_TAG}-docker-image.tar.gz（同目录有 .sha256），再用 docker load -i 导入，然后重跑本安装器（镜像已在本地，会自动跳过拉取）。"
+    if [[ "${OFFLINE_IMAGE_ROUTE}" -eq 1 ]]; then
+      log_error "自动兜底未能完成，请手动执行：下载 $(release_offline_image_filename) 与其 .sha256，校验后 docker load -i 导入，再重跑本安装器。"
+    else
+      log_error "请改用 Release 离线镜像包：下载 $(release_offline_image_filename)（同目录有 .sha256），再用 docker load -i 导入，然后重跑本安装器（镜像已在本地，会自动跳过拉取）。"
+    fi
     log_error "离线包下载页：https://github.com/PMAT77/game-serve-hub/releases/tag/${GSH_RELEASE_TAG}"
-    log_error "完整步骤见仓库 docs/install-docker.md 的「安装（国内服务器）」，README 快速开始中也有入口。"
+    log_error "完整步骤见仓库 docs/install-docker.md 的「安装（国内服务器）」。"
     log_error "如需强制重新拉取，可设置 GSH_FORCE_IMAGE_PULL=1。"
     return 1
   fi
+}
+
+# Release 离线镜像包名（与 .github/workflows/docker-publish.yml 的资产名保持一致）。
+release_offline_image_filename() {
+  printf '%s' "game-server-hub-${GSH_RELEASE_TAG}-docker-image.tar.gz"
+}
+
+# 下载并校验离线镜像包。
+#
+# 不走 download_installer_asset：那个函数按仓库相对路径取文件，而镜像包是 Release 资产，
+# 路径形状不同；它的校验也依赖脚本内置摘要，而离线包的摘要随构建产生，取不到。
+# 所以这里直接拼 Release URL 走加速代理池，并用同目录的 .sha256 对拍（这是发布流程的既定产物）。
+download_release_offline_image() {
+  local filename asset_url sha_url target_dir target_path proxy source attempt actual expected
+  filename="$(release_offline_image_filename)"
+  asset_url="https://github.com/PMAT77/game-serve-hub/releases/download/${GSH_RELEASE_TAG}/${filename}"
+  sha_url="${asset_url}.sha256"
+  target_dir="${PANEL_INSTALL_DIR}/offline"
+  if ! run_as_root mkdir -p "${target_dir}"; then
+    return 1
+  fi
+  target_path="${target_dir}/${filename}"
+
+  log_info "正在下载离线镜像包 ${filename}（约 227 MB，单次下载上限 ${OFFLINE_IMAGE_MAX_TIME_SECONDS}s）..."
+  # build_github_url_variants 返回逗号分隔列表，必须按逗号切分：用默认 IFS 会把整串
+  # 当成一个 URL（"a,b,c" 里的逗号不是分隔符），下载必然失败。
+  for source in $(build_github_url_variants "${asset_url}" | tr ',' '\n'); do
+    for ((attempt = 1; attempt <= REPO_DOWNLOAD_MAX_ATTEMPTS; attempt++)); do
+      if run_as_root curl -fL \
+        --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
+        --max-time "${OFFLINE_IMAGE_MAX_TIME_SECONDS}" \
+        -o "${target_path}" "${source}"; then
+        log_info "离线镜像包下载完成：${source}"
+        # 摘要必须独立取回并逐个校验：包与校验和来自不同请求，任一被截断都要能拦住。
+        if run_as_root curl -fsSL \
+          --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
+          --max-time "${REPO_DOWNLOAD_TIMEOUT_SECONDS}" \
+          -o "${target_path}.sha256" "${source}.sha256"; then
+          expected="$(run_as_root awk '{print $1; exit}' "${target_path}.sha256" 2>/dev/null || true)"
+          actual="$(run_as_root sha256sum "${target_path}" 2>/dev/null | awk '{print $1}' || true)"
+          if [[ -n "${expected}" && "${expected}" == "${actual}" ]]; then
+            RELEASE_OFFLINE_IMAGE_PATH="${target_path}"
+            return 0
+          fi
+          log_warn "离线镜像包校验未通过：期望 ${expected:-<空>}，实际 ${actual:-<空>}（重试 ${attempt}/${REPO_DOWNLOAD_MAX_ATTEMPTS}）"
+        else
+          log_warn "离线镜像包的 .sha256 取不到，按校验失败处理（重试 ${attempt}/${REPO_DOWNLOAD_MAX_ATTEMPTS}）"
+        fi
+      else
+        log_warn "离线镜像包下载失败：${source}（重试 ${attempt}/${REPO_DOWNLOAD_MAX_ATTEMPTS}）"
+      fi
+      run_as_root rm -f "${target_path}" "${target_path}.sha256" 2>/dev/null || true
+      if (( attempt < REPO_DOWNLOAD_MAX_ATTEMPTS )); then
+        sleep "${RETRY_DELAY_SECONDS}"
+      fi
+    done
+  done
+  return 1
+}
+
+# 导入离线镜像包；镜像存在时不再重复导入（GSH_FORCE_IMAGE_PULL=1 时强制重新导入）。
+import_release_offline_image() {
+  if [[ -z "${RELEASE_OFFLINE_IMAGE_PATH}" ]]; then
+    return 1
+  fi
+  if [[ "${GSH_FORCE_IMAGE_PULL:-0}" != "1" ]] && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
+    log_info "本地已有 ${PANEL_IMAGE}，跳过导入离线镜像包"
+    OFFLINE_IMAGE_IMPORTED=1
+    return 0
+  fi
+  log_info "正在导入离线镜像包（约 560 MB）..."
+  if ! run_as_root docker load -i "${RELEASE_OFFLINE_IMAGE_PATH}"; then
+    log_error "docker load 失败：${RELEASE_OFFLINE_IMAGE_PATH}"
+    return 1
+  fi
+  if ! run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
+    log_error "离线镜像包导入后仍找不到 ${PANEL_IMAGE}：包与安装器版本可能不一致（安装器 ${GSH_RELEASE_TAG}）。"
+    return 1
+  fi
+  OFFLINE_IMAGE_IMPORTED=1
+  log_info "离线镜像包导入完成：${PANEL_IMAGE}"
+  return 0
+}
+
+# 镜像路线兜底：GHCR 不可达时自动走 Release 离线包，失败才把用户交回手动步骤。
+ensure_panel_image_available() {
+  if [[ "${RESOLVED_INSTALL_MODE}" != "docker" ]]; then
+    return 0
+  fi
+  if [[ -n "${PANEL_IMAGE_OVERRIDE}" ]]; then
+    return 0
+  fi
+  # 本地已有目标镜像：pull_runtime_images 本来就会跳过拉取，无需再判断网络。
+  if [[ "${GSH_FORCE_IMAGE_PULL:-0}" != "1" ]] && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "${OFFLINE_IMAGE_ROUTE}" -ne 1 ]]; then
+    return 0
+  fi
+
+  log_warn "ghcr.io 不可达；改用 Release 离线镜像包自动兜底（无需手工下载与导入）。"
+  if ! download_release_offline_image; then
+    log_error "离线镜像包下载或校验失败。"
+    log_error "手动下载：https://github.com/PMAT77/game-serve-hub/releases/tag/${GSH_RELEASE_TAG}"
+    log_error "文件名：$(release_offline_image_filename)（同目录有 .sha256），下载后校验并 docker load -i 导入，再重跑本安装器。"
+    return 1
+  fi
+  if ! import_release_offline_image; then
+    log_error "离线镜像包导入失败；可手动执行：sudo docker load -i ${RELEASE_OFFLINE_IMAGE_PATH}"
+    return 1
+  fi
+  return 0
 }
 
 wait_for_panel_health() {
@@ -2196,6 +2615,8 @@ wait_for_panel_health() {
 deploy_panel() {
   begin_stage "images" "Pulling runtime images"
   ROLLBACK_ENABLED=1
+  # 先把镜像准备好：GHCR 不可达时这里会自动走 Release 离线包，不必让用户自己下载与导入。
+  ensure_panel_image_available || abort "Runtime image is unavailable. See the steps above, or set PANEL_IMAGE to a mirror you control."
   pull_runtime_images || abort "Image pull failed. Check outbound network or configure explicit image references. Native fallback: rerun with --mode native."
   write_status "images" "ok" "Runtime image pull completed"
 
@@ -2372,6 +2793,12 @@ print_summary() {
     printf ' 安装目录   %s\n' "${PANEL_INSTALL_DIR}"
   fi
   printf ' 常用命令   gsh doctor（体检）· gsh status（状态）· gsh setup-swap（交换区）\n'
+  # 用 date 而不是 SECONDS：冒烟测试里 source 过来的 SECONDS 受到其它脚本影响，读数不可靠。
+  local elapsed_seconds=$(( $(date +%s) - INSTALL_STARTED_AT ))
+  if (( elapsed_seconds < 0 )); then
+    elapsed_seconds=0
+  fi
+  printf ' 安装耗时   %d 分 %d 秒（含依赖与镜像下载）\n' "$((elapsed_seconds / 60))" "$((elapsed_seconds % 60))"
   printf ' 安装状态   %s\n' "${STATUS_FILE}"
   printf '%s\n' "${rule}"
   printf ' 接下来\n'
@@ -2391,7 +2818,9 @@ print_summary() {
       printf '    并在云安全组放行 TCP %s\n' "${PANEL_PORT}"
       ;;
   esac
-  printf ' 3. 内存偏小（≤ 6 GiB）建议执行 sudo gsh setup-swap，详见 docs/MEMORY.md\n'
+  printf ' 3. 到「实例管理」创建第一个实例：填房间名与端口后启动，面板会拉取游戏本体并生成世界\n'
+  printf ' 4. 开服前放行 6 个 UDP 端口（主世界与洞穴各 3 个），否则玩家搜不到房间\n'
+  printf ' 5. 内存偏小（≤ 6 GiB）建议执行 sudo gsh setup-swap，详见 docs/MEMORY.md\n'
   printf '%s\n\n' "${rule}"
 
   # 排障用的长命令留在带前缀的日志里，方便复制粘贴。
@@ -2400,6 +2829,9 @@ print_summary() {
   else
     log_info "Compose: cd ${PANEL_INSTALL_DIR} && docker compose --env-file panel.env -f docker-compose.yml -f docker-compose.bind.yml ps"
     log_info "Panel logs: cd ${PANEL_INSTALL_DIR} && docker compose logs -f panel"
+    if [[ -n "${RELEASE_OFFLINE_IMAGE_PATH}" ]]; then
+      log_info "离线镜像包已导入；安装目录的 offline/ 下保留了安装包，确认面板正常后可自行删除。"
+    fi
   fi
 }
 
@@ -2433,6 +2865,10 @@ main() {
         OPEN_DST_PORTS=1
         shift
         ;;
+      --check)
+        CHECK_ONLY=1
+        shift
+        ;;
 
       -h|--help)
         print_usage
@@ -2463,6 +2899,31 @@ main() {
     log_info "Installer: ${SCRIPT_NAME} release=${GSH_RELEASE_TAG} image=${PANEL_IMAGE}"
   fi
 
+  INSTALL_STARTED_AT="$(date +%s)"
+
+  # 体检必须在装依赖之前：缺 Docker 的机器从前要先花几分钟装依赖，再在预检里失败。
+  CURRENT_STAGE="preflight"
+  resolve_check_report_path
+  probe_reachability
+  preflight_checks
+
+  if [[ "${CHECK_ONLY}" -eq 1 ]]; then
+    # 只体检：不改动系统，所以到此为止（上面除 detect_distro/ensure_apt 的只读探测外没有任何写操作）。
+    append_install_report "已跳过安装（--check）：面板地址将是 http://${HOST_IPV4:-<本机地址>}:${PANEL_PORT}，模式 ${RESOLVED_INSTALL_MODE}。"
+    append_install_report "确认无误后去掉 --check 重跑同一条命令即可开始安装。"
+    INSTALL_COMPLETED=1
+    if [[ "${PREFLIGHT_FAILURES}" -gt 0 ]]; then
+      exit 1
+    fi
+    exit 0
+  fi
+
+  if [[ "${PREFLIGHT_FAILURES}" -gt 0 ]]; then
+    abort "Preflight checks failed: ${PREFLIGHT_FAILURES} item(s) must be fixed before installing. See the report above."
+  fi
+
+  resolve_image_route
+
   begin_stage "dependencies" "Installing base dependencies"
   install_base_packages
   if [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
@@ -2477,9 +2938,6 @@ main() {
     write_status "dependencies" "ok" "Native systemd dependencies installed"
   fi
   backup_existing_install_state
-
-  CURRENT_STAGE="preflight"
-  preflight_checks
 
   begin_stage "network" "Checking panel port and firewall"
   check_port_conflict

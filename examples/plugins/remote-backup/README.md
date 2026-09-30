@@ -66,7 +66,7 @@ pnpm exec tsx scripts/license/generate-keypair.ts          # 生成密钥对（�
 pnpm exec tsx scripts/license/sign-license.ts \
   --key ~/.gsh-license-keys/license-private.gsh-key \
   --customer "自测" --capabilities remote-backup --days 30 --out license.json
-# 私钥对清单签名，生成 plugin.signature.json（见 scripts/license/README.md 的说明）
+# 私钥对清单签名，生成 plugin.signature.json（签发流程见内部文档 docs_local/license.md）
 ```
 
 ## 运行期产物（都在插件目录下）

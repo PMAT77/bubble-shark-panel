@@ -6,12 +6,9 @@
 
 ## 读代码
 
-不要为了改动先去通读文档或整张仓库地图。改某个模块时，优先看它旁边的 README：
+不要为了改动先去通读文档或整张仓库地图。改某个模块时，先读 `docs_local/DEVELOPMENT.md` 的「后端分层与模块」与「前后端契约与错误码」两节（内部文档，不在公开仓库内）；两份文档只记代码里读不出来的边界与约定，不做通读要求。
 
-- `server/src/README.md`（后端分层）、`server/src/modules/README.md`、`server/src/infra/README.md`、`server/src/shared/README.md`
-- `shared/README.md`（前后端契约与错误码）、`src/hotkeys/README.md`
-
-需求含糊或涉及架构边界时，再查 `docs_local/ARCHITECTURE.md`（内部文档，不在公开仓库内）。文档按需取用，不做通读要求。
+需求含糊或涉及架构边界时，再查 `docs_local/ARCHITECTURE.md`（同上）。
 
 ## 验证
 

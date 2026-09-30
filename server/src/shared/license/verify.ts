@@ -14,7 +14,7 @@ import { resolveMachineFingerprint } from './fingerprint'
  *
  * 内置公钥通过 `GSH_LICENSE_PUBLIC_KEY` 提供（PEM 或 base64 的 SPKI DER）：
  * 公钥不是秘密，正式发布时随构建注入即可。**私钥永远不进仓库、不进构建产物**，
- * 只存在于发布方的离线签发环境，见 `scripts/license/README.md`。
+ * 只存在于发布方的离线签发环境，见内部文档 `docs_local/license.md`。
  */
 
 /** 缓存解析后的公钥：验签是热路径（面板每次读状态都会走），重复解析 PEM 没有必要 */

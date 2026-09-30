@@ -97,31 +97,32 @@ curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scri
 
 ### 国内服务器或网络受限环境
 
-可以先运行安装体检：
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
-  | sudo bash -s -- --check
-```
-
-体检会检查：
-
-* 系统与架构
-* 内存与磁盘空间
-* 网络连通性
-* 镜像源
-* 端口占用
-
-检查通过后执行：
+先加上国内档位安装：
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
   | sudo bash -s -- --mode docker --network cn
 ```
 
+安装器会先打印一份体检报告（系统与架构、内存与磁盘、Docker 状态、镜像源与 Steam 可达性、端口占用），确认没有阻塞项才继续装，所以不需要额外先跑一次检查。
+
 当 GHCR 镜像无法正常下载时，安装器会尝试获取 Release 中的离线镜像包、校验并导入，然后继续完成安装。
 
 只有自动下载路径仍然失败时，才需要手动处理离线镜像或镜像源。
+
+<details>
+<summary>只想看这台机器能不能装，先不安装</summary>
+
+加 `--check` 只打印体检报告就退出：不装依赖、不建目录、不写安装状态文件、不拉镜像。适合在还没决定是否安装时先评估一台机器。
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.11.0/scripts/install.linux.sh" \
+  | sudo bash -s -- --check
+```
+
+体检有阻塞项时返回退出码 1，也能直接串进自动化脚本。
+
+</details>
 
 详细说明见：
 

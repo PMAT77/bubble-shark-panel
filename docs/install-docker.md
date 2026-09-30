@@ -23,7 +23,7 @@ GHCR 拉取慢或超时的话，把上面命令里的 `https://raw.githubusercon
 
 国内的问题集中在镜像下载：安装器拉的是 GHCR 镜像，而它的镜像层域名 `pkg-containers.githubusercontent.com` 国内基本不可达，直接跑常卡在 `net/http: TLS handshake timeout`。
 
-**先体检，再安装。** 体检会判断发行版、架构、内存、根分区余量、Docker 状态、GHCR 与 Steam CDN 可达性、面板端口占用，并给出这次要走哪条下载路线。它不改动系统，也不写任何安装状态文件。
+安装命令本身就是体检加安装：**不需要额外先跑一次体检**。安装器会先判断发行版、架构、内存、根分区余量、Docker 状态、GHCR 与 Steam CDN 可达性、面板端口占用，把这份报告打到屏幕上（同时写进安装状态文件），确认没有阻塞项才继续装。
 
 ```bash
 tag=v0.11.0
@@ -36,18 +36,26 @@ curl -fL --retry 3 -o "install-${tag}.sh" \
 # 这一行的默认 tag 决定安装器要装的镜像版本
 sed -n '9p' "install-${tag}.sh"
 
-# 体检（不改动系统）；末尾会打印报告路径
-sudo bash "install-${tag}.sh" --check
-```
-
-体检通过后直接安装，**不需要手动下载或导入镜像包**：GHCR 不可达时，安装器会自己从 Release 取离线镜像包（走加速代理）、校验 `.sha256` 并 `docker load` 导入，然后继续部署。
-
-```bash
 # 国内档位：发行版换国内镜像源，SteamCMD 重试次数翻倍
 sudo GSH_PANEL_ENV_PRESET=small bash "install-${tag}.sh" --mode docker --network cn
 ```
 
+**不需要手动下载或导入镜像包**：GHCR 不可达时，安装器会自己从 Release 取离线镜像包（走加速代理）、校验 `.sha256` 并 `docker load` 导入，然后继续部署。
+
 装完终端会打印面板地址、管理员账号与后续动作，结尾还会给出这次安装的耗时。
+
+<details>
+<summary>只想看这台机器能不能装，先不安装：加 --check</summary>
+
+`--check` 打印的是同一份体检报告，区别只在「到此为止」：它不改动系统，不装依赖、不建目录、不写安装状态文件，也不会去拉镜像。适合在还没决定是否安装时先评估一台机器，或者把它当成巡检探针。
+
+```bash
+sudo bash "install-${tag}.sh" --check
+```
+
+体检有阻塞项（架构不支持、根分区不足、systemd 缺失、面板端口被占用）时它返回退出码 1，因此也能直接串进自动化脚本。确认环境合适后，去掉 `--check` 重跑同一条命令即可开始安装。
+
+</details>
 
 <details>
 <summary>自动兜底失败时：手动下载并导入离线镜像包</summary>

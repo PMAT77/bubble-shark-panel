@@ -169,6 +169,13 @@
       "when": 1790572167358,
       "tag": "0023_daffy_the_phantom",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1790783110935,
+      "tag": "0024_shallow_blob",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { backupFile, writeFileAtomic } from './atomic-write'
 import { ensureClusterDirectory, resolveClusterPaths } from './cluster-service'
-import { buildLuaConfigurationOptionsInline } from './mod-config'
+import { buildLuaConfigurationOptionsInline, parseModInfoDependencies } from './mod-config'
 import { readWorldSeeds } from './panel-config-meta'
 import { resolveDstUgcShardFolders, type DstShardFolder } from './ugc-mod-install'
 import { ensureWorldSeedModLayout, toWorldSeedModName } from './world-seed'
@@ -44,6 +44,9 @@ function normalizeDependencyIds(value: unknown): string[] {
 
 function buildModSetupContent(mods: DstModEntry[]): string {
   const lines = mods
+    // 只列启用的 Mod：这份文件决定 DST 启动时自行去工坊拉哪些内容，
+    // 列出被禁用的 Mod 等于让游戏绕开面板队列去下载（国内网络下表现为卡启动）。
+    .filter(mod => mod.enabled)
     .map(mod => mod.workshopId.trim())
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'en'))
@@ -138,6 +141,23 @@ export function writeModDependencyMap(installPath: string, dependencyMap: DstMod
   const modMetaPath = resolveModMetaPath(installPath)
   backupFile(modMetaPath)
   writeFileAtomic(modMetaPath, `${JSON.stringify(dependencyMap, null, 2)}\n`)
+}
+
+/**
+ * 该 Mod 在本地可得的依赖：面板自己记录的（订阅时写入 `.gsh-mod-meta.json`）
+ * 加上内容里 `modinfo.lua` 声明的。
+ *
+ * 下载队列用它把启用项的必要依赖一起排进队列。两处都取不到就是空——内容缺失的 Mod
+ * 没有 modinfo.lua 可读，此时不为此去打 Steam 接口。
+ */
+export function readModDependencies(
+  installPath: string,
+  workshopId: string,
+  dependencyMap: DstModDependencyMap = readModDependencyMap(installPath),
+): string[] {
+  const fromMeta = normalizeDependencyIds(dependencyMap[workshopId] ?? [])
+  const fromModInfo = parseModInfoDependencies(installPath, workshopId)
+  return [...new Set([...fromMeta, ...fromModInfo])]
 }
 
 export function writeInstanceModFiles(installPath: string, mods: DstModEntry[]) {

@@ -35,6 +35,8 @@ function createMockMod(partial: Partial<DbInstanceMod> & Pick<DbInstanceMod, 'wo
     updateCheckedAt: partial.updateCheckedAt ?? null,
     loadedCopyStale: partial.loadedCopyStale ?? false,
     config: partial.config ?? null,
+    retryCount: partial.retryCount ?? 0,
+    nextRetryAt: partial.nextRetryAt ?? null,
     createdAt: partial.createdAt ?? now,
     updatedAt: partial.updatedAt ?? now,
   }

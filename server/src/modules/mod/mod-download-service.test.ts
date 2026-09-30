@@ -6,7 +6,7 @@ import { afterEach, describe, it } from 'node:test'
 import { strToU8, zipSync } from 'fflate'
 import { resolveDstSteamWorkshopModDir } from '../../infra/game-adapter/dst/mod-download'
 import type { WorkshopModMetadata } from '../../infra/game-adapter/dst/steam-workshop'
-import { resolveDstUgcModDir } from '../../infra/game-adapter/dst/ugc-mod-install'
+import { ensureDstUgcModLayout, resolveDstUgcModDir } from '../../infra/game-adapter/dst/ugc-mod-install'
 import { resolveWorkshopManifestPath } from '../../infra/game-adapter/dst/workshop-manifest'
 import type { DbInstanceMod } from '../../shared/db/index'
 import {
@@ -15,15 +15,27 @@ import {
 } from './mod-file-sync-service.ts'
 import {
   enqueueModDownload,
+  enqueueModDownloads,
+  getModDownloadQueueSnapshot,
   getModInstallJob,
+  MOD_DOWNLOAD_MAX_ATTEMPTS,
+  MOD_DOWNLOAD_RETRY_DELAYS_MS,
+  pauseModDownloadQueue,
   resetModDownloadDbHooksForTest,
   resetModDownloadExecutorForTest,
+  resetModDownloadQueueForTest,
+  resetModDownloadRetryDelaysForTest,
   resetModInstallJobsForTest,
+  resolveModDownloadQueueState,
   resolveModInstallJob,
   setModDownloadDbHooksForTest,
   setModDownloadExecutorForTest,
+  setModDownloadRetryDelaysForTest,
+  startModDownloadQueue,
+  waitForModDownloadQueueIdle,
   waitForModInstallJob,
 } from './mod-download-service.ts'
+import { writeModDependencyMap } from '../../infra/game-adapter/dst/mod-service'
 
 const tempDirs: string[] = []
 const upsertCalls: Array<Record<string, unknown>> = []
@@ -51,6 +63,8 @@ function createMockMod(input: Partial<DbInstanceMod> & Pick<DbInstanceMod, 'inst
     createdAt: input.createdAt ?? now,
     updatedAt: input.updatedAt ?? now,
     ...input,
+    retryCount: input.retryCount ?? 0,
+    nextRetryAt: input.nextRetryAt ?? null,
   }
 }
 
@@ -122,6 +136,8 @@ function installDbHooks() {
         version: input.version ?? null,
         installStatus: input.installStatus ?? 'ready',
         installError: input.installError ?? null,
+        retryCount: input.retryCount ?? 0,
+        nextRetryAt: input.nextRetryAt ?? null,
         id: listedMods[existingIndex]?.id,
         createdAt: listedMods[existingIndex]?.createdAt,
       })
@@ -139,12 +155,15 @@ function installDbHooks() {
       if (existingIndex < 0) {
         return undefined
       }
+      const existing = listedMods[existingIndex]
       listedMods[existingIndex] = createMockMod({
-        ...listedMods[existingIndex],
-        installStatus: patch.installStatus ?? listedMods[existingIndex].installStatus,
+        ...existing,
+        installStatus: patch.installStatus ?? existing.installStatus,
         installError: typeof patch.installError !== 'undefined'
           ? (patch.installError ?? null)
-          : listedMods[existingIndex].installError,
+          : existing.installError,
+        retryCount: typeof patch.retryCount !== 'undefined' ? patch.retryCount : existing.retryCount,
+        nextRetryAt: typeof patch.nextRetryAt !== 'undefined' ? (patch.nextRetryAt ?? null) : existing.nextRetryAt,
         updatedAt: new Date().toISOString(),
       })
       return listedMods[existingIndex]
@@ -375,13 +394,13 @@ describe('mod-download-service', () => {
     assert.equal(readyCall?.remoteUpdatedAt, workshopUpdatedAtIso)
   })
 
-  it('coalesces other missing mods into one download call', async () => {
+  it('queues the subscription first and the missing backfill in its own batch', async () => {
     installDbHooks()
     const installPath = createInstallPath()
     listedMods = [
-      createMockMod({ instanceId: 'instance-f', workshopId: '100', name: 'Pending A', installStatus: 'pending' }),
-      createMockMod({ instanceId: 'instance-f', workshopId: '200', name: 'Pending B', installStatus: 'pending' }),
-      createMockMod({ instanceId: 'instance-f', workshopId: '300', name: 'Ready C', installStatus: 'ready' }),
+      createMockMod({ instanceId: 'instance-f', workshopId: '100', name: 'Pending A', installStatus: 'pending', enabled: true }),
+      createMockMod({ instanceId: 'instance-f', workshopId: '200', name: 'Pending B', installStatus: 'pending', enabled: true }),
+      createMockMod({ instanceId: 'instance-f', workshopId: '300', name: 'Ready C', installStatus: 'ready', enabled: true }),
     ]
     writeWorkshopMod(installPath, '300')
     const downloadBatches: string[][] = []
@@ -398,25 +417,32 @@ describe('mod-download-service', () => {
       installPath,
       payload: { workshopId: '100', name: 'Pending A' },
     })
-    await waitForModInstallJob('instance-f', '100')
+    await waitForModDownloadQueueIdle('instance-f')
 
-    // 一次 SteamCMD 覆盖两个缺失 Mod；已就绪的 300 不参与
-    assert.deepEqual(downloadBatches, [['100', '200']])
+    // 批次由队列统一决定：用户订阅的 100 先成一批，随后补齐项 200 单独成批；已就绪的 300 不参与
+    assert.deepEqual(downloadBatches, [['100'], ['200']])
     assert.equal(getModInstallJob('instance-f', '100').status, 'success')
     assert.equal(listedMods.find(mod => mod.workshopId === '100')?.installStatus, 'ready')
     assert.equal(listedMods.find(mod => mod.workshopId === '200')?.installStatus, 'ready')
   })
 
-  it('keeps the primary job successful when a coalesced mod is still missing', async () => {
+  it('keeps going when a backfill mod fails in the previous batch', async () => {
     installDbHooks()
     const installPath = createInstallPath()
     listedMods = [
-      createMockMod({ instanceId: 'instance-g', workshopId: '111', name: 'Pending A', installStatus: 'pending' }),
-      createMockMod({ instanceId: 'instance-g', workshopId: '222', name: 'Pending B', installStatus: 'pending' }),
+      createMockMod({ instanceId: 'instance-g', workshopId: '111', name: 'Pending A', installStatus: 'pending', enabled: true }),
+      createMockMod({ instanceId: 'instance-g', workshopId: '222', name: 'Pending B', installStatus: 'pending', enabled: true }),
     ]
-    setModDownloadExecutorForTest(async () => {
-      // 只下到了主 Mod，222 仍缺失
-      writeWorkshopMod(installPath, '111')
+    setModDownloadRetryDelaysForTest([5, 10, 20])
+    let batchIndex = 0
+    setModDownloadExecutorForTest(async (input) => {
+      batchIndex += 1
+      // 第一批（用户订阅的那个）正常下载，第二批（补齐项）失败：单批失败不能把队列带走
+      if (batchIndex === 1) {
+        for (const workshopId of input.workshopIds) {
+          writeWorkshopMod(installPath, workshopId)
+        }
+      }
       return { ok: true }
     })
 
@@ -425,23 +451,30 @@ describe('mod-download-service', () => {
       installPath,
       payload: { workshopId: '111', name: 'Pending A' },
     })
-    await waitForModInstallJob('instance-g', '111')
+    await waitForModDownloadQueueIdle('instance-g')
 
     assert.equal(getModInstallJob('instance-g', '111').status, 'success')
     assert.equal(listedMods.find(mod => mod.workshopId === '111')?.installStatus, 'ready')
-    // 顺带下载失败的 Mod 只影响它自己，等待下一次重试
-    assert.equal(listedMods.find(mod => mod.workshopId === '222')?.installStatus, 'failed')
+    // 另一个 Mod 自己重试到预算用尽才失败，整个过程不影响已经就绪的 111
+    const failed = listedMods.find(mod => mod.workshopId === '222')
+    assert.equal(failed?.installStatus, 'failed')
+    assert.equal(failed?.retryCount, MOD_DOWNLOAD_MAX_ATTEMPTS)
   })
 
   it('deduplicates in-flight download jobs for the same workshop id', async () => {
     installDbHooks()
     const installPath = createInstallPath()
-    writeWorkshopMod(installPath, '88888')
     let resolveDownload: ((value: { ok: boolean }) => void) | undefined
     const downloadPromise = new Promise<{ ok: boolean }>((resolve) => {
       resolveDownload = resolve
     })
-    setModDownloadExecutorForTest(async () => downloadPromise)
+    setModDownloadExecutorForTest(async (input) => {
+      await downloadPromise
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      return { ok: true }
+    })
 
     const first = await enqueueModDownload({
       instanceId: 'instance-d',
@@ -459,6 +492,7 @@ describe('mod-download-service', () => {
     resolveDownload?.({ ok: true })
     await waitForModInstallJob('instance-d', '88888')
     assert.equal(getModInstallJob('instance-d', '88888').status, 'success')
+    // 第二次入队命中「已在队列中」的判定：不再多写一条 pending 记录
     assert.equal(upsertCalls.filter(call => call.installStatus === 'pending').length, 1)
   })
 
@@ -545,5 +579,423 @@ describe('mod-download-service', () => {
     const job = await resolveModInstallJob('instance-f', '77777')
     assert.equal(job.status, 'failed')
     assert.equal(job.error, 'mock failure persisted')
+  })
+})
+
+describe('mod-download-queue', () => {
+  /** 迁移包导入后的典型形态：一条条 pending，谁都没在下载 */
+  function createPendingMods(instanceId: string, ids: string[], enabled = true) {
+    return ids.map((workshopId, index) => createMockMod({
+      instanceId,
+      workshopId,
+      name: `Mod ${workshopId}`,
+      installStatus: 'pending',
+      enabled,
+      loadOrder: index,
+      installError: '创意工坊内容缺失，未下载',
+    }))
+  }
+
+  afterEach(() => {
+    delete process.env.GSH_MOD_DOWNLOAD_COALESCE_LIMIT
+    resetModDownloadRetryDelaysForTest()
+    resetModDownloadQueueForTest()
+  })
+
+  it('turns 30 pending mods into a bounded number of batches', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-many'
+    const ids = Array.from({ length: 30 }, (_value, index) => String(10_000 + index))
+    listedMods = createPendingMods(instanceId, ids)
+    const batches: string[][] = []
+    setModDownloadExecutorForTest(async (input) => {
+      batches.push([...input.workshopIds])
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      return { ok: true }
+    })
+
+    await startModDownloadQueue({ instanceId, installPath })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    // 30 个 pending 不再等于 30 个任务：单批上限 5 → 6 批
+    assert.equal(batches.length, 6)
+    assert.ok(batches.every(batch => batch.length <= 5))
+    assert.equal(listedMods.every(mod => mod.installStatus === 'ready'), true)
+  })
+
+  it('runs exactly one SteamCMD batch at a time', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-serial'
+    listedMods = createPendingMods(
+      instanceId,
+      Array.from({ length: 12 }, (_value, index) => String(20_000 + index)),
+    )
+    let inFlight = 0
+    let peak = 0
+    setModDownloadExecutorForTest(async (input) => {
+      inFlight += 1
+      peak = Math.max(peak, inFlight)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      inFlight -= 1
+      return { ok: true }
+    })
+
+    // 重复 start 是幂等的：仍然只有一条队列、一个 worker
+    await Promise.all([
+      startModDownloadQueue({ instanceId, installPath }),
+      startModDownloadQueue({ instanceId, installPath }),
+      startModDownloadQueue({ instanceId, installPath }),
+    ])
+    await waitForModDownloadQueueIdle(instanceId)
+
+    assert.equal(peak, 1)
+  })
+
+  it('deduplicates the same workshop id inside the queue', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-dedupe'
+    listedMods = createPendingMods(instanceId, ['900'])
+    const batches: string[][] = []
+    setModDownloadExecutorForTest(async (input) => {
+      batches.push([...input.workshopIds])
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      return { ok: true }
+    })
+
+    await startModDownloadQueue({
+      instanceId,
+      installPath,
+      head: [
+        { workshopId: '900', force: false, source: 'user' },
+        { workshopId: '900', force: false, source: 'user' },
+      ],
+    })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    assert.deepEqual(batches, [['900']])
+    assert.equal(listedMods.filter(mod => mod.workshopId === '900').length, 1)
+  })
+
+  it('does not download disabled mods automatically', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-disabled'
+    listedMods = [
+      createMockMod({
+        instanceId,
+        workshopId: '1111',
+        name: 'Enabled Mod',
+        installStatus: 'pending',
+        enabled: true,
+      }),
+      createMockMod({
+        instanceId,
+        workshopId: '2222',
+        name: 'Disabled Mod',
+        installStatus: 'pending',
+        enabled: false,
+      }),
+    ]
+    const batches: string[][] = []
+    setModDownloadExecutorForTest(async (input) => {
+      batches.push([...input.workshopIds])
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      return { ok: true }
+    })
+
+    await startModDownloadQueue({ instanceId, installPath })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    assert.deepEqual(batches, [['1111']])
+    assert.equal(listedMods.find(mod => mod.workshopId === '2222')?.installStatus, 'pending')
+  })
+
+  it('downloads a dependency before the mod that needs it', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-deps'
+    listedMods = createPendingMods(instanceId, ['1000', '2000'])
+    // 面板记录的依赖关系：1000 依赖 2000
+    writeModDependencyMap(installPath, { '1000': ['2000'] })
+    const batches: string[][] = []
+    setModDownloadExecutorForTest(async (input) => {
+      batches.push([...input.workshopIds])
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      return { ok: true }
+    })
+
+    await startModDownloadQueue({ instanceId, installPath })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    assert.deepEqual(batches, [['2000', '1000']])
+  })
+
+  it('keeps processing later batches after one batch fails', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-continue'
+    process.env.GSH_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
+    listedMods = createPendingMods(instanceId, ['3001', '3002', '3003'])
+    setModDownloadRetryDelaysForTest([5, 10, 20])
+    let calls = 0
+    setModDownloadExecutorForTest(async (input) => {
+      calls += 1
+      // 只让第一批失败：后面的批必须照常执行
+      if (calls > 1) {
+        for (const workshopId of input.workshopIds) {
+          writeWorkshopMod(installPath, workshopId)
+        }
+      }
+      return { ok: true }
+    })
+
+    await startModDownloadQueue({ instanceId, installPath })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    assert.ok(calls >= 3)
+    assert.equal(listedMods.find(mod => mod.workshopId === '3002')?.installStatus, 'ready')
+    assert.equal(listedMods.find(mod => mod.workshopId === '3003')?.installStatus, 'ready')
+  })
+
+  it('backs off failed backfill mods and gives up after the retry budget', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-backoff'
+    process.env.GSH_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
+    listedMods = createPendingMods(instanceId, ['4001'])
+    setModDownloadRetryDelaysForTest([5, 10, 20])
+    let calls = 0
+    setModDownloadExecutorForTest(async () => {
+      calls += 1
+      return { ok: false, error: 'network down' }
+    })
+
+    await startModDownloadQueue({ instanceId, installPath })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    // 退避用尽（3 次）后转 failed，等用户手动重试；每次失败都重排一次，不阻塞队列
+    assert.equal(calls, MOD_DOWNLOAD_MAX_ATTEMPTS)
+    const mod = listedMods[0]
+    assert.equal(mod?.installStatus, 'failed')
+    assert.equal(mod?.retryCount, MOD_DOWNLOAD_MAX_ATTEMPTS)
+    assert.match(mod?.installError ?? '', /network down/)
+
+    // 默认退避序列就是 10s / 30s / 60s
+    assert.deepEqual(MOD_DOWNLOAD_RETRY_DELAYS_MS, [10_000, 30_000, 60_000])
+  })
+
+  it('keeps a failed batch retrying with backoff before the budget runs out', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-backoff-once'
+    process.env.GSH_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
+    listedMods = createPendingMods(instanceId, ['4501'])
+    setModDownloadRetryDelaysForTest([50, 60, 70])
+    let calls = 0
+    setModDownloadExecutorForTest(async (input) => {
+      calls += 1
+      // 第一次失败，第二次成功：失败项应带着退避重新排队
+      if (calls === 1) {
+        return { ok: false, error: 'network down' }
+      }
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      return { ok: true }
+    })
+
+    await startModDownloadQueue({ instanceId, installPath })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    assert.equal(calls, 2)
+    assert.equal(listedMods[0]?.installStatus, 'ready')
+    assert.equal(listedMods[0]?.retryCount, 0)
+    assert.equal(listedMods[0]?.nextRetryAt, null)
+  })
+
+  it('rebuilds the pending queue from the database after a restart', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-restart'
+    listedMods = createPendingMods(instanceId, ['5001', '5002', '5003'])
+    let executorCalls = 0
+    setModDownloadExecutorForTest(async (input) => {
+      executorCalls += 1
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      return { ok: true }
+    })
+
+    // 模拟面板重启：内存队列清空，DB 里仍是 pending
+    resetModDownloadQueueForTest()
+    const state = await resolveModDownloadQueueState({ instanceId, installPath })
+    assert.equal(state.status, 'idle')
+    assert.equal(state.total, 3)
+    assert.equal(state.queued, 3)
+    assert.equal(state.downloading, 0)
+    assert.equal(executorCalls, 0, '重启后不得自动开跑')
+
+    await startModDownloadQueue({ instanceId, installPath })
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.equal(executorCalls, 1)
+    assert.equal(listedMods.every(mod => mod.installStatus === 'ready'), true)
+  })
+
+  it('marks mods whose content is already on disk ready without calling SteamCMD', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-ondisk'
+    listedMods = createPendingMods(instanceId, ['6001'])
+    writeWorkshopMod(installPath, '6001')
+    let executorCalls = 0
+    setModDownloadExecutorForTest(async () => {
+      executorCalls += 1
+      return { ok: true }
+    })
+
+    await startModDownloadQueue({ instanceId, installPath })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    assert.equal(executorCalls, 0)
+    assert.equal(listedMods[0]?.installStatus, 'ready')
+  })
+
+  it('pauses the queue at the batch boundary', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-pause'
+    listedMods = createPendingMods(instanceId, ['7001', '7002'])
+    setModDownloadExecutorForTest(async (input) => {
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      return { ok: true }
+    })
+
+    await startModDownloadQueue({ instanceId, installPath })
+    const paused = pauseModDownloadQueue(instanceId)
+    assert.ok(paused)
+    assert.ok(paused?.status === 'paused' || paused?.status === 'pausing')
+    await waitForModDownloadQueueIdle(instanceId)
+    const queue = await resolveModDownloadQueueState({ instanceId, installPath })
+    assert.equal(queue.status, 'paused')
+  })
+
+  it('sends a multi-mod update as one batch instead of one batch per mod', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-batch-update'
+    listedMods = ['8001', '8002'].map(workshopId => createMockMod({
+      instanceId,
+      workshopId,
+      name: `Mod ${workshopId}`,
+      installStatus: 'ready',
+      enabled: true,
+    }))
+    writeWorkshopMod(installPath, '8001')
+    writeWorkshopMod(installPath, '8002')
+    const batches: string[][] = []
+    setModDownloadExecutorForTest(async (input) => {
+      batches.push([...input.workshopIds])
+      return { ok: true }
+    })
+
+    await enqueueModDownloads({
+      instanceId,
+      installPath,
+      force: true,
+      payloads: [
+        { workshopId: '8001', name: 'Mod 8001' },
+        { workshopId: '8002', name: 'Mod 8002' },
+      ],
+    })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    // 两个 Mod 一次下完：不是「每个 Mod 各一批」
+    assert.deepEqual(batches, [['8001', '8002']])
+    assert.equal(listedMods.every(mod => mod.installStatus === 'ready'), true)
+  })
+
+  it('re-places the mod into ugc_mods when force updating an already ready mod', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-refresh'
+    listedMods = [createMockMod({
+      instanceId,
+      workshopId: '8501',
+      name: 'Outdated Mod',
+      installStatus: 'ready',
+      enabled: true,
+    })]
+    // 下载目录是旧内容，ugc_mods 里也是旧的落位结果
+    const sourceDir = resolveDstSteamWorkshopModDir(installPath, '8501')
+    fs.mkdirSync(sourceDir, { recursive: true })
+    fs.writeFileSync(path.join(sourceDir, 'modinfo.lua'), 'name = "old"\n')
+    await ensureDstUgcModLayout(installPath, ['8501'])
+    const ugcModInfo = path.join(resolveDstUgcModDir(installPath, 'Master', '8501'), 'modinfo.lua')
+    assert.match(fs.readFileSync(ugcModInfo, 'utf8'), /old/)
+
+    setModDownloadExecutorForTest(async (input) => {
+      // SteamCMD 把下载目录换成了新内容（这里只有一个待更新 Mod）
+      assert.ok(input.workshopIds.includes('8501'))
+      fs.writeFileSync(path.join(sourceDir, 'modinfo.lua'), 'name = "new"\n')
+      return { ok: true }
+    })
+
+    await enqueueModDownloads({
+      instanceId,
+      installPath,
+      force: true,
+      payloads: [{ workshopId: '8501', name: 'Outdated Mod' }],
+    })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    // 目标目录只有 modinfo.lua 时本来会被判「已落位」而跳过：强制更新必须重新落位，
+    // 否则游戏读的还是旧文件，版本状态会永远停在「有新版本」
+    assert.match(fs.readFileSync(ugcModInfo, 'utf8'), /new/)
+  })
+
+  it('counts the queue total without double-counting head items that are already pending', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'inst-total'
+    listedMods = createPendingMods(instanceId, ['9001', '9002', '9003'])
+    const totals: number[] = []
+    setModDownloadExecutorForTest(async (input) => {
+      for (const workshopId of input.workshopIds) {
+        writeWorkshopMod(installPath, workshopId)
+      }
+      const snapshot = getModDownloadQueueSnapshot(instanceId)
+      totals.push(snapshot?.total ?? 0)
+      return { ok: true }
+    })
+
+    // 9001 既在插队项里、库里也是 pending：总数只能算一次
+    await startModDownloadQueue({
+      instanceId,
+      installPath,
+      head: [{ workshopId: '9001', force: false, source: 'user' }],
+    })
+    await waitForModDownloadQueueIdle(instanceId)
+
+    assert.equal(totals[0], 3)
+    const finalQueue = getModDownloadQueueSnapshot(instanceId)
+    assert.equal(finalQueue?.total, 3)
+    assert.equal(finalQueue?.success, 3)
   })
 })

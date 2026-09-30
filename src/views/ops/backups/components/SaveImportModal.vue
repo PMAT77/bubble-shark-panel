@@ -324,7 +324,7 @@ watch(() => props.show, (visible) => {
             <span>端口已自动改成这个实例能用的</span>
           </div>
           <div v-if="importResult.missingWorkshopContent.length > 0" class="importer-warn">
-            ⚠ 以下 Mod 的创意工坊内容尚未下载：{{ importResult.missingWorkshopContent.join('、') }}。首次启动由游戏自动下载（可能较慢），也可到 Mod 页面手动下载。
+            ⚠ 以下 Mod 的创意工坊内容尚未下载：{{ importResult.missingWorkshopContent.join('、') }}。面板不会自动下载：请到「世界设置 → 模组」点「开始下载」，队列会按批处理。
           </div>
           <div v-for="warning in importResult.warnings" :key="warning" class="importer-warn">
             ⚠ {{ warning }}

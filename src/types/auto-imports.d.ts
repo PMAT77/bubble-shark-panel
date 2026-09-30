@@ -9,11 +9,13 @@ declare global {
   const EffectScope: typeof import('vue').EffectScope
   const GUEST_MODE_NOTICE_CONTENT: typeof import('../composables/guestModeNotice').GUEST_MODE_NOTICE_CONTENT
   const GUEST_MODE_NOTICE_TITLE: typeof import('../composables/guestModeNotice').GUEST_MODE_NOTICE_TITLE
+  const MOD_DOWNLOAD_QUEUE_POLL_INTERVAL_MS: typeof import('../composables/modDownloadQueuePoller').MOD_DOWNLOAD_QUEUE_POLL_INTERVAL_MS
   const acceptHMRUpdate: typeof import('pinia').acceptHMRUpdate
   const buildRoutesFromBackend: typeof import('../store/modules/app/route-layout').buildRoutesFromBackend
   const computed: typeof import('vue').computed
   const convertRouteToMenuRecursive: typeof import('../store/modules/app/menu-flatten').convertRouteToMenuRecursive
   const createApp: typeof import('vue').createApp
+  const createModDownloadQueuePoller: typeof import('../composables/modDownloadQueuePoller').createModDownloadQueuePoller
   const createPinia: typeof import('pinia').createPinia
   const customRef: typeof import('vue').customRef
   const defineAsyncComponent: typeof import('vue').defineAsyncComponent
@@ -78,6 +80,7 @@ declare global {
   const shallowReactive: typeof import('vue').shallowReactive
   const shallowReadonly: typeof import('vue').shallowReadonly
   const shallowRef: typeof import('vue').shallowRef
+  const shouldPollModDownloadQueue: typeof import('../composables/modDownloadQueuePoller').shouldPollModDownloadQueue
   const shouldShowGuestModeNotice: typeof import('../composables/guestModeNotice').shouldShowGuestModeNotice
   const storeToRefs: typeof import('pinia').storeToRefs
   const suppressScheduleRunNotificationOnce: typeof import('../composables/useScheduleRunNotifier').suppressScheduleRunNotificationOnce
@@ -146,6 +149,9 @@ declare global {
   // @ts-ignore
   export type { GuestModeNoticeState } from '../composables/guestModeNotice'
   import('../composables/guestModeNotice')
+  // @ts-ignore
+  export type { ModDownloadQueuePollerOptions, ModDownloadQueuePoller } from '../composables/modDownloadQueuePoller'
+  import('../composables/modDownloadQueuePoller')
   // @ts-ignore
   export type { PanelVersionMismatch } from '../composables/panelVersionGuard'
   import('../composables/panelVersionGuard')

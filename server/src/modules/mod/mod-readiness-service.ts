@@ -8,13 +8,13 @@ import { listInstanceMods, updateInstanceModByWorkshopId } from '../../shared/db
  *
  * 导入外部存档时源档 modoverrides.lua 只有 workshop ID，创意工坊内容未必在本机，
  * 若把这类记录直接当成就绪，面板会显示 36/36 而游戏里只加载出有文件的那几个。
- * 本模块按磁盘实际情况反向校准数据库状态：缺文件的降级为等待下载（交给
- * ensurePendingModDownloadsRecovered 排队），落位失败的标明原因，占位名补齐为真实 Mod 名。
+ * 本模块按磁盘实际情况反向校准数据库状态：缺文件的降级为等待下载（等用户在 Mod 页
+ * 点「开始下载」，由下载队列接手），落位失败的标明原因，占位名补齐为真实 Mod 名。
  */
 
 /** 导入存档时的占位名：源档 modoverrides.lua 里没有 Mod 名称 */
 const PLACEHOLDER_MOD_NAME_PATTERN = /^workshop-\d+$/i
-export const MISSING_MOD_CONTENT_ERROR = '创意工坊内容缺失，已加入下载队列'
+export const MISSING_MOD_CONTENT_ERROR = '创意工坊内容缺失，未下载'
 
 export interface ModReadinessResult {
   /** 原本显示已就绪、但本机没有创意工坊内容，已降级为等待下载 */
@@ -126,7 +126,8 @@ export async function reconcileInstanceModReadiness(input: ModReadinessInput): P
       continue
     }
     const displayName = resolveModDisplayName(installPath, mod.workshopId)
-    if (displayName && await patchMod(instanceId, mod.workshopId, { name: displayName })) {
+    // 名字没变就不写库：Mod 列表会被反复请求，无变化的同步写会白占事件循环
+    if (displayName && displayName !== mod.name && await patchMod(instanceId, mod.workshopId, { name: displayName })) {
       result.renamed.push({ workshopId: mod.workshopId, name: displayName })
     }
   }

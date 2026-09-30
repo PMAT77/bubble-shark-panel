@@ -347,6 +347,60 @@ export function resolveModDisplayName(installPath: string, workshopId: string): 
 }
 
 /**
+ * 读取 modinfo.lua 里声明的依赖创意工坊 ID（供下载队列选批用）。
+ *
+ * 只用本地可得的数据：内容已下载时 modinfo.lua 里就写明了 dependencies；内容缺失的 Mod
+ * 没有文件可读，依赖信息就是空——选批路径上不打 Steam 接口，避免国内网络下拖住队列。
+ *
+ * 兼容两种写法：`dependencies = { "workshop-123" }` 与 `dependencies = { ["workshop-123"] = true }`。
+ */
+export function parseModInfoDependencies(installPath: string, workshopId: string): string[] {
+  const modInfoPath = resolveDstModInfoPath(installPath, workshopId)
+  if (!modInfoPath) {
+    return []
+  }
+  try {
+    if (fs.statSync(modInfoPath).size > MAX_LUA_PARSE_LENGTH) {
+      return []
+    }
+    const content = fs.readFileSync(modInfoPath, 'utf8')
+    const match = /dependencies\s*=\s*/.exec(content)
+    if (!match) {
+      return []
+    }
+    const table = parseLuaTableLiteral(content.slice(match.index + match[0].length))
+    if (!table) {
+      return []
+    }
+    const ids = new Set<string>()
+    for (const [key, value] of table.entries) {
+      const fromKey = typeof key === 'string' ? normalizeWorkshopDependencyId(key) : null
+      if (fromKey) {
+        ids.add(fromKey)
+      }
+      const fromValue = typeof value === 'string' ? normalizeWorkshopDependencyId(value) : null
+      if (fromValue) {
+        ids.add(fromValue)
+      }
+    }
+    return [...ids]
+  }
+  catch {
+    return []
+  }
+}
+
+/** `workshop-123` / `workshop_123` / `123` 统一成纯数字工坊 ID；非工坊 ID 一律丢弃 */
+function normalizeWorkshopDependencyId(raw: string | null): string | null {
+  const trimmed = raw?.trim() ?? ''
+  if (!trimmed) {
+    return null
+  }
+  const stripped = trimmed.replace(/^workshop[-_]/i, '')
+  return /^\d{1,20}$/.test(stripped) ? stripped : null
+}
+
+/**
  * 读取 Master/modoverrides.lua 中各 mod 的 configuration_options（导入预填用）。
  * 文件不存在或解析失败返回空 Map。
  */

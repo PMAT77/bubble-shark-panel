@@ -173,6 +173,10 @@ export interface DbInstanceMod {
   loadedCopyStale: boolean
   /** JSON 序列化的 modoverrides.lua configuration_options；null = 未配置 */
   config: string | null
+  /** 连续下载失败次数（队列指数退避用）；成功即清零 */
+  retryCount: number
+  /** 退避等待的下次可尝试时间（ISO）；null = 立即可尝试 */
+  nextRetryAt: string | null
   createdAt: string
   updatedAt: string
 }

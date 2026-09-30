@@ -18,10 +18,12 @@ import AdminListToolbar from '@/components/AdminListToolbar.vue'
 import { computed, h, onMounted, ref, shallowRef, watch } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiMod from '@/api/modules/mod'
+import type { ModDownloadQueueDto } from '@/api/modules/mod'
 import { isInstallableGameInstance } from '@/composables/useGameInstance'
 import { useInstanceModState } from '@/composables/useInstanceModState'
 import ModConfigModal from '@/views/games/dst/mod/components/ModConfigModal.vue'
 import { resolveModUpdateCheckNotice } from '@/views/games/dst/mod/modUpdateCheckPresentation'
+import { countOutdatedMods, resolveUpdateIneffectiveNotice, selectUpdatableMods } from '@/views/games/dst/mod/modUpdateTargets'
 import { routeToDstModDetail, routeToDstWorldSettings, routeToNodeInstance } from '@/navigation/game-routes'
 import { MOD_INSTALL_STATUS, MOD_UPDATE_STATUS } from '@/constants/statusDictionary'
 import { getInstanceState } from '@/views/node/instance/instanceDisplay'
@@ -85,10 +87,12 @@ const instances = ref<InstanceSummaryItem[]>([])
 const selectedInstanceId = ref('')
 const {
   downloadingMods,
+  downloadQueue,
   isPendingWorkshop,
   restoreInstallJobs,
   installMod,
   syncPendingWorkshopIds,
+  refreshQueue,
   resetState,
 } = useInstanceModState(() => selectedInstanceId.value)
 const activeTab = ref<'market' | 'subscribed'>('market')
@@ -268,15 +272,14 @@ const subscribedSummary = computed(() => {
   const failed = installedMods.value.filter(mod =>
     mod.installStatus === 'failed' && !isPendingWorkshop(mod.workshopId),
   ).length
-  const outdated = installedMods.value.filter(mod => mod.updateStatus === 'outdated').length
+  const outdated = countOutdatedMods(installedMods.value)
   const unidentified = installedMods.value.filter(mod => !isModNameIdentified(mod)).length
   return { total, pending, failed, outdated, unidentified, ready: total - pending - failed }
 })
-const selectedUpdatableMods = computed(() =>
-  installedMods.value.filter(mod =>
-    checkedRowKeys.value.includes(mod.workshopId) && isModUpdatable(mod),
-  ),
-)
+const selectedUpdatableMods = computed(() => selectUpdatableMods(
+  installedMods.value.filter(mod => checkedRowKeys.value.includes(mod.workshopId)),
+  isPendingWorkshop,
+))
 
 /**
  * 列表上方的提示：优先说「有 Mod 没识别出名称」，其次是「还没检查过版本」。
@@ -321,10 +324,14 @@ const lastUpdateCheckedAt = computed(() => {
 
 /** 只有「创意工坊上有新版本」的 Mod 才给「更新」入口；未知状态另给「重新下载」兜底 */
 function isModUpdatable(mod: ModItemDto): boolean {
-  return mod.installStatus === 'ready'
-    && mod.updateStatus === 'outdated'
-    && !isPendingWorkshop(mod.workshopId)
+  return selectUpdatableMods([mod], isPendingWorkshop).length === 1
 }
+
+/**
+ * 「全部更新」的目标与计数用同一份口径：正在下载中的 Mod 不算目标，
+ * 否则按钮会显示 N 个、点下去却因为都被过滤掉而提示「没有需要更新的 Mod」。
+ */
+const updatableMods = computed(() => selectUpdatableMods(installedMods.value, isPendingWorkshop))
 
 function canRedownloadMod(mod: ModItemDto): boolean {
   return mod.installStatus === 'ready'
@@ -404,7 +411,7 @@ function marketStatusType(row: SteamModListQueryResultItem): 'default' | 'succes
 
 function subscribedStatusLabel(row: ModItemDto): string {
   if (row.installStatus === 'pending' || isPendingWorkshop(row.workshopId)) {
-    return MOD_INSTALL_STATUS.pending.label
+    return pendingStatusLabel.value
   }
   if (row.installStatus === 'failed') {
     return MOD_INSTALL_STATUS.failed.label
@@ -416,6 +423,17 @@ function subscribedStatusType(row: ModItemDto): 'success' | 'warning' | 'error' 
   if (row.installStatus === 'pending' || isPendingWorkshop(row.workshopId)) return 'warning'
   return row.installStatus === 'failed' ? 'error' : 'success'
 }
+
+/**
+ * pending 的口径取决于队列有没有在跑：没跑就只是「待下载」（迁移包导入后默认如此），
+ * 说成「下载中」会让用户以为正在下。
+ */
+const pendingStatusLabel = computed(() => {
+  const status = downloadQueue.value?.status
+  return status === 'running' || status === 'pausing'
+    ? MOD_INSTALL_STATUS.pending.label
+    : '待下载'
+})
 
 function mergeSteamRowsWithInstalled(
   items: SteamModListQueryResultItem[],
@@ -810,7 +828,7 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
     render: (row) => {
       const pending = row.installStatus === 'pending' || isPendingWorkshop(row.workshopId)
       const label = pending
-        ? MOD_INSTALL_STATUS.pending.label
+        ? pendingStatusLabel.value
         : row.installStatus === 'failed' ? MOD_INSTALL_STATUS.failed.label : MOD_INSTALL_STATUS.ready.label
       const type = pending ? 'warning' : row.installStatus === 'failed' ? 'error' : 'success'
       const tag = h(NTag, { size: 'small', bordered: false, type }, { default: () => label })
@@ -997,7 +1015,8 @@ async function loadInstalledMods() {
     riskTipBanner.value = response.data.riskTip?.trim() || null
     void restoreInstallJobs({
       modList: response.data,
-      onTerminal: job => void handleInstallJobTerminal(job),
+      // 下载进度由队列状态驱动：变化时重新拉一次列表（不再逐 Mod 轮询）
+      onQueueChange: handleQueueChange,
     })
   }
   catch (error: unknown) {
@@ -1175,7 +1194,7 @@ async function runBatchUpdate(workshopIds: string[], options?: { skippedCount?: 
       .filter(job => job.status === 'downloading')
       .map(job => job.workshopId)
     syncPendingWorkshopIds(downloadingIds, {
-      onTerminal: job => void handleInstallJobTerminal(job),
+      onQueueChange: handleQueueChange,
     })
     const notFoundCount = response.data.filter(job => job.status === 'not_found').length
     message.success('已开始更新 ' + downloadingIds.length + ' 个 Mod，可在列表中查看进度')
@@ -1212,39 +1231,32 @@ async function batchUpdateSelectedMods() {
   await runBatchUpdate(targets.map(mod => mod.workshopId), { skippedCount })
 }
 
-/** 一键更新全部有新版本的 Mod */
+/** 一键更新全部有新版本的 Mod（正在下载中的跳过，并在提示里说清） */
 async function updateAllOutdatedMods() {
-  const targets = installedMods.value.filter(mod => isModUpdatable(mod))
+  const targets = updatableMods.value
   if (targets.length === 0) {
-    message.info('当前没有需要更新的 Mod')
+    message.info(subscribedSummary.value.outdated > 0
+      ? '有新版本的 Mod 正在下载中，等下载完成后再更新'
+      : '当前没有需要更新的 Mod')
     return
   }
   await runBatchUpdate(targets.map(mod => mod.workshopId))
 }
 
-/** 全部重试失败的 Mod：导入存档后一次性把没下全的补齐 */
+/** 全部重试失败的 Mod：交给下载队列处理（服务端会把退避计数归零），不再逐个入队与轮询 */
 async function retryAllFailedMods() {
-  if (!selectedInstanceId.value) {
+  if (!selectedInstanceId.value || retryingFailedMods.value) {
     return
   }
-  const targets = installedMods.value.filter(mod =>
-    mod.installStatus === 'failed' && !isPendingWorkshop(mod.workshopId),
-  )
-  if (targets.length === 0) {
+  const targetCount = installedMods.value.filter(mod => mod.installStatus === 'failed').length
+  if (targetCount === 0) {
     return
   }
   retryingFailedMods.value = true
   try {
-    for (const mod of targets) {
-      await installMod({
-        workshopId: mod.workshopId,
-        name: mod.name,
-        previewImage: mod.previewImage ?? undefined,
-      }, {
-        onTerminal: job => void handleInstallJobTerminal(job),
-      })
-    }
-    message.success(`已重新排队下载 ${targets.length} 个 Mod，可在列表中查看进度`)
+    await apiMod.startModDownloadQueue(selectedInstanceId.value)
+    await refreshQueue()
+    message.success(`已重新排队 ${targetCount} 个失败的 Mod`)
   }
   catch (error: unknown) {
     if (isAuthUnauthorizedError(error)) {
@@ -1254,6 +1266,131 @@ async function retryAllFailedMods() {
   }
   finally {
     retryingFailedMods.value = false
+  }
+}
+
+/**
+ * 下载队列横幅：一个实例只有一条队列，进度与「开始/暂停/取消」都汇总在这里。
+ * 迁移包导入后不会自动下载，所以这条横幅也是用户唯一的入口。
+ */
+const queuePanel = computed(() => {
+  const queue = downloadQueue.value
+  const pendingCount = installedMods.value.filter(mod => mod.installStatus === 'pending').length
+  const running = queue?.status === 'running' || queue?.status === 'pausing'
+  if (running && queue) {
+    // 进度按「已完成 / 本次目标」算：批次数只是过程量，运行中还会变，
+    // 拿它做分母会出现「第 2/1 批」这种读不通的读数
+    const processed = queue.success + queue.failed
+    const total = Math.max(queue.total, processed)
+    const batchLabel = `第 ${Math.max(queue.currentBatchIndex, 1)} 批（本批 ${queue.currentWorkshopIds.length} 个）`
+    if (queue.nextBatchAt) {
+      return {
+        text: `正在下载：${batchLabel} · 已完成 ${processed}/${total} · 等待重试（${formatQueueEta(queue.nextBatchAt)}）`,
+        showStart: false,
+        showPause: true,
+        showCancel: true,
+      }
+    }
+    const failedSuffix = queue.failed > 0 ? ` · 失败 ${queue.failed}` : ''
+    return {
+      text: `正在下载：${batchLabel} · 已完成 ${processed}/${total}${failedSuffix}`,
+      showStart: false,
+      showPause: true,
+      showCancel: true,
+    }
+  }
+  // 队列没在跑就以列表状态为准：内存里的 total 是上一次队列的快照，
+  // 拿它提示「还有 N 个没下载」会和列表里的「待下载 0」自相矛盾
+  if (pendingCount === 0) {
+    return null
+  }
+  if (queue?.status === 'paused') {
+    return {
+      text: `下载已暂停，还有 ${pendingCount} 个 Mod 未下载。`,
+      showStart: true,
+      showPause: false,
+      showCancel: false,
+    }
+  }
+  return {
+    text: `有 ${pendingCount} 个 Mod 的创意工坊内容还没下载。国内网络较慢，建议按批下载，可随时暂停。`,
+    showStart: true,
+    showPause: false,
+    showCancel: false,
+  }
+})
+
+function formatQueueEta(iso: string): string {
+  const at = Date.parse(iso)
+  if (!Number.isFinite(at)) {
+    return '即将重试'
+  }
+  const seconds = Math.max(0, Math.round((at - Date.now()) / 1000))
+  return seconds > 0 ? `${seconds} 秒后重试` : '即将重试'
+}
+
+let queueWasRunning = false
+let lastIneffectiveNoticeAt = 0
+
+/**
+ * 队列状态变化：刷新列表；若这一轮跑完却仍有可更新项，说明更新没让本机内容追平工坊，
+ * 提示一次原因，避免用户对着「全部更新 (N)」反复点。
+ */
+function handleQueueChange(queue: ModDownloadQueueDto) {
+  const running = queue.status === 'running' || queue.status === 'pausing'
+  const wasRunning = queueWasRunning
+  queueWasRunning = running
+  void loadInstalledMods().then(() => {
+    const notice = resolveUpdateIneffectiveNotice({
+      wasRunning,
+      status: queue.status,
+      updatableCount: updatableMods.value.length,
+    })
+    if (!notice || Date.now() - lastIneffectiveNoticeAt < 60_000) {
+      return
+    }
+    lastIneffectiveNoticeAt = Date.now()
+    message.warning(notice, { duration: 8000 })
+  })
+}
+
+const queueActionPending = ref(false)
+
+/** 队列操作：开始/继续、暂停（批次边界生效）、取消当前批次 */
+async function runQueueAction(action: 'start' | 'pause' | 'cancel') {
+  if (!selectedInstanceId.value || queueActionPending.value) {
+    return
+  }
+  queueActionPending.value = true
+  try {
+    if (action === 'start') {
+      await apiMod.startModDownloadQueue(selectedInstanceId.value)
+    }
+    else if (action === 'pause') {
+      await apiMod.pauseModDownloadQueue(selectedInstanceId.value)
+    }
+    else {
+      await apiMod.cancelModDownloadQueue(selectedInstanceId.value)
+    }
+    await refreshQueue()
+    if (action === 'start') {
+      message.success('已开始按批下载缺失的 Mod')
+    }
+    else if (action === 'pause') {
+      message.info('已暂停下载（当前批次跑完后停止）')
+    }
+    else {
+      message.warning('已取消当前批次，未完成的 Mod 仍可继续下载')
+    }
+  }
+  catch (error: unknown) {
+    if (isAuthUnauthorizedError(error)) {
+      return
+    }
+    message.error(getErrorMessage(error, '下载队列操作失败，请稍后重试'))
+  }
+  finally {
+    queueActionPending.value = false
   }
 }
 
@@ -1954,10 +2091,10 @@ onMounted(async () => {
                     type="primary"
                     secondary
                     :loading="batchUpdating"
-                    :disabled="subscribedSummary.outdated === 0"
+                    :disabled="updatableMods.length === 0"
                     @click="updateAllOutdatedMods"
                    v-if="hasPermission('mod:install')">
-                    全部更新 ({{ subscribedSummary.outdated }})
+                    全部更新 ({{ updatableMods.length }})
                   </NButton>
                   <NButton
                     v-if="(checkedRowKeys.length > 0) && hasPermission('mod:install')"
@@ -1980,7 +2117,7 @@ onMounted(async () => {
                     重试全部失败 ({{ subscribedSummary.failed }})
                   </NButton>
                   <span class="text-xs text-muted-foreground">
-                    共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · 下载中 {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
+                    共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · {{ pendingStatusLabel }} {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
                     <template v-if="lastUpdateCheckedAt"> · 上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</template>
                   </span>
                 </div>
@@ -1993,6 +2130,40 @@ onMounted(async () => {
                 >
                   {{ modCheckHint }}
                 </NAlert>
+                <div
+                  v-if="queuePanel"
+                  class="mb-2 flex shrink-0 flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs"
+                >
+                  <span class="flex-1">{{ queuePanel.text }}</span>
+                  <NButton
+                    v-if="queuePanel.showStart && hasPermission('mod:install')"
+                    size="tiny"
+                    type="primary"
+                    :loading="queueActionPending"
+                    @click="runQueueAction('start')"
+                  >
+                    开始下载
+                  </NButton>
+                  <NButton
+                    v-if="queuePanel.showPause && hasPermission('mod:install')"
+                    size="tiny"
+                    secondary
+                    :loading="queueActionPending"
+                    @click="runQueueAction('pause')"
+                  >
+                    暂停
+                  </NButton>
+                  <NButton
+                    v-if="queuePanel.showCancel && hasPermission('mod:install')"
+                    size="tiny"
+                    type="warning"
+                    secondary
+                    :loading="queueActionPending"
+                    @click="runQueueAction('cancel')"
+                  >
+                    取消当前批次
+                  </NButton>
+                </div>
                 <NDataTable
                   v-if="!isMobileMode"
                   :key="`subscribed-${selectedInstanceId}`"
@@ -2026,14 +2197,14 @@ onMounted(async () => {
                       检查更新
                     </NButton>
                     <NButton
-                      v-if="(subscribedSummary.outdated > 0) && hasPermission('mod:install')"
+                      v-if="(updatableMods.length > 0) && hasPermission('mod:install')"
                       size="small"
                       type="primary"
                       secondary
                       :loading="batchUpdating"
                       @click="updateAllOutdatedMods"
                     >
-                      全部更新 ({{ subscribedSummary.outdated }})
+                      全部更新 ({{ updatableMods.length }})
                     </NButton>
                     <NButton
                       v-if="(subscribedSummary.failed > 0) && hasPermission('mod:install')"
@@ -2047,7 +2218,7 @@ onMounted(async () => {
                     </NButton>
                   </div>
                   <p class="text-xs text-muted-foreground">
-                    共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · 下载中 {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
+                    共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · {{ pendingStatusLabel }} {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
                     <template v-if="lastUpdateCheckedAt"> · 上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</template>
                   </p>
                   <NEmpty v-if="!loadingInstalled && installedMods.length === 0" size="small" :description="subscribedEmptyDescription" />

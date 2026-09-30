@@ -4,6 +4,7 @@ import type {
   ModConfigPayload,
   ModConfigSaveResult,
   ModDeleteResult,
+  ModDownloadQueueDto,
   ModInstallJobDto,
   ModInstallPayload,
   ModListDto,
@@ -30,6 +31,8 @@ export type {
   ModConfigSaveResult,
   ModConfigValues,
   ModDeleteResult,
+  ModDownloadQueueDto,
+  ModDownloadQueueStatus,
   ModInstallJobDto,
   ModInstallJobPhase,
   ModInstallJobStatus,
@@ -162,6 +165,15 @@ export default {
     api.put(`app/instances/${instanceId}/mods/${modId}/config`, payload) as Promise<{ data: ModConfigSaveResult }>,
   reorderMods: (instanceId: string, payload: ModReorderPayload) =>
     api.put(`app/instances/${instanceId}/mods/reorder`, payload) as Promise<{ data: ModReorderResult }>,
+  /** 实例级下载队列状态：前端只轮询这一个接口，不再为每个 Mod 各起一个轮询 */
+  getModDownloadQueue: (instanceId: string) =>
+    api.get(`app/instances/${instanceId}/mods/download-queue`) as Promise<{ data: ModDownloadQueueDto }>,
+  startModDownloadQueue: (instanceId: string) =>
+    api.post(`app/instances/${instanceId}/mods/download-queue/start`, {}) as Promise<{ data: ModDownloadQueueDto }>,
+  pauseModDownloadQueue: (instanceId: string) =>
+    api.post(`app/instances/${instanceId}/mods/download-queue/pause`, {}) as Promise<{ data: ModDownloadQueueDto }>,
+  cancelModDownloadQueue: (instanceId: string) =>
+    api.post(`app/instances/${instanceId}/mods/download-queue/cancel`, {}) as Promise<{ data: ModDownloadQueueDto }>,
   deleteMod: (instanceId: string, modId: string) =>
     api.delete(`app/instances/${instanceId}/mods/${modId}`) as Promise<{ data: ModDeleteResult }>,
 }

@@ -162,7 +162,12 @@ export async function downloadDstWorkshopMods(input: {
   onLogLine?: (line: string) => void
   onAwaitingSteamcmdLock?: () => void | Promise<void>
   onDownloadStart?: () => void | Promise<void>
-}): Promise<{ ok: boolean, error?: string }> {
+  /**
+   * SteamCMD 任务的取消键。队列传 `modq-<instanceId>`，与实例安装（`<instanceId>`）
+   * 分开：两类任务共用同一个键时，取消 Mod 下载会连带杀掉正在跑的游戏安装。
+   */
+  cancelKey?: string
+}): Promise<{ ok: boolean, error?: string, cancelled?: boolean }> {
   const missingIds = resolveWorkshopDownloadIds(input.hostInstallPath, input.workshopIds, {
     force: input.force,
   })
@@ -173,7 +178,7 @@ export async function downloadDstWorkshopMods(input: {
   const result = await runSteamcmdWorkshopDownloadInContainer({
     hostInstallPath: input.hostInstallPath,
     workshopIds: missingIds,
-    cancelKey: input.instanceId,
+    cancelKey: input.cancelKey?.trim() || input.instanceId,
     onLogLine: input.onLogLine,
     onAwaitingSteamcmdLock: input.onAwaitingSteamcmdLock,
     onDownloadStart: input.onDownloadStart,
@@ -183,7 +188,10 @@ export async function downloadDstWorkshopMods(input: {
   if (!result.ok) {
     return {
       ok: false,
-      error: formatModDownloadFailureMessage(result.output),
+      error: result.cancelled
+        ? '下载已取消'
+        : formatModDownloadFailureMessage(result.output),
+      cancelled: result.cancelled === true,
     }
   }
 

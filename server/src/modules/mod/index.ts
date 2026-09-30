@@ -5,7 +5,9 @@ import type {
   ModConfigDto,
   ModConfigSaveResult,
   ModDeleteResult,
+  ModDownloadQueueDto,
   ModInstallJobDto,
+  ModInstallPayload,
   ModInstallStatus,
   ModItemDto,
   ModListDto,
@@ -64,15 +66,24 @@ import { businessError, success } from '../../shared/http/response'
 import type { PermissionKey } from '../../../../shared/constants/permissions'
 import { authorizeInstance } from '../system/auth'
 import {
+  cancelModDownloadQueue,
   enqueueModDownload,
-  ensurePendingModDownloadsRecovered,
+  enqueueModDownloads,
+  getModDownloadQueueSnapshot,
+  isModDownloadAutoStartEnabled,
   listModInstallJobs,
+  pauseModDownloadQueue,
+  resolveModDownloadQueueState,
   resolveModInstallJob,
+  startModDownloadQueue,
 } from './mod-download-service'
 
 function normalizeWorkshopId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
+
+/** 单次 Mod 列表请求补缩略图的上限（见 enrichMissingModPreviewImages） */
+const PREVIEW_ENRICH_LIMIT = 12
 
 function normalizeDependencyIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -275,10 +286,21 @@ function buildActiveInstallJobs(
   mods: Awaited<ReturnType<typeof listInstanceMods>>,
 ): ModInstallJobDto[] {
   const memoryJobs = listModInstallJobs(instanceId)
+  const queue = getModDownloadQueueSnapshot(instanceId)
+  const queueRunning = queue?.status === 'running' || queue?.status === 'pausing'
+  if (!queueRunning || !queue) {
+    // 队列没在跑就不再伪造「下载中」：迁移包导入后 pending 会挂很久，
+    // 合成任务会让用户以为一直在下载，而实际等待的是「开始下载」这一步
+    return memoryJobs
+  }
   const trackedIds = new Set(memoryJobs.map(job => job.workshopId))
+  const queueIds = new Set([...queue.currentWorkshopIds, ...queue.queueWorkshopIds])
   const syntheticJobs: ModInstallJobDto[] = []
   for (const mod of mods) {
     if (mod.installStatus !== 'pending' || trackedIds.has(mod.workshopId)) {
+      continue
+    }
+    if (!queueIds.has(mod.workshopId)) {
       continue
     }
     syntheticJobs.push({
@@ -310,9 +332,12 @@ function collectPendingWorkshopIds(
 }
 
 async function enrichMissingModPreviewImages(instanceId: string, mods: Awaited<ReturnType<typeof listInstanceMods>>) {
+  // 单次列表请求最多补这么多个缩略图：迁移包导入后可能几十个 Mod 都没图，
+  // 一次全问上游会把列表接口拖到超时，缺的留给后续刷新分批补
   const missingIds = mods
     .filter(mod => !mod.previewImage?.trim())
     .map(mod => mod.workshopId)
+    .slice(0, PREVIEW_ENRICH_LIMIT)
   if (missingIds.length === 0) {
     return
   }
@@ -438,16 +463,19 @@ export function registerModModule(app: FastifyInstance) {
       if (!fs.existsSync(installPath)) {
         continue
       }
-      // 先按磁盘校准状态：缺内容的从「已就绪」降级为等待下载，才能被下面的下载队列接手
+      // 先按磁盘校准状态：缺内容的从「已就绪」降级为等待下载，才能被下载队列接手
       const readiness = await reconcileInstanceModReadiness({
         instanceId: instance.id,
         installPath,
       })
       logModReadinessResult(app, instance.id, readiness)
-      await ensurePendingModDownloadsRecovered({
-        instanceId: instance.id,
-        installPath,
-      })
+      // 默认不自动开跑：pending 原样留在库里，用户在 Mod 页点「开始下载」才逐批处理
+      if (isModDownloadAutoStartEnabled()) {
+        await startModDownloadQueue({
+          instanceId: instance.id,
+          installPath,
+        })
+      }
       // 不阻塞面板启动：落位与失败标注在后台补齐（DST 只从 ugc_mods 加载创意工坊 Mod）
       void reconcileInstanceModReadiness({
         instanceId: instance.id,
@@ -483,16 +511,13 @@ export function registerModModule(app: FastifyInstance) {
       return resolved.error
     }
     try {
-      // 列表口径必须与磁盘一致：先把缺内容的记录降级为等待下载，再交给下载队列补齐
+      // 列表口径必须与磁盘一致：先把缺内容的记录降级为等待下载；
+      // 真正的下载由队列负责，列表接口保持只读（不再顺手入队，避免每次刷新都触发下载风暴）
       const readiness = await reconcileInstanceModReadiness({
         instanceId,
         installPath: resolved.instance.installPath,
       })
       logModReadinessResult(app, instanceId, readiness)
-      await ensurePendingModDownloadsRecovered({
-        instanceId,
-        installPath: resolved.instance.installPath,
-      })
       const enrich = parseModListEnrich(parsedQuery.data.enrich)
       const payload = await buildModListPayload(instanceId, enrich)
       return success(payload, request)
@@ -694,11 +719,12 @@ export function registerModModule(app: FastifyInstance) {
       return resolved.error
     }
     const workshopIds = [...new Set(parsedBody.data.workshopIds.map(id => id.trim()).filter(Boolean))]
-    const jobs: ModInstallJobDto[] = []
+    const payloads: ModInstallPayload[] = []
+    const notFoundJobs: ModInstallJobDto[] = []
     for (const workshopId of workshopIds) {
       const mod = await getInstanceModByWorkshopId(instanceId, workshopId)
       if (!mod) {
-        jobs.push({
+        notFoundJobs.push({
           instanceId,
           workshopId,
           status: 'not_found',
@@ -709,18 +735,27 @@ export function registerModModule(app: FastifyInstance) {
         })
         continue
       }
-      const job = await enqueueModDownload({
-        instanceId,
-        installPath: resolved.instance.installPath,
-        payload: {
-          workshopId,
-          name: mod.name,
-          previewImage: mod.previewImage ?? undefined,
-        },
-        force: true,
+      payloads.push({
+        workshopId,
+        name: mod.name,
+        previewImage: mod.previewImage ?? undefined,
       })
-      jobs.push(await enrichInstallJobDto(instanceId, job))
     }
+    // 一次把整批交给队列：逐个入队会让每个 Mod 各成一批，等于多跑几次 SteamCMD
+    const startedJobs = payloads.length > 0
+      ? await enqueueModDownloads({
+          instanceId,
+          installPath: resolved.instance.installPath,
+          payloads,
+          force: true,
+        })
+      : []
+    const jobByWorkshopId = new Map(
+      [...startedJobs, ...notFoundJobs].map(job => [job.workshopId, job]),
+    )
+    const jobs = workshopIds
+      .map(workshopId => jobByWorkshopId.get(workshopId))
+      .filter((job): job is ModInstallJobDto => Boolean(job))
     return success(jobs, request)
   })
 
@@ -780,8 +815,133 @@ export function registerModModule(app: FastifyInstance) {
           ? normalizeDependencyIds(rawIds.split(','))
           : undefined)
     const jobs = listModInstallJobs(instanceId, workshopIds)
-    const enriched = await Promise.all(jobs.map(job => enrichInstallJobDto(instanceId, job)))
-    return success(enriched, request)
+    // 批量查询不做逐条 enrich：那会按 job 数各读一次库并解析 lua，
+    // 前端现在按队列状态渲染，不再需要每个 job 都带上完整 Mod
+    return success(jobs, request)
+  })
+
+  /**
+   * 实例级 Mod 下载队列状态。
+   *
+   * 前端只轮询这一个接口（默认 3 秒）：一个实例只有一条队列、一个 Queue Manager，
+   * 不再为每个 Mod 各起一个轮询。
+   */
+  app.get('/app/instances/:instanceId/mods/download-queue', async (request): Promise<ApiSuccessResponse<ModDownloadQueueDto> | ApiErrorResponse> => {
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) {
+      return authorized.error
+    }
+    const parsedParams = modInstanceParamsSchema.safeParse(request.params)
+    if (!parsedParams.success) {
+      return businessError('请求参数无效', request)
+    }
+    const instanceId = parsedParams.data.instanceId
+    const resolved = await resolveLocalDstInstance(instanceId, request, {
+      messages: {
+        wrongNode: '当前仅支持本地节点实例 Mod 管理',
+        wrongGame: '当前仅支持 DST 实例 Mod 管理',
+        missingInstallPath: '实例安装目录不存在，请先完成安装',
+      },
+    })
+    if (!resolved.ok) {
+      return resolved.error
+    }
+    const queue = await resolveModDownloadQueueState({
+      instanceId,
+      installPath: resolved.instance.installPath,
+    })
+    return success(queue, request)
+  })
+
+  /** 开始/继续下载队列（幂等：已在跑时返回当前状态） */
+  app.post('/app/instances/:instanceId/mods/download-queue/start', async (request): Promise<ApiSuccessResponse<ModDownloadQueueDto> | ApiErrorResponse> => {
+    const authorized = await authorizeModInstance(request, 'mod:install')
+    if (authorized.error) {
+      return authorized.error
+    }
+    const parsedParams = modInstanceParamsSchema.safeParse(request.params)
+    if (!parsedParams.success) {
+      return businessError('请求参数无效', request)
+    }
+    const instanceId = parsedParams.data.instanceId
+    const resolved = await resolveLocalDstInstance(instanceId, request, {
+      messages: {
+        wrongNode: '当前仅支持本地节点实例 Mod 管理',
+        wrongGame: '当前仅支持 DST 实例 Mod 管理',
+        missingInstallPath: '实例安装目录不存在，请先完成安装',
+      },
+    })
+    if (!resolved.ok) {
+      return resolved.error
+    }
+    const queue = await startModDownloadQueue({
+      instanceId,
+      installPath: resolved.instance.installPath,
+      retryFailed: true,
+    })
+    return success(queue, request)
+  })
+
+  /** 暂停队列：当前批次跑完后停在批次边界 */
+  app.post('/app/instances/:instanceId/mods/download-queue/pause', async (request): Promise<ApiSuccessResponse<ModDownloadQueueDto> | ApiErrorResponse> => {
+    const authorized = await authorizeModInstance(request, 'mod:install')
+    if (authorized.error) {
+      return authorized.error
+    }
+    const parsedParams = modInstanceParamsSchema.safeParse(request.params)
+    if (!parsedParams.success) {
+      return businessError('请求参数无效', request)
+    }
+    const instanceId = parsedParams.data.instanceId
+    const resolved = await resolveLocalDstInstance(instanceId, request, {
+      messages: {
+        wrongNode: '当前仅支持本地节点实例 Mod 管理',
+        wrongGame: '当前仅支持 DST 实例 Mod 管理',
+        missingInstallPath: '实例安装目录不存在，请先完成安装',
+      },
+    })
+    if (!resolved.ok) {
+      return resolved.error
+    }
+    const paused = pauseModDownloadQueue(instanceId)
+    if (paused) {
+      return success(paused, request)
+    }
+    return success(await resolveModDownloadQueueState({
+      instanceId,
+      installPath: resolved.instance.installPath,
+    }), request)
+  })
+
+  /** 取消当前批次（杀掉正在跑的 SteamCMD）并暂停；未完成的项保持待下载 */
+  app.post('/app/instances/:instanceId/mods/download-queue/cancel', async (request): Promise<ApiSuccessResponse<ModDownloadQueueDto> | ApiErrorResponse> => {
+    const authorized = await authorizeModInstance(request, 'mod:install')
+    if (authorized.error) {
+      return authorized.error
+    }
+    const parsedParams = modInstanceParamsSchema.safeParse(request.params)
+    if (!parsedParams.success) {
+      return businessError('请求参数无效', request)
+    }
+    const instanceId = parsedParams.data.instanceId
+    const resolved = await resolveLocalDstInstance(instanceId, request, {
+      messages: {
+        wrongNode: '当前仅支持本地节点实例 Mod 管理',
+        wrongGame: '当前仅支持 DST 实例 Mod 管理',
+        missingInstallPath: '实例安装目录不存在，请先完成安装',
+      },
+    })
+    if (!resolved.ok) {
+      return resolved.error
+    }
+    const cancelled = await cancelModDownloadQueue(instanceId)
+    if (cancelled) {
+      return success(cancelled, request)
+    }
+    return success(await resolveModDownloadQueueState({
+      instanceId,
+      installPath: resolved.instance.installPath,
+    }), request)
   })
 
   app.put('/app/instances/:instanceId/mods/:modId', async (request): Promise<ApiSuccessResponse<ModMutationResult> | ApiErrorResponse> => {

@@ -49,7 +49,7 @@ import {
 import type { DbGameInstance } from '../../shared/db/index'
 import { createInstanceBackupUnlocked } from './backup-service'
 import { InstanceArchiveBusyError, withInstanceArchiveOperationLock } from './archive-lock'
-import { ensurePendingModDownloadsRecovered } from '../mod/mod-download-service'
+import { isModDownloadAutoStartEnabled, startModDownloadQueue } from '../mod/mod-download-service'
 import { syncInstanceModFilesFromDb } from '../mod/mod-file-sync-service'
 import { MISSING_MOD_CONTENT_ERROR } from '../mod/mod-readiness-service'
 
@@ -688,15 +688,18 @@ async function importSaveToInstanceLocked(options: ImportSaveToInstanceOptions):
       warnings.push('Mod 列表写入面板数据库失败，请到 Mod 页面手动核对，否则下次同步可能丢失导入 Mod 配置')
     }
     if (modSync.missingWorkshopContent.length > 0) {
-      warnings.push(`${modSync.missingWorkshopContent.length} 个 Mod 的创意工坊内容尚未下载，面板已加入下载队列，可在「世界设置 → 模组」查看进度`)
+      warnings.push(`${modSync.missingWorkshopContent.length} 个 Mod 的创意工坊内容尚未下载：面板不自动下载，请在「世界设置 → 模组」点「开始下载」按批补齐`)
     }
     if (modSync.modSyncOk) {
       try {
         // 只把真正就绪的 Mod 写进 modoverrides.lua：否则 DST 每次启动都会自行补下载，
         // legacy 包在容器网络下常超时失败，玩家进游戏只看到一部分 Mod。
         await syncInstanceModFilesFromDb(instanceId, installPath)
-        // 缺失内容交给面板自己的下载队列补齐（与面板启动、Mod 列表同一机制）
-        await ensurePendingModDownloadsRecovered({ instanceId, installPath })
+        // 缺失内容默认不在导入过程里开跑：几十个 Mod 一起下会长时间占住 SteamCMD 串行锁，
+        // 由用户在 Mod 页显式点「开始下载」，队列再逐批处理（GSH_MOD_DOWNLOAD_AUTO_START=1 恢复自动）
+        if (isModDownloadAutoStartEnabled()) {
+          await startModDownloadQueue({ instanceId, installPath })
+        }
       }
       catch (error) {
         const message = error instanceof Error ? error.message : String(error)

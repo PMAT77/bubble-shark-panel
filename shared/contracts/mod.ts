@@ -92,6 +92,44 @@ export interface ModInstallJobDto {
   mod?: ModItemDto
 }
 
+/**
+ * 实例级 Mod 下载队列状态。
+ *
+ * 一个实例只有一条队列、一个 Queue Manager 负责选批：前端只轮询这一个接口，
+ * 不再为每个 Mod 各起一个轮询。
+ */
+export type ModDownloadQueueStatus = 'idle' | 'running' | 'pausing' | 'paused'
+
+export interface ModDownloadQueueDto {
+  instanceId: string
+  status: ModDownloadQueueStatus
+  /** 本次队列的目标总数（未开始时 = 当前可下载候选数） */
+  total: number
+  /** 尚未处理（含等待退避的） */
+  queued: number
+  /** 当前批次内正在下载的 Mod 数 */
+  downloading: number
+  /** 本次队列已成功数 */
+  success: number
+  /** 本次队列已失败数（退避用尽） */
+  failed: number
+  /** 当前批次里的 Mod（批内是多个，故不用单数） */
+  currentWorkshopIds: string[]
+  /** 队列里还没处理的 Mod（去重后） */
+  queueWorkshopIds: string[]
+  /** 单批上限 */
+  batchSize: number
+  /** 当前批次序号（从 1 开始；未开始为 0） */
+  currentBatchIndex: number
+  /** 退避等待中的下次可尝试时间（ISO）；无等待为 null */
+  nextBatchAt: string | null
+  startedAt: string | null
+  updatedAt: string | null
+  lastError: string | null
+  /** 选批时跳过或需要注意的项（例如被禁用的依赖） */
+  warnings: string[]
+}
+
 export interface ModReorderResult {
   saved: true
   riskTip: string | null

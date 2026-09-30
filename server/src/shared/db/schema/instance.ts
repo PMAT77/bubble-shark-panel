@@ -61,6 +61,13 @@ export const instanceMods = sqliteTable('instance_mods', {
    */
   loadedCopyStale: integer('loaded_copy_stale').notNull().default(0),
   config: text('config'),
+  /**
+   * 连续下载失败次数，供队列做指数退避（10s / 30s / 60s，最多 3 次）；成功即清零。
+   * 落在库里而不是内存里：面板重启后队列从 pending 恢复，退避进度同样不能丢。
+   */
+  retryCount: integer('retry_count').notNull().default(0),
+  /** 退避等待的下次可尝试时间（ISO）；null = 立即可尝试 */
+  nextRetryAt: text('next_retry_at'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 })

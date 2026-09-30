@@ -211,6 +211,8 @@ function mapDbInstanceMod(row: {
   updateCheckedAt: string | null
   loadedCopyStale: number
   config: string | null
+  retryCount: number
+  nextRetryAt: string | null
   createdAt: string
   updatedAt: string
 }): DbInstanceMod {
@@ -224,6 +226,8 @@ function mapDbInstanceMod(row: {
     installStatus,
     installError: row.installError?.trim() || null,
     loadedCopyStale: Number(row.loadedCopyStale) === 1,
+    retryCount: Math.max(0, Math.trunc(Number(row.retryCount) || 0)),
+    nextRetryAt: row.nextRetryAt?.trim() || null,
   }
 }
 
@@ -251,6 +255,8 @@ export async function listInstanceMods(instanceId: string): Promise<DbInstanceMo
       updateCheckedAt: instanceMods.updateCheckedAt,
       loadedCopyStale: instanceMods.loadedCopyStale,
       config: instanceMods.config,
+      retryCount: instanceMods.retryCount,
+      nextRetryAt: instanceMods.nextRetryAt,
       createdAt: instanceMods.createdAt,
       updatedAt: instanceMods.updatedAt,
     })
@@ -279,6 +285,8 @@ export async function getInstanceModByWorkshopId(instanceId: string, workshopId:
       updateCheckedAt: instanceMods.updateCheckedAt,
       loadedCopyStale: instanceMods.loadedCopyStale,
       config: instanceMods.config,
+      retryCount: instanceMods.retryCount,
+      nextRetryAt: instanceMods.nextRetryAt,
       createdAt: instanceMods.createdAt,
       updatedAt: instanceMods.updatedAt,
     })
@@ -307,6 +315,8 @@ export async function upsertInstanceMod(input: {
   updateCheckedAt?: string | null
   loadedCopyStale?: boolean
   config?: string | null
+  retryCount?: number
+  nextRetryAt?: string | null
 }): Promise<DbInstanceMod> {
   const { drizzleDb } = ensureDb()
   const now = nowIso()
@@ -335,6 +345,12 @@ export async function upsertInstanceMod(input: {
   const loadedCopyStale = typeof input.loadedCopyStale === 'undefined'
     ? undefined
     : (input.loadedCopyStale ? 1 : 0)
+  const retryCount = typeof input.retryCount === 'undefined'
+    ? undefined
+    : Math.max(0, Math.trunc(input.retryCount))
+  const nextRetryAt = typeof input.nextRetryAt === 'undefined'
+    ? undefined
+    : (input.nextRetryAt?.trim() || null)
   await drizzleDb
     .insert(instanceMods)
     .values({
@@ -353,6 +369,8 @@ export async function upsertInstanceMod(input: {
       updateCheckedAt: updateCheckedAt ?? null,
       loadedCopyStale: loadedCopyStale ?? 0,
       config: config ?? null,
+      retryCount: retryCount ?? 0,
+      nextRetryAt: nextRetryAt ?? null,
       createdAt: now,
       updatedAt: now,
     })
@@ -371,6 +389,8 @@ export async function upsertInstanceMod(input: {
         ...(typeof updateCheckedAt !== 'undefined' ? { updateCheckedAt } : {}),
         ...(typeof loadedCopyStale !== 'undefined' ? { loadedCopyStale } : {}),
         ...(typeof config !== 'undefined' ? { config } : {}),
+        ...(typeof retryCount !== 'undefined' ? { retryCount } : {}),
+        ...(typeof nextRetryAt !== 'undefined' ? { nextRetryAt } : {}),
         updatedAt: now,
       },
     })
@@ -397,6 +417,8 @@ export async function updateInstanceModByWorkshopId(
     updateCheckedAt?: string | null
     loadedCopyStale?: boolean
     config?: string | null
+    retryCount?: number
+    nextRetryAt?: string | null
   },
 ): Promise<DbInstanceMod | undefined> {
   const { drizzleDb } = ensureDb()
@@ -413,6 +435,8 @@ export async function updateInstanceModByWorkshopId(
     updateCheckedAt?: string | null
     loadedCopyStale?: number
     config?: string | null
+    retryCount?: number
+    nextRetryAt?: string | null
     updatedAt: string
   } = {
     updatedAt: nowIso(),
@@ -452,6 +476,12 @@ export async function updateInstanceModByWorkshopId(
   }
   if (typeof patch.config !== 'undefined') {
     payload.config = patch.config?.trim() || null
+  }
+  if (typeof patch.retryCount !== 'undefined') {
+    payload.retryCount = Math.max(0, Math.trunc(patch.retryCount))
+  }
+  if (typeof patch.nextRetryAt !== 'undefined') {
+    payload.nextRetryAt = patch.nextRetryAt?.trim() || null
   }
   await drizzleDb
     .update(instanceMods)

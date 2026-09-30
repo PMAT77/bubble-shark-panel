@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-01
+
 ### Added
 
 - Mod 下载队列状态接口 `GET /app/instances/:instanceId/mods/download-queue`，以及开始、暂停、取消当前批次的三个写接口。

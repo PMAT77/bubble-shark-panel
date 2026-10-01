@@ -636,6 +636,17 @@ df() {
   return 0
 }
 read_host_mem_total_mb() { printf '%s' "${STUB_MEM_MB}"; }
+# 创建 swapfile 需要 root，而 CI runner 与本地开发者都不是 root：实现里的 id -u 检查
+# 是必需的（非 root 时确实不该动 swap），这里只把它 stub 成「本节以 root 运行」，
+# 好让「小内存 + 无 swap → 创建」这条路径能被测到。`id -un` 仍走真实实现，
+# 上面的 native update 用例要用它比对请求文件的属主。
+id() {
+  if [[ "${1:-}" == '-u' ]]; then
+    printf '0\n'
+    return 0
+  fi
+  command id "$@"
+}
 
 # 1) 小内存 + 已有生效中的 swap：一个字节都不许改（幂等）
 # 内存必须设在阈值以下：内存够大时实现本来就会整体跳过 swap 处理，那样这条用例

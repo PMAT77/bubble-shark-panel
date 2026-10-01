@@ -18,22 +18,22 @@ SMOKE_INSTALLED_TAG='v0.6.0'
 # 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
 SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.13.2 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${GSH_RELEASE_TAG}" == "v0.13.2" ]]
+# v0.13.3 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${GSH_RELEASE_TAG}" == "v0.13.3" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.13.2"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.13.3"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.13.2" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.13.3" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 
@@ -600,7 +600,7 @@ if grep -Fq -- '--check' "${SCRIPT_DIR}/../README.md" || grep -Fq -- '--check' "
 fi
 
 # ---- 小内存机自动 swap：文件标记法驱动 swapon stub ----
-# 创建 swap 需要 root，面板自己做不到（面板不以 root 运行），所以这件事必须在安装阶段做掉。
+# 创建缓存区需要 root，面板自己做不到（面板不以 root 运行），所以这件事必须在安装阶段做掉。
 # 标记文件让「调用前无 swap、调用后有 swap」可以按顺序模拟，而不用在同一轮里做状态机。
 SWAP_TEST_DIR="$(mktemp -d)"
 SWAP_MARKER="${SWAP_TEST_DIR}/swap-active"
@@ -650,7 +650,7 @@ id() {
 
 # 1) 小内存 + 已有生效中的 swap：一个字节都不许改（幂等）
 # 内存必须设在阈值以下：内存够大时实现本来就会整体跳过 swap 处理，那样这条用例
-# 验到的只是「大内存机器不碰 swap」，验不到「已有 swap 时不重复创建」。
+# 验到的只是「大内存机器不碰 swap」，验不到「已有缓存区时不重复创建」。
 STUB_MEM_MB='3915'
 : > "${SWAP_MARKER}"
 AUTO_SWAP_STATE='none'

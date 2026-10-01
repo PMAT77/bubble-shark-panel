@@ -2,7 +2,7 @@
 
 本文件记录面向用户的版本变更，格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.13.2] - 2026-10-01
 
 ### Fixed
 
@@ -10,6 +10,7 @@
 - **内置的世界种子 Mod 同样只写 `ugc_mods`**：它也不进 `dedicated_server_mods_setup.lua`，因此此前和普通 Mod 一样不会被游戏加载。现在同样接入 `mods/workshop-<id>`；但只有在两个分片用同一个种子（或没开洞穴）时才接入——`mods/` 是两个分片共用的一份，接过去会让洞穴也用上地上世界的种子，那比内置 Mod 不生效更糟。
 - **确认 Mod 有没有真被加载不必再翻日志找答案**：主世界的 Mod 索引完成后，控制台会写明「本次启动已加载 N 个 Mod（面板启用 M 个）」，一个都没加载时直接点出来并提示去「模组管理」核对，同时列出已启用但未被加载的那些。
 - **v0.13.1 的发布流水线卡在类型检查，Release 与镜像都没有产出**：房间设置、世界设置、实例管理三个页面为了给内存压力提示带上跳转回调，引入了 `import router from '@/router'`，而这三个文件里本来就写着 `const router = useRouter()`，`vue-tsc` 直接报 `Import declaration conflicts with local declaration of 'router'`，CI 与 Container Pipeline 双双失败。运行时被局部声明遮蔽，看不出任何异常，只有类型检查会拦下。现在删掉这三处多余导入，统一用组件内的 `useRouter()`；v0.13.1 的功能改动全部并入 v0.13.2 一起发布。
+- **内存压力提示在拿不到当前地址时会抛错**：`buildMonitorHref` 的默认参数直接读 `location.href`，只判断了 `location` 本身在不在。当宿主注入了 `location` 却没有 `href` 时（单元测试环境正是这样）会抛 `TypeError`，整条通知连同那个浏览器原生兜底的 `<a href>` 都渲染不出来——而它本来就是为「跳转失败也别白点」准备的。现在只在确实取到字符串时才用，否则按「没有 hash」处理。这也是 v0.13.1 的 Unit tests 步骤失败的原因。
 
 ## [0.13.1] - 2026-10-01
 

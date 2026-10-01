@@ -42,13 +42,24 @@ export function isSwapConfigured(data: Pick<HostMemoryPressureData, 'swapFreeMb'
 }
 
 /**
+ * 当前地址。非浏览器环境、或 `location` 由宿主注入却没有 `href` 时返回空串。
+ *
+ * 这个函数在通知的渲染路径上被调用：拿不到地址只该退化成「没有 hash 的普通链接」，
+ * 不能抛错——一旦抛错，整条通知（含那个浏览器原生兜底的 `<a href>`）都渲染不出来。
+ */
+function readCurrentHref(): string {
+  const raw = (globalThis as { location?: { href?: unknown } }).location?.href
+  return typeof raw === 'string' ? raw : ''
+}
+
+/**
  * 监控台的 `<a href>`。
  *
  * hash 模式（默认）下 `#/…` 本身就是可用的地址，vue-router 也会接住这次 hashchange；
  * 这里刻意不读 router 也不读应用设置，就是为了让兜底不受任何模块加载顺序影响。
  */
 export function buildMonitorHref(
-  currentHref = typeof location === 'undefined' ? '' : location.href,
+  currentHref = readCurrentHref(),
   baseUrl = '/',
 ): string {
   const path = FRONTEND_ROUTE_PATHS.consoleMonitor

@@ -571,7 +571,7 @@ export function registerSystemModule(app: FastifyInstance) {
       freeGb: number
       usageRate: number
       availableGb: number | null
-      /** 未配置交换区时为 null —— 与「配置了但已用满」必须能区分开 */
+      /** 未配置缓存区时为 null —— 与「配置了但已用满」必须能区分开 */
       swap: {
         totalGb: number
         usedGb: number

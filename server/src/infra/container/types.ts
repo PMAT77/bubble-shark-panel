@@ -62,6 +62,23 @@ export interface ContainerInspect {
   /** 累计重启次数（Native 取 systemd 的 `NRestarts`）；Docker 运行时不填 */
   restarts?: number
   /**
+   * 当前进程已连续运行的秒数。
+   *
+   * 与 `startedAt` 的区别是它跨运行时可用、且已经换算成时长：区分「正在崩溃循环」与
+   * 「启动时崩过一次、之后一直稳跑」只能靠它，`restarts` 是累计值，两者分不开。
+   */
+  uptimeSeconds?: number
+  /**
+   * 该单元被 cgroup 按内存上限杀掉的累计次数（cgroup v2 `memory.events` 的 `oom_kill`）。
+   *
+   * 这是"因内存不足失败"最确凿的证据，而且**进程被自动拉起后计数仍在**——systemd 的
+   * `Result` 会在重启成功后重置成 success，光靠它查不出线上那次 OOM。读不到（Docker 模式、
+   * cgroup v1、权限不足）时不填，调用方退回推断。
+   */
+  memOomKillCount?: number
+  /** 该单元的内存峰值（MiB，systemd 的 `MemoryPeak`）；读不到时不填 */
+  memPeakMb?: number
+  /**
    * 探测本身失败（运行时不可达）：此时 `running: false` 只代表「问不到」，
    * 不代表实例真的停了。调用方据此保持现状，而不是把运行中的实例标成已停止。
    */
@@ -71,6 +88,8 @@ export interface ContainerInspect {
 export interface ContainerStats {
   cpuUsageRate: number | null
   memoryMb: number | null
+  /** 当前进程已连续运行的秒数；运行时给不出时为 null（调用方据此退回面板记录的启动时刻） */
+  uptimeSeconds?: number | null
 }
 
 export interface ContainerRuntime {

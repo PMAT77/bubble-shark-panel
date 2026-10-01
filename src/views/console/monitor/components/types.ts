@@ -22,7 +22,7 @@ export interface SystemInfoData {
     freeGb: number
     usageRate: number
     availableGb: number | null
-    /** 未配置交换区时为 null —— 与「配置了但已用满」是两种处境 */
+    /** 未配置缓存区时为 null —— 与「配置了但已用满」是两种处境 */
     swap: {
       totalGb: number
       usedGb: number

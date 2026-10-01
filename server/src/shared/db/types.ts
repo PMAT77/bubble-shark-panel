@@ -83,6 +83,15 @@ export type DbInstallLogStatus = 'running' | 'success' | 'failed'
  */
 export type DbInstanceErrorPhase = 'install' | 'runtime'
 
+/**
+ * 实例未就绪/启动失败的归因。
+ *
+ * memory = 有内存不足的证据（cgroup OOM 计数、systemd 的 oom-kill、反复重启且可用缓冲见底）；
+ * not_ready = 其余未就绪情形（例如某个 Mod 报错）。前端据此决定要不要给出「增加缓存区」引导，
+ * 所以必须是枚举而不是从告警文案里认。
+ */
+export type DbInstanceRuntimeFailureKind = 'memory' | 'not_ready'
+
 export interface DbGameInstance {
   id: string
   nodeId: string
@@ -104,6 +113,10 @@ export interface DbGameInstance {
   lastErrorPhase: DbInstanceErrorPhase | null
   /** 运行期警告（重启循环 / 退出原因 / 分片残留）；与 lastError 分开，停止实例不清空 */
   runtimeWarning: string | null
+  /** 本轮启动出现世界就绪标记的时刻（ISO）；尚未就绪或未运行为 null */
+  runtimeReadyAt: string | null
+  /** 未就绪/启动失败的归因；无结论为 null（见 schema 注释） */
+  runtimeFailureKind: DbInstanceRuntimeFailureKind | null
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
   unexpectedExitAt: string | null
   installLogStatus: DbInstallLogStatus | null
@@ -154,6 +167,10 @@ export interface UpdateGameInstanceRuntimeInput {
   /** 与 lastError 同一次写入给出；非空 lastError 不带环节时前端按 runtime 兜底 */
   lastErrorPhase?: DbInstanceErrorPhase | null
   runtimeWarning?: string | null
+  /** 世界就绪时刻；启动实例时清空，就绪后写入 */
+  runtimeReadyAt?: string | null
+  /** 未就绪/启动失败的归因；重新启动或就绪后清空 */
+  runtimeFailureKind?: DbInstanceRuntimeFailureKind | null
   unexpectedExitAt?: string | null
   installLogStatus?: DbInstallLogStatus | null
   installPercent?: number | null

@@ -15,16 +15,34 @@ describe('describeSystemdExitReason 的内存补充判断', () => {
     )
   })
 
-  it('被信号终止且宿主机没有 swap 时，直接指出最可能的原因与做法', () => {
-    const reason = describeSystemdExitReason('signal', 2048, { availableMb: 3517, swapFreeMb: 0 })
+  it('被信号终止且宿主机没有缓存区时，直接指出最可能的原因与做法', () => {
+    const reason = describeSystemdExitReason('signal', 2048, { availableMb: 3517, swapFreeMb: 0, swapTotalMb: 0 })
     assert.ok(reason)
     assert.match(reason, /进程被信号终止/)
-    assert.match(reason, /未配置 swap/)
+    assert.match(reason, /未配置缓存区/)
     assert.match(reason, /gsh setup-swap/)
   })
 
+  it('缓存区配了但被用满时，给的是扩容做法而不是再跑一遍 setup-swap', () => {
+    const reason = describeSystemdExitReason('signal', undefined, {
+      availableMb: 790,
+      swapFreeMb: 0,
+      swapTotalMb: 2048,
+    })
+    assert.ok(reason)
+    assert.match(reason, /进程被信号终止/)
+    // 已有缓存区时 gsh setup-swap 会直接返回：提示再跑一遍只会白折腾一轮
+    assert.match(reason, /缓存区已被用满（共 2048 MiB）/)
+    assert.match(reason, /GSH_SWAP_SIZE=4G gsh setup-swap/)
+    assert.doesNotMatch(reason, /未配置缓存区/)
+  })
+
   it('非零退出同样带上内存判断', () => {
-    const reason = describeSystemdExitReason('exit-code', undefined, { availableMb: 3517, swapFreeMb: 0 })
+    const reason = describeSystemdExitReason('exit-code', undefined, {
+      availableMb: 3517,
+      swapFreeMb: 0,
+      swapTotalMb: 0,
+    })
     assert.ok(reason)
     assert.match(reason, /非零状态退出/)
     assert.match(reason, /gsh setup-swap/)
@@ -49,7 +67,7 @@ describe('describeSystemdExitReason 的内存补充判断', () => {
   })
 
   it('拿不到 Result 时不编造原因，避免污染「最近一次退出：」这类句式', () => {
-    assert.equal(describeSystemdExitReason(undefined, 2048, { availableMb: 100, swapFreeMb: 0 }), null)
+    assert.equal(describeSystemdExitReason(undefined, 2048, { availableMb: 100, swapFreeMb: 0, swapTotalMb: 0 }), null)
   })
 
   it('正常退出值与未知值都不给原因', () => {
@@ -63,11 +81,23 @@ describe('describeMemoryHint', () => {
     assert.equal(describeMemoryHint(undefined), null)
   })
 
-  it('swap 为 0 时永远提示补 swap', () => {
-    assert.match(describeMemoryHint({ availableMb: 9999, swapFreeMb: 0 }) ?? '', /gsh setup-swap/)
+  it('确实没有配置缓存区时才让补缓存区', () => {
+    assert.match(describeMemoryHint({ availableMb: 9999, swapFreeMb: 0, swapTotalMb: 0 }) ?? '', /gsh setup-swap/)
+  })
+
+  it('swap 配了但已用满时不说「未配置」，改说扩容', () => {
+    const hint = describeMemoryHint({ availableMb: 9999, swapFreeMb: 0, swapTotalMb: 2048 })
+    assert.ok(hint)
+    assert.match(hint, /已被用满（共 2048 MiB）/)
+    assert.match(hint, /GSH_SWAP_SIZE=4G gsh setup-swap/)
+    assert.doesNotMatch(hint, /未配置/)
+  })
+
+  it('读不到缓存区总量时不编造原因（无 /proc 的环境）', () => {
+    assert.equal(describeMemoryHint({ availableMb: 9999, swapFreeMb: null, swapTotalMb: null }), null)
   })
 
   it('swap 充足且内存充裕时不提示', () => {
-    assert.equal(describeMemoryHint({ availableMb: 3000, swapFreeMb: 2048 }), null)
+    assert.equal(describeMemoryHint({ availableMb: 3000, swapFreeMb: 2048, swapTotalMb: 2048 }), null)
   })
 })

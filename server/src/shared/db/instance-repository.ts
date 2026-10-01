@@ -13,6 +13,7 @@ import type {
   DbGameInstanceStatus,
   DbInstanceErrorPhase,
   DbInstanceMod,
+  DbInstanceRuntimeFailureKind,
   DbInstallLogStatus,
   DbMaintenanceDraft,
   DbMaintenancePushLog,
@@ -24,6 +25,13 @@ import type {
 /** 失败环节只认这两个值；库里出现别的值（手改、旧版本）一律当未知，展示层按 runtime 兜底 */
 function normalizeInstanceErrorPhase(phase: string | null | undefined): DbInstanceErrorPhase | null {
   return phase === 'install' || phase === 'runtime' ? phase : null
+}
+
+/** 归因只认这两个值；库里出现别的值一律当无结论，前端据此不显示任何引导 */
+function normalizeInstanceRuntimeFailureKind(
+  kind: string | null | undefined,
+): DbInstanceRuntimeFailureKind | null {
+  return kind === 'memory' || kind === 'not_ready' ? kind : null
 }
 
 function normalizeInstanceStatus(status: string | undefined): DbGameInstanceStatus {
@@ -62,6 +70,8 @@ function mapDbGameInstance(row: {
   lastError: string | null
   lastErrorPhase: string | null
   runtimeWarning: string | null
+  runtimeReadyAt: string | null
+  runtimeFailureKind: string | null
   unexpectedExitAt: string | null
   installLogStatus: string | null
   installPercent: number | null
@@ -84,6 +94,8 @@ function mapDbGameInstance(row: {
     rconPort: row.rconPort === null ? null : Number(row.rconPort),
     lastExitCode: row.lastExitCode === null ? null : Number(row.lastExitCode),
     lastErrorPhase: normalizeInstanceErrorPhase(row.lastErrorPhase),
+    runtimeReadyAt: row.runtimeReadyAt?.trim() || null,
+    runtimeFailureKind: normalizeInstanceRuntimeFailureKind(row.runtimeFailureKind),
     installLogStatus: installLogStatus === 'running' || installLogStatus === 'success' || installLogStatus === 'failed'
       ? installLogStatus
       : null,
@@ -116,6 +128,8 @@ function gameInstanceSelectFields() {
     lastError: gameInstances.lastError,
     lastErrorPhase: gameInstances.lastErrorPhase,
     runtimeWarning: gameInstances.runtimeWarning,
+    runtimeReadyAt: gameInstances.runtimeReadyAt,
+    runtimeFailureKind: gameInstances.runtimeFailureKind,
     unexpectedExitAt: gameInstances.unexpectedExitAt,
     installLogStatus: gameInstances.installLogStatus,
     installPercent: gameInstances.installPercent,
@@ -560,6 +574,8 @@ export async function updateGameInstanceRuntime(
     lastError?: string | null
     lastErrorPhase?: DbInstanceErrorPhase | null
     runtimeWarning?: string | null
+    runtimeReadyAt?: string | null
+    runtimeFailureKind?: DbInstanceRuntimeFailureKind | null
     unexpectedExitAt?: string | null
     installLogStatus?: DbInstallLogStatus | null
     installPercent?: number | null
@@ -607,6 +623,12 @@ export async function updateGameInstanceRuntime(
   }
   if (typeof input.runtimeWarning !== 'undefined') {
     setPayload.runtimeWarning = input.runtimeWarning?.trim() || null
+  }
+  if (typeof input.runtimeReadyAt !== 'undefined') {
+    setPayload.runtimeReadyAt = input.runtimeReadyAt?.trim() || null
+  }
+  if (typeof input.runtimeFailureKind !== 'undefined') {
+    setPayload.runtimeFailureKind = normalizeInstanceRuntimeFailureKind(input.runtimeFailureKind)
   }
   if (typeof input.unexpectedExitAt !== 'undefined') {
     setPayload.unexpectedExitAt = input.unexpectedExitAt?.trim() || null

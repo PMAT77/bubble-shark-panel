@@ -109,7 +109,7 @@ describe('resolveSwapUsage', () => {
     assert.equal(reading?.freeGb, 0)
   })
 
-  it('未配置交换区（SwapTotal 为 0）返回 null，与「用满」区分开', () => {
+  it('未配置缓存区（SwapTotal 为 0）返回 null，与「用满」区分开', () => {
     // host-resource-guard 的真实样本正是这种机器：SwapTotal 与 SwapFree 都是 0
     assert.equal(resolveSwapUsage(0, 0), null)
     assert.equal(resolveSwapUsage(parseMeminfoValueKb(REAL_MEMINFO, 'SwapTotal'), parseMeminfoValueKb(REAL_MEMINFO, 'SwapFree')), null)

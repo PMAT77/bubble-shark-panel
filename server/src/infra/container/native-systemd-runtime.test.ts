@@ -8,6 +8,7 @@ import {
   buildNativeSystemdUnit,
   formatUnitLoadDiagnostic,
   NativeSystemdRuntime,
+  parseCgroupOomKillCount,
   readFileTailLines,
   resolveNativeUnitState,
   resolveShardCpuQuotaPercent,
@@ -230,6 +231,69 @@ describe('resolveNativeUnitState', () => {
     const state = resolveNativeUnitState({ ActiveState: 'active', SubState: 'running', Result: 'success', NRestarts: '0' })
     assert.equal(state.exitResult, undefined)
     assert.equal(state.restarts, undefined)
+  })
+
+  it('换算当前进程已连续运行的秒数（monotonic 与系统 uptime 相减）', () => {
+    // 只用 systemd 的 monotonic 启动时刻：ExecMainStartTimestamp 是 `Thu 2026-10-02 09:15:32 CST`
+    // 这种带本地时区缩写的文本，按它解析会把时长整体算偏。
+    const state = resolveNativeUnitState({
+      LoadState: 'loaded',
+      ActiveState: 'active',
+      SubState: 'running',
+      NRestarts: '1',
+      ExecMainStartTimestampMonotonic: '1500000000',
+    }, 2000)
+    assert.equal(state.uptimeSeconds, 500)
+  })
+
+  it('单元从未启动过时不给出运行时长，让调用方退回旧口径', () => {
+    const state = resolveNativeUnitState({
+      ActiveState: 'inactive',
+      SubState: 'dead',
+      ExecMainStartTimestampMonotonic: '0',
+    }, 2000)
+    assert.equal(state.uptimeSeconds, undefined)
+  })
+
+  it('把 MemoryPeak 字节换算成 MiB（systemd 249+ 才有该属性）', () => {
+    const state = resolveNativeUnitState({
+      LoadState: 'loaded',
+      ActiveState: 'active',
+      SubState: 'running',
+      MemoryPeak: '1610612736',
+    })
+    assert.equal(state.memPeakMb, 1536)
+  })
+
+  it('没有 MemoryPeak 属性时不编造峰值', () => {
+    const state = resolveNativeUnitState({ LoadState: 'loaded', ActiveState: 'active', SubState: 'running' })
+    assert.equal(state.memPeakMb, undefined)
+  })
+})
+
+/**
+ * 线上故障的定案证据就是这行：`Memory cgroup out of memory: Killed process …`。
+ * `memory.events` 里的计数在进程被自动拉起后仍然保留，而 systemd 的 `Result` 会被重置成
+ * success——归因「是不是内存问题」只能靠它。
+ */
+describe('parseCgroupOomKillCount', () => {
+  it('取出 oom_kill 计数', () => {
+    const text = ['low 0', 'high 0', 'max 12', 'oom 0', 'oom_kill 3', 'oom_group_kill 0', ''].join('\n')
+    assert.equal(parseCgroupOomKillCount(text), 3)
+  })
+
+  it('不能把 oom_group_kill 当成 oom_kill（子串匹配会张冠李戴）', () => {
+    const text = ['max 0', 'oom 0', 'oom_group_kill 7', ''].join('\n')
+    assert.equal(parseCgroupOomKillCount(text), undefined)
+  })
+
+  it('计数为 0 时按 0 返回，由调用方判断是否算证据', () => {
+    assert.equal(parseCgroupOomKillCount('oom_kill 0\n'), 0)
+  })
+
+  it('格式不认识时返回 undefined，不猜', () => {
+    assert.equal(parseCgroupOomKillCount(''), undefined)
+    assert.equal(parseCgroupOomKillCount('max 12'), undefined)
   })
 })
 

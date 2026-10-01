@@ -183,6 +183,13 @@
       "when": 1790824579205,
       "tag": "0025_polite_living_lightning",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1790850238863,
+      "tag": "0026_fast_corsair",
+      "breakpoints": true
     }
   ]
 }

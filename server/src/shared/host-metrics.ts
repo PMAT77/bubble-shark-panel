@@ -172,11 +172,11 @@ export interface SwapUsageReading {
 }
 
 /**
- * 交换区使用情况。
+ * 缓存区使用情况。
  *
- * 没有配置交换区（`SwapTotal` 为 0 或读不到 `/proc`）时返回 null：「未配置」与
+ * 没有配置缓存区（`SwapTotal` 为 0 或读不到 `/proc`）时返回 null：「未配置」与
  * 「配置了但用满」是两种完全不同的处境，都显示成 0% 会让前者看起来比后者安全。
- * 小内存机真正致命的往往不是内存占用百分比，而是「可用内存 + 交换区余量」还剩多少 ——
+ * 小内存机真正致命的往往不是内存占用百分比，而是「可用内存 + 缓存区余量」还剩多少 ——
  * 启动守卫判的就是这个和，面板得能把它摆出来。
  */
 export function resolveSwapUsage(totalKb: number | null, freeKb: number | null): SwapUsageReading | null {

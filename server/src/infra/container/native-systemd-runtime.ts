@@ -4,6 +4,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { resolveDstContainerResourceLimits } from './dst-container-resources'
+import { resolveUptimeSecondsFromMonotonic } from './uptime'
 import { sampleProcessMetrics } from '../../shared/instance-runtime/process-metrics'
 import type {
   ContainerInspect,
@@ -211,23 +212,77 @@ function writeFileAtomic(filePath: string, content: string, mode: number) {
  * `activating (auto-restart)` 停留 5 秒。只看 ActiveState 会把这段窗口报成「已停止」，
  * 于是实例状态被对账成 stopped、下一轮又变回 running，在两次请求之间来回翻转。
  * 等待重启同样算运行中；真正停下来时 ActiveState 是 inactive/failed。
+ *
+ * `systemUptimeSeconds` 只用于把 monotonic 启动时刻换算成「当前进程跑了多久」，注入是为了能测。
  */
-export function resolveNativeUnitState(properties: Record<string, string>): {
+export function resolveNativeUnitState(
+  properties: Record<string, string>,
+  systemUptimeSeconds = os.uptime(),
+): {
   running: boolean
   restarting: boolean
   exitResult?: string
   restarts?: number
+  uptimeSeconds?: number
+  memPeakMb?: number
 } {
   const loaded = properties.LoadState !== 'not-found'
   const restarting = loaded && properties.SubState === 'auto-restart'
   const restarts = Number(properties.NRestarts)
   const exitResult = properties.Result?.trim()
+  const uptimeSeconds = resolveUptimeSecondsFromMonotonic(
+    properties.ExecMainStartTimestampMonotonic,
+    systemUptimeSeconds,
+  )
+  // MemoryPeak 需要 systemd 249+；读不到就是 undefined，界面不显示峰值，判定不受影响
+  const memPeakBytes = Number(properties.MemoryPeak)
+  const memPeakMb = Number.isInteger(memPeakBytes) && memPeakBytes > 0
+    ? Math.round(memPeakBytes / (1024 * 1024))
+    : undefined
   return {
     running: loaded && (properties.ActiveState === 'active' || restarting),
     restarting,
     // Result=success 是正常值，只有非正常退出才值得带回上层
     ...(exitResult && exitResult !== 'success' ? { exitResult } : {}),
     ...(Number.isInteger(restarts) && restarts > 0 ? { restarts } : {}),
+    ...(uptimeSeconds !== undefined ? { uptimeSeconds } : {}),
+    ...(memPeakMb !== undefined ? { memPeakMb } : {}),
+  }
+}
+
+const CGROUP_ROOT = '/sys/fs/cgroup'
+
+/**
+ * cgroup v2 `memory.events` 文本 → `oom_kill` 计数。
+ *
+ * 必须按行首精确匹配：`oom_group_kill` 是另一条计数，用子串匹配会张冠李戴。
+ */
+export function parseCgroupOomKillCount(text: string): number | undefined {
+  const match = /^oom_kill[ \t]+(\d+)[ \t]*$/m.exec(text)
+  if (!match) {
+    return undefined
+  }
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+/**
+ * 读某个单元的 cgroup OOM 计数。
+ *
+ * 路径拼自 `systemctl show -p ControlGroup`：比硬编码 user slice 层级可靠（uid、单元名、
+ * app.slice 都随部署变化）。读不到（cgroup v1、权限不足、单元已被回收）就返回 undefined，
+ * 由调用方退回其它判据，不猜。
+ */
+export function readCgroupOomKillCount(controlGroup: string | undefined): number | undefined {
+  const relative = controlGroup?.trim()
+  if (!relative || !relative.startsWith('/') || relative.includes('..')) {
+    return undefined
+  }
+  try {
+    return parseCgroupOomKillCount(fs.readFileSync(path.join(CGROUP_ROOT, relative, 'memory.events'), 'utf8'))
+  }
+  catch {
+    return undefined
   }
 }
 
@@ -620,11 +675,12 @@ export class NativeSystemdRuntime implements ContainerRuntime {
       const { stdout } = await this.systemctl([
         'show',
         this.unitName(ref),
-        '--property=LoadState,ActiveState,SubState,MainPID,ExecMainStartTimestamp,Result,NRestarts',
+        '--property=LoadState,ActiveState,SubState,MainPID,ExecMainStartTimestamp,ExecMainStartTimestampMonotonic,ControlGroup,MemoryPeak,Result,NRestarts',
       ])
       const properties = parseSystemctlProperties(stdout)
       const state = resolveNativeUnitState(properties)
       const pid = Number(properties.MainPID)
+      const memOomKillCount = readCgroupOomKillCount(properties.ControlGroup)
       return {
         id: this.unitName(ref),
         name: ref.name,
@@ -632,6 +688,9 @@ export class NativeSystemdRuntime implements ContainerRuntime {
         ...(state.restarting ? { restarting: true } : {}),
         ...(Number.isInteger(pid) && pid > 0 ? { pid } : {}),
         ...(properties.ExecMainStartTimestamp ? { startedAt: properties.ExecMainStartTimestamp } : {}),
+        ...(state.uptimeSeconds !== undefined ? { uptimeSeconds: state.uptimeSeconds } : {}),
+        ...(state.memPeakMb !== undefined ? { memPeakMb: state.memPeakMb } : {}),
+        ...(memOomKillCount !== undefined ? { memOomKillCount } : {}),
         ...(state.exitResult ? { exitResult: state.exitResult } : {}),
         ...(state.restarts ? { restarts: state.restarts } : {}),
       }
@@ -650,21 +709,23 @@ export class NativeSystemdRuntime implements ContainerRuntime {
 
   async stats(ref: ContainerRef): Promise<ContainerStats> {
     const inspect = await this.inspect(ref)
+    const uptimeSeconds = inspect.uptimeSeconds ?? null
     if (!inspect.running || !inspect.pid) {
-      return { cpuUsageRate: null, memoryMb: null }
+      return { cpuUsageRate: null, memoryMb: null, uptimeSeconds }
     }
     try {
       const usage = await sampleProcessMetrics(inspect.pid)
       if (!usage) {
-        return { cpuUsageRate: null, memoryMb: null }
+        return { cpuUsageRate: null, memoryMb: null, uptimeSeconds }
       }
       return {
         cpuUsageRate: usage.cpuUsageRate,
         memoryMb: usage.memoryMb,
+        uptimeSeconds,
       }
     }
     catch {
-      return { cpuUsageRate: null, memoryMb: null }
+      return { cpuUsageRate: null, memoryMb: null, uptimeSeconds }
     }
   }
 

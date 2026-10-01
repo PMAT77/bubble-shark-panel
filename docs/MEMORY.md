@@ -37,7 +37,7 @@ Game Server Hub 支持 **Docker 与 Native systemd 双运行时**。下文的档
 
 ---
 
-## swap：小内存机由安装器自动配置
+## 缓存区：小内存机由安装器自动配置
 
 **DST 的内存占用是尖峰型的。** 世界跑起来之后单分片大约 1–1.2 GiB，但**启动时要把整套 Mod 与世界读一遍**，峰值可以到 2 GiB 上下（实测：36 个 Mod 的主世界分片峰值 `anon-rss` 2026 MiB）。4 GiB 的机器装得下稳态，**装不下这个尖峰**——内核会在加载途中直接杀掉分片，`dmesg` 里是：
 
@@ -47,19 +47,19 @@ Out of memory: Killed process ... (dontstarve_dedi) anon-rss:2075120kB
 
 **表现出来不是「内存不足」，而是「实例显示运行中、大厅却搜不到、也进不去」**，很容易误判成别的问题。
 
-swap 就是给这个尖峰准备的落点：内存紧张时把冷数据挪到硬盘，尖峰过去再换回来。它不是「让机器变慢」，而是「让尖峰有地方落」。
+缓存区就是给这个尖峰准备的落点：内存紧张时把冷数据挪到硬盘，尖峰过去再换回来。它不是「让机器变慢」，而是「让尖峰有地方落」。
 
 ```bash
 sudo gsh setup-swap
 ```
 
-它会创建 2 GiB 的 swapfile（`/swapfile-gsh`）、写进 `/etc/fstab`（**重启后仍然有效**），并设置 `vm.swappiness=20`（优先用内存、必要时才换出）与 `vm.min_free_kbytes=100000`。**做一次即可**，之后升级面板、重启实例都不用再管。
+它会创建 2 GiB 的缓存区文件（`/swapfile-gsh`）、写进 `/etc/fstab`（**重启后仍然有效**），并设置 `vm.swappiness=20`（优先用内存、必要时才换出）与 `vm.min_free_kbytes=100000`。**做一次即可**，之后升级面板、重启实例都不用再管。
 
-**小内存机由安装器自动完成**：`install.linux.sh` 检测到总内存低于 5 GiB 且当前没有 swap 时，会创建同样的 swapfile 并写入 fstab 与 sysctl，安装摘要里会写明结果。换档规则是总内存低于 3800 MiB 时给 4 GiB，其余小内存机给 2 GiB。关闭方式：`--no-swap` 或 `GSH_SWAP_ON_INSTALL=0`；改大小用 `GSH_SWAP_SIZE`。
+**小内存机由安装器自动完成**：`install.linux.sh` 检测到总内存低于 5 GiB 且当前没有缓存区时，会创建同样的缓存区文件 并写入 fstab 与 sysctl，安装摘要里会写明结果。换档规则是总内存低于 3800 MiB 时给 4 GiB，其余小内存机给 2 GiB。关闭方式：`--no-swap` 或 `GSH_SWAP_ON_INSTALL=0`；改大小用 `GSH_SWAP_SIZE`。
 
-**为什么要 root**：创建 swap 需要 root，而面板以普通用户 `gsh` 运行（这是有意的安全设计，面板不应是 root），所以面板做不到这一步。**从旧版本升级上来的机器**（安装时还没这个行为）需要手动执行一次上面的命令。
+**为什么要 root**：创建缓存区需要 root，而面板以普通用户 `gsh` 运行（这是有意的安全设计，面板不应是 root），所以面板做不到这一步。**从旧版本升级上来的机器**（安装时还没这个行为）需要手动执行一次上面的命令。
 
-swapfile 会占用根分区磁盘空间；余量不足时安装器会跳过并提示，不会写出半途而废的配置。
+缓存区文件会占用根分区磁盘空间；余量不足时安装器会跳过并提示，不会写出半途而废的配置。
 
 确认是否已生效：
 
@@ -69,11 +69,11 @@ swapon --show     # 有输出即已生效；没有任何输出说明还没配
 
 ### 面板会替你挡一道
 
-启动前按「分片数 ×（512 MiB + 每个启用中的 Mod 32 MiB）」估算峰值，并把**可用 swap 计入可回收余量**。不够时**直接拒绝启动**并提示执行 `gsh setup-swap`，而不是启动到一半被内核杀掉。确需强制放行可在 `panel.env` 设 `GSH_HOST_MIN_AVAILABLE_MB=0`（小内存机慎用）。
+启动前按「分片数 ×（512 MiB + 每个启用中的 Mod 32 MiB）」估算峰值，并把**可用缓存区计入可回收余量**。不够时**直接拒绝启动**并提示执行 `gsh setup-swap`，而不是启动到一半被内核杀掉。确需强制放行可在 `panel.env` 设 `GSH_HOST_MIN_AVAILABLE_MB=0`（小内存机慎用）。
 
-加了 swap 仍被拒绝时，按顺序考虑：
+加了缓存区仍被拒绝时，按顺序考虑：
 
-1. 把 swap 加到 4 GiB。**`setup-swap` 在检测到已有 swap 时不做任何改动**（直接返回，安装器的自动配置同样跳过），所以要先关掉旧的再重建：
+1. 把缓存区加到 4 GiB。**`setup-swap` 在检测到已有缓存区时不做任何改动**（直接返回，安装器的自动配置同样跳过），所以要先关掉旧的再重建：
 
    ```bash
    sudo swapoff /swapfile-gsh
@@ -85,7 +85,7 @@ swapon --show     # 有输出即已生效；没有任何输出说明还没配
 2. 关闭洞穴分片——单分片峰值约为双分片的一半
 3. 减少订阅的 Mod——占用与 Mod 数量近似线性
 
-关闭洞穴后单分片通常不需要 swap 即可启动（单分片估算约 2 GiB，4 GiB 机器放得下），这是内存最紧张时的保底方案。
+关闭洞穴后单分片通常不需要缓存区即可启动（单分片估算约 2 GiB，4 GiB 机器放得下），这是内存最紧张时的保底方案。
 
 ---
 
@@ -120,14 +120,14 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 | 变量 | 含义 |
 |------|------|
 | `GSH_STEAMCMD_CONTAINER_MEMORY_MB` | SteamCMD 子容器内存硬上限（MiB），不设则不限制 |
-| `GSH_STEAMCMD_CONTAINER_MEMORY_SWAP_MB` | SteamCMD 子容器 swap 上限（MiB），预设中与内存上限同值 |
+| `GSH_STEAMCMD_CONTAINER_MEMORY_SWAP_MB` | SteamCMD 子容器缓存区上限（MiB），预设中与内存上限同值 |
 | `GSH_DST_CONTAINER_MEMORY_MB` | 每个 DST 分片容器上限（MiB） |
 | `GSH_HOST_STEAMCMD_PLANNING_MB` | 安装 / 更新前的内存规划预留（MiB），参与守卫判断 |
 | `GSH_HOST_DST_PLANNING_MB` | DST 启动守卫的单分片规划**下界**（MiB）；实际按「512 + 每个启用中的 Mod 32 MiB」估算，双分片再乘 2 并加余量。**设小不会让守卫更宽松** |
 | `GSH_HOST_MEMORY_HEADROOM_MB` | 安装/启动守卫保留空闲（默认 512） |
 | `GSH_HOST_MIN_AVAILABLE_MB` | 设为 `0` 可关闭守卫（小内存慎用） |
-| `GSH_SWAP_ON_INSTALL` | 安装器在小内存机上自动创建 swapfile（默认 `1`，设 `0` 关闭；等同 `--no-swap`） |
-| `GSH_SWAP_SIZE` | 自动创建或 `gsh setup-swap` 的交换区大小（默认 `2G`，总内存低于 3800 MiB 时安装器用 `4G`） |
+| `GSH_SWAP_ON_INSTALL` | 安装器在小内存机上自动创建缓存区文件（默认 `1`，设 `0` 关闭；等同 `--no-swap`） |
+| `GSH_SWAP_SIZE` | 自动创建或 `gsh setup-swap` 的缓存区大小（默认 `2G`，总内存低于 3800 MiB 时安装器用 `4G`） |
 | `GSH_SHARD_READY_WAIT_SEC` | 等待主世界分片就绪的上限秒数（默认 900）；超时会照常启动洞穴分片 |
 | `GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS` | 单次 app_update 超时（毫秒，默认 3600000 = 60 分钟），超时终止后重试断点续传 |
 
@@ -152,6 +152,8 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 - **房间设置 → 启用洞穴**：小内存档位显示警告
 - **世界设置 → 模组**：提示 Mod 与内存关系
 - **实例管理**：创建/安装前提示避免与运行实例叠加
+- **实例控制**：运行中还会区分「世界已就绪 / 世界尚未就绪」。进程起来后要加载整套 Mod 与世界才向大厅注册，此期间房间搜不到，列表里带「加载中」、超过等主世界就绪的上限后显示「未就绪」
+- **因内存不足启动失败时**：实例上写明结论（例如「该分片被系统按内存上限终止过 N 次」）并给出「增加缓存区」引导——先在面板停止实例，再执行命令，然后重新启动。必须按这个顺序：缓存区正被实例占用时缩容会被系统拒绝，甚至把实例一起杀掉
 
 安装/启动时若可用内存不足，API 会返回 `HOST_MEMORY_PRESSURE` 错误（可在 `panel.env` 调整守卫）。
 
@@ -170,7 +172,7 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 四点提醒：
 
 - **内存看「可用」而不是「已用」**：DST 启动会把整套 Mod 与世界读一遍，这些文件缓存随时可回收，`used` 会因此偏高。面板已与启动守卫、`free -h` 的 `available` 统一口径。
-- **小内存机看「可用缓冲」**：监控台内存卡片上的「可用缓冲 = 可用内存 + 交换区余量」，才是启动新分片前真正能用的部分；低于 0.5 GB 标红。只盯内存占用百分比，会把「内存吃满但有 swap 兜底」和「内存与 swap 都见底」看成同一件事。
+- **小内存机看「可用缓冲」**：监控台内存卡片上的「可用缓冲 = 可用内存 + 缓存区余量」，才是启动新分片前真正能用的部分；低于 0.5 GB 标红。只盯内存占用百分比，会把「内存吃满但有缓存区兜底」和「内存与缓存区都见底」看成同一件事。
 - **CPU 不要跨位置比大小**：实例卡片是单核基准、监控台是全核基准，两者差一个「核数」的系数。
 - **「归一化占用率」不是 CPU 使用率**：它是 `1 分钟负载 ÷ 核数`，反映的是排队压力。
 
@@ -182,7 +184,7 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 
 ```bash
 free -h                                          # 看 available 还有多少
-swapon --show                                    # 没有输出说明没有 swap：小内存机看安装摘要（自动创建失败或磁盘不足），其余机器执行 sudo gsh setup-swap
+swapon --show                                    # 没有输出说明没有缓存区：小内存机看安装摘要（自动创建失败或磁盘不足），其余机器执行 sudo gsh setup-swap
 sudo dmesg -T | grep -iE 'killed process|oom'    # 有输出即确实被内核 OOM 杀掉
 ```
 

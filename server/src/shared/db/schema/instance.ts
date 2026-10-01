@@ -34,6 +34,22 @@ export const gameInstances = sqliteTable('game_instances', {
    * 本字段只在实例干净运行足够久或用户显式清除时才清空。
    */
   runtimeWarning: text('runtime_warning'),
+  /**
+   * 本轮启动出现世界就绪标记的时刻（ISO）；尚未就绪或未运行时为 null。
+   *
+   * 「运行时单元在跑」与「服务器能接客」是两件事：进程起来后还要加载整套 Mod 与世界，
+   * 面板若一律只说「运行中」，服主会以为房间已经能被搜到。该值单调——一旦就绪就保持到
+   * 下次启动——所以列表轮询只在尚未就绪时才需要读分片日志。
+   */
+  runtimeReadyAt: text('runtime_ready_at'),
+  /**
+   * 未就绪/启动失败的归因：`memory` = 有内存不足的证据（cgroup OOM 计数、systemd 的
+   * oom-kill、反复重启且宿主机可用缓冲见底），`not_ready` = 其余未就绪情形；null = 无结论。
+   *
+   * 存枚举而不是让前端去认 `runtimeWarning` 的文案：文案会随排查经验改，前端据它决定
+   * 要不要给「增加缓存区」的引导，改文案那天就会静默失效。
+   */
+  runtimeFailureKind: text('runtime_failure_kind'),
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
   unexpectedExitAt: text('unexpected_exit_at'),
   installLogStatus: text('install_log_status'),

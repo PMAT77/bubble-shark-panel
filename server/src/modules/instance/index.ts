@@ -34,6 +34,7 @@ import {
   removePlayerProfilesByInstance,
   updateGameInstanceRuntime,
 } from '../../shared/db/index'
+import type { DbInstanceRuntimeFailureKind } from '../../shared/db/types'
 import {
   deleteInstallLogFile,
   readInstallLogContent,
@@ -60,12 +61,14 @@ import type { ContainerInspect } from '../../infra/container/types'
 import {
   ensureContainerRuntimeReady,
   ensureInstanceContainerLogFollow,
+  hasMasterReadyMarker,
   inspectInstanceShardRuntime,
   isHealthyRuntimeForResurrect,
   isInstanceContainerRunning,
   removeInstanceContainer,
   resolveDefaultInstanceInstallPath,
   resolveInstanceContainerRef,
+  resolveShardReadyWaitSec,
   readRecentInstanceContainerLogLines,
   sendInstanceContainerCommand,
   startInstanceContainer,
@@ -86,6 +89,9 @@ import {
   startInstallJob,
 } from './install-service'
 import { prepareInstallPathForRuntime, prepareInstallPathForSteamcmd } from './install-path'
+import { buildRestartLoopWarning, shouldClearRuntimeWarning } from './runtime-warning'
+import { resolveRuntimeReadiness, type InstanceRuntimeReadiness } from './runtime-readiness'
+import { buildRuntimeFailureWarning, classifyRuntimeFailure } from './runtime-failure'
 import { registerInstanceScheduledOps } from './scheduled-entry'
 import { buildInternalInstanceRequest, registerPluginInstanceOps } from './instance-plugin-ops'
 import { startInstanceExitWatch } from './exit-watch'
@@ -250,6 +256,34 @@ function validateInstallPath(rawPath: string, options: InstallPathValidationOpti
   }
 }
 
+/** 运行期告警要落库的实例字段：文案 + 归因（归因供前端决定是否给出扩容引导） */
+type RuntimeWarningTarget = {
+  id: string
+  runtimeWarning: string | null
+  runtimeFailureKind: DbInstanceRuntimeFailureKind | null
+}
+
+/**
+ * 写运行期告警；文案与归因都没变就不写库。
+ *
+ * 对账跑在每个列表/详情请求上，而这个告警的文案会随重启次数、加载时长变化，
+ * 无脑写库等于把每次轮询都变成一次 UPDATE。
+ */
+async function applyRuntimeWarning(
+  app: FastifyInstance,
+  instance: RuntimeWarningTarget,
+  message: string | null,
+  failureKind: DbInstanceRuntimeFailureKind | null,
+): Promise<void> {
+  if (instance.runtimeWarning === message && instance.runtimeFailureKind === failureKind) {
+    return
+  }
+  await updateGameInstanceRuntime(instance.id, { runtimeWarning: message, runtimeFailureKind: failureKind })
+  if (message) {
+    app.log.warn({ instanceId: instance.id, failureKind }, '实例运行期告警已更新')
+  }
+}
+
 /**
  * 崩溃循环告警。
  *
@@ -258,61 +292,73 @@ function validateInstallPath(rawPath: string, options: InstallPathValidationOpti
  *
  * 写 runtimeWarning 而不是 lastError：lastError 会被「启动失败」「停止实例」
  * 与状态对账反复覆盖，实测出现过写入一秒后就被清空、服主永远看不到的情况。
- * 文案没变就不重复写库，避免每次请求都触发一次更新。
+ *
+ * 措辞与判据都在 `runtime-warning.ts`：`restarts` 是累计值，只看它会把
+ * 「启动时崩过一次、之后一直稳跑」也报成正在崩溃循环。
  */
 async function warnInstanceRestartLoop(
   app: FastifyInstance,
-  instance: { id: string, runtimeWarning: string | null },
+  instance: RuntimeWarningTarget,
   snapshot: ContainerInspect,
 ): Promise<void> {
-  const restarts = snapshot.restarts ?? 0
-  if (restarts <= 0) {
-    return
-  }
   const reason = describeSystemdExitReason(snapshot.exitResult, resolveShardMemoryCapMb(), readHostMemorySnapshot())
-  const message = [
-    `实例进程反复重启（已重启 ${restarts} 次）`,
-    reason ? `，最近一次退出：${reason}` : '',
-    '。请打开控制台查看分片日志确认原因；内存不足时可在「世界设置 → 模组」减少订阅的 Mod，或关闭洞穴分片。',
-  ].join('')
-  if (instance.runtimeWarning === message) {
+  const message = buildRestartLoopWarning({
+    restarts: snapshot.restarts ?? 0,
+    restarting: snapshot.restarting === true,
+    ...(snapshot.uptimeSeconds !== undefined ? { uptimeSeconds: snapshot.uptimeSeconds } : {}),
+    exitReason: reason,
+  })
+  await applyRuntimeWarning(app, instance, message, null)
+}
+
+/** 宿主机可用缓冲（可用内存 + 缓存区余量，MiB）；读不到任一项时为 null */
+function readHostBufferMb(): number | null {
+  const memory = readHostMemorySnapshot()
+  if (memory.availableMb === null) {
+    return null
+  }
+  return memory.availableMb + (memory.swapFreeMb ?? 0)
+}
+
+/**
+ * 实例在跑但**世界还没就绪**时的结论。
+ *
+ * 先问「是不是内存问题」：这决定界面要不要给出「增加缓存区」的引导。不是内存问题就退回
+ * 重启告警那套措辞——把 Mod 报错误判成缺内存，会让人白折腾一轮缓存区。
+ */
+async function reportRuntimeIssue(
+  app: FastifyInstance,
+  instance: RuntimeWarningTarget,
+  snapshot: ContainerInspect,
+  readiness: InstanceRuntimeReadiness,
+): Promise<void> {
+  const shardCapMb = resolveShardMemoryCapMb()
+  const failure = classifyRuntimeFailure({
+    readySeen: readiness.state === 'ready',
+    restarts: snapshot.restarts ?? 0,
+    restarting: snapshot.restarting === true,
+    ...(snapshot.exitResult !== undefined ? { exitResult: snapshot.exitResult } : {}),
+    ...(snapshot.memOomKillCount !== undefined ? { memOomKillCount: snapshot.memOomKillCount } : {}),
+    ...(snapshot.memPeakMb !== undefined ? { memPeakMb: snapshot.memPeakMb } : {}),
+    ...(shardCapMb !== undefined ? { shardCapMb } : {}),
+    bufferMb: readHostBufferMb(),
+    loadingSeconds: readiness.loadingSeconds,
+    notReadyAfterSec: resolveShardReadyWaitSec(),
+  })
+  if (failure) {
+    await applyRuntimeWarning(app, instance, buildRuntimeFailureWarning(failure), failure.kind)
     return
   }
-  await updateGameInstanceRuntime(instance.id, { runtimeWarning: message })
-  app.log.warn(
-    { instanceId: instance.id, restarts, exitResult: snapshot.exitResult },
-    '实例进程反复重启，已在实例上标注原因',
-  )
+  await warnInstanceRestartLoop(app, instance, snapshot)
 }
 
 /** 主世界已停、洞穴还在跑：只写运行期警告，不占用 lastError（它留给真正的启动失败） */
 async function warnCavesLeftRunning(
   app: FastifyInstance,
-  instance: { id: string, runtimeWarning: string | null },
+  instance: RuntimeWarningTarget,
 ): Promise<void> {
   const message = '主世界分片已停止，但洞穴分片仍在运行。请在实例控制里重新启动或停止实例，避免洞穴单独占着内存。'
-  if (instance.runtimeWarning === message) {
-    return
-  }
-  await updateGameInstanceRuntime(instance.id, { runtimeWarning: message })
-  app.log.warn({ instanceId: instance.id }, '主世界已停止但洞穴分片仍在运行，已标注到实例')
-}
-
-/**
- * 实例已连续干净运行多久（毫秒）。用于判断「运行期警告可以清掉了」：
- * 崩溃循环后又自己站稳的实例不该永远挂着旧警告。
- */
-const RUNTIME_WARNING_CLEAR_AFTER_MS = 30 * 60 * 1000
-
-function shouldClearRuntimeWarning(instance: { runtimeStartedAt: string | null }, snapshot: ContainerInspect): boolean {
-  if (snapshot.restarts) {
-    return false
-  }
-  const startedAt = instance.runtimeStartedAt ? Date.parse(instance.runtimeStartedAt) : Number.NaN
-  if (!Number.isFinite(startedAt)) {
-    return false
-  }
-  return Date.now() - startedAt >= RUNTIME_WARNING_CLEAR_AFTER_MS
+  await applyRuntimeWarning(app, instance, message, null)
 }
 
 /**
@@ -341,10 +387,25 @@ async function reconcileStaleRunningInstances(app: FastifyInstance): Promise<num
           runtimeStartedAt: new Date().toISOString(),
         })
       }
-      await warnInstanceRestartLoop(app, instance, snapshot)
-      // 崩溃循环后自己站稳、且已连续干净运行足够久的实例，旧警告要能自己消失
-      if (instance.runtimeWarning && shouldClearRuntimeWarning(instance, snapshot)) {
-        await updateGameInstanceRuntime(instance.id, { runtimeWarning: null })
+      // 本轮的就绪标记只在尚未就绪时查一次：一旦就绪就不再读分片日志，列表轮询没有额外开销。
+      // 「进程在跑」与「服务器能接客」是两件事，只报前者会让服主以为房间已经能被搜到。
+      let runtimeReadyAt = instance.runtimeReadyAt
+      if (!runtimeReadyAt && instance.installPath && hasMasterReadyMarker(instance.id, instance.installPath)) {
+        runtimeReadyAt = new Date().toISOString()
+        await updateGameInstanceRuntime(instance.id, { runtimeReadyAt, runtimeFailureKind: null })
+      }
+      const readiness = resolveRuntimeReadiness({
+        status: instance.status,
+        runtimeReadyAt,
+        runtimeStartedAt: instance.runtimeStartedAt,
+        notReadyAfterSec: resolveShardReadyWaitSec(),
+      })
+      // 崩溃循环后自己站稳、且已连续干净运行足够久的实例：旧警告自己消失，也不再写新的
+      if (shouldClearRuntimeWarning(snapshot.uptimeSeconds)) {
+        await applyRuntimeWarning(app, instance, null, null)
+      }
+      else {
+        await reportRuntimeIssue(app, instance, snapshot, readiness)
       }
       await ensureInstanceContainerLogFollow(instance.id)
       continue
@@ -400,6 +461,9 @@ async function reconcileStoppedButContainerRunning(app: FastifyInstance): Promis
       containerId: ref?.id ?? instance.containerId,
       runtimeStartedAt: instance.runtimeStartedAt ?? new Date().toISOString(),
       runtimeWarning: null,
+      // 这一轮到底就绪没有无法确认：清空让下一趟对账重新判定，而不是沿用上一次的结论
+      runtimeReadyAt: null,
+      runtimeFailureKind: null,
     })
     await ensureInstanceContainerLogFollow(instance.id)
     reconciled++
@@ -1314,6 +1378,9 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         lastExitCode: null,
         lastError: null,
         runtimeWarning: null,
+        // 就绪与归因都属于「本轮启动」：不清空就会沿用上一轮的就绪状态
+        runtimeReadyAt: null,
+        runtimeFailureKind: null,
         unexpectedExitAt: null,
       })
       return success({ isSuccess: true }, request)

@@ -42,6 +42,8 @@ export interface HostMemoryReading {
   /** 仅用于失败说明里的「总内存约 N MiB」提示，因此可省略 */
   totalMb?: number | null
   swapFreeMb: number | null
+  /** swap 总量；省略或为 null 表示没读到（无 /proc 的环境），此时说不了「未配置」也分不清「用满」 */
+  swapTotalMb?: number | null
 }
 
 /** 读取真实 /proc/meminfo；无 /proc 的环境（Windows 原生）返回 null 字段 */
@@ -50,7 +52,29 @@ export function readHostMemoryReading(): HostMemoryReading {
     availableMb: kbToMb(readProcMeminfoKb('MemAvailable')),
     totalMb: kbToMb(readProcMeminfoKb('MemTotal')),
     swapFreeMb: kbToMb(readProcMeminfoKb('SwapFree')),
+    swapTotalMb: kbToMb(readProcMeminfoKb('SwapTotal')),
   }
+}
+
+/** swap 落点的状态。`unknown` 只在读不到 /proc/meminfo 时出现 */
+export type SwapState = 'unknown' | 'none' | 'exhausted' | 'ready'
+
+/**
+ * 只按 `SwapFree` 判「有没有 swap」是错的：它为 0 既可能是没配，也可能是配了但被用满。
+ * 两者的做法相反——前者执行 `gsh setup-swap` 能建出 swapfile，后者会被它直接跳过
+ * （脚本检测到已有 swap 就不动），照做一遍什么都不会变，排查方向被带偏。
+ */
+export function resolveSwapState(
+  memory: Pick<HostMemoryReading, 'swapFreeMb' | 'swapTotalMb'>,
+): SwapState {
+  const { swapFreeMb, swapTotalMb } = memory
+  if (swapTotalMb === null || swapTotalMb === undefined) {
+    return swapFreeMb !== null && swapFreeMb > 0 ? 'ready' : 'unknown'
+  }
+  if (swapTotalMb === 0) {
+    return 'none'
+  }
+  return (swapFreeMb ?? 0) > 0 ? 'ready' : 'exhausted'
 }
 
 function parsePositiveMbEnv(key: string): number | undefined {
@@ -165,10 +189,21 @@ function buildHostMemoryPressureFailure(
   totalMb: number | null,
   capMb: number | undefined,
   swapFreeMb: number | null,
+  swapTotalMb: number | null,
   context: DstStartMemoryContext,
 ): HostMemoryPressureFailure {
   const totalHint = totalMb ? `（总内存约 ${totalMb} MiB）` : ''
-  const swapHint = swapFreeMb === null ? '' : `，可用 swap 约 ${swapFreeMb} MiB`
+  const swapState = resolveSwapState({ swapFreeMb, swapTotalMb })
+  const swapHint = swapState === 'unknown'
+    ? ''
+    : swapState === 'none'
+      ? '，未配置缓存区'
+      : swapState === 'exhausted'
+        ? `，缓存区已用满（共 ${swapTotalMb} MiB）`
+        : `，可用缓存区约 ${swapFreeMb} MiB`
+  const swapAdvice = swapState === 'exhausted'
+    ? '1. 扩缓存区（最有效）：缓存区已被用满，加载尖峰没有落点；先停用并删掉旧的缓存区文件，再执行 GSH_SWAP_SIZE=4G gsh setup-swap 重建'
+    : '1. 加缓存区（最有效）：执行 gsh setup-swap 创建 2 GiB 缓存区文件，让加载尖峰有地方落'
   const explanationLines = [
     '说明：安装/启动按典型峰值估算，并非按容器上限占满内存。',
     ...(capMb ? [`DST 分片内存硬上限为 ${capMb} MiB（每个分片，非预留占用）。`] : []),
@@ -182,7 +217,7 @@ function buildHostMemoryPressureFailure(
     ...explanationLines,
     '',
     '建议：',
-    '1. 加 swap（最有效）：执行 gsh setup-swap 创建 2 GiB swapfile，让加载尖峰有地方落',
+    swapAdvice,
     '2. 关闭洞穴分片：单分片启动峰值约为双分片的一半',
     '3. 在「世界设置 → 模组」减少订阅的 Mod：内存占用与 Mod 数量近似线性',
     '4. 停止其他正在运行的实例，释放内存',
@@ -196,6 +231,7 @@ function buildHostMemoryPressureFailure(
     totalMb,
     capMb: capMb ?? null,
     swapFreeMb,
+    swapTotalMb,
     detail,
   }
   return { ok: false, availableMb, requiredMb, summary, detail, data }
@@ -211,7 +247,7 @@ export function assessHostMemoryForHeavyOperation(
   context: DstStartMemoryContext = {},
   reading: HostMemoryReading = readHostMemoryReading(),
 ): HostMemoryPressureResult {
-  const { availableMb, totalMb, swapFreeMb } = reading
+  const { availableMb, totalMb, swapFreeMb, swapTotalMb } = reading
   const requiredMb = resolveMinHostAvailableMbForOperation(operation, context)
   if (availableMb === null) {
     return { ok: true, availableMb: null, requiredMb }
@@ -221,5 +257,13 @@ export function assessHostMemoryForHeavyOperation(
     return { ok: true, availableMb, requiredMb }
   }
   const capMb = resolveSteamcmdContainerMemoryCapMb('app-update')
-  return buildHostMemoryPressureFailure(availableMb, requiredMb, totalMb ?? null, capMb, swapFreeMb, context)
+  return buildHostMemoryPressureFailure(
+    availableMb,
+    requiredMb,
+    totalMb ?? null,
+    capMb,
+    swapFreeMb,
+    swapTotalMb ?? null,
+    context,
+  )
 }

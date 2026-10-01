@@ -159,6 +159,18 @@ export const instanceItemSchema = z.object({
   lastErrorPhase: z.enum(['install', 'runtime']).nullable(),
   /** 运行期警告（重启循环 / 退出原因 / 分片残留）；停止实例不清空，与 lastError 分开 */
   runtimeWarning: z.string().nullable(),
+  /**
+   * 本轮启动出现世界就绪标记的时刻（ISO）；尚未就绪或未运行为 null。
+   *
+   * 「运行时单元在跑」不等于「服务器能接客」：实例 running 而该字段为 null 时，
+   * 界面上要说明世界还在加载，而不是只说「运行中」。
+   */
+  runtimeReadyAt: z.string().nullable(),
+  /**
+   * 未就绪/启动失败的归因：memory = 有内存不足的证据（据此给出增加缓存区的引导），
+   * not_ready = 其它情形；无结论为 null。
+   */
+  runtimeFailureKind: z.enum(['memory', 'not_ready']).nullable(),
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
   unexpectedExitAt: z.string().nullable(),
   installLogStatus: z.enum(['running', 'success', 'failed']).nullable(),

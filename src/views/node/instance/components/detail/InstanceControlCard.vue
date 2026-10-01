@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { InstanceItem } from '@/api/modules/instance'
-import { NButton, NCard, NProgress, NStatistic, NTooltip } from 'naive-ui'
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, watch } from 'vue'
+import { NButton, NCard, NModal, NProgress, NStatistic, NTooltip, useMessage, useNotification } from 'naive-ui'
+import { computed, h, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { routeToInstanceConsole } from '@/navigation/game-routes'
 import { statusBadgeClass } from '@/constants/statusDictionary'
+import { copyTextToClipboard } from '@/utils/copyToClipboard'
+import { HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND } from '@/utils/hostMemoryPressure'
 import {
   computeUptimeSecondsFromStartedAt,
   extractInstallProgressPercent,
@@ -12,6 +14,7 @@ import {
   getInstanceState,
   isInstanceInstallingStatus,
   resolveInstallPhase,
+  resolveRuntimeReadinessView,
   shouldShowInstallDetail,
 } from '../../instanceDisplay'
 import {
@@ -88,6 +91,77 @@ const runtimeWarning = computed(() => {
   const legacy = props.instance?.lastError?.trim() ?? ''
   return legacy.startsWith('实例进程反复重启') || legacy.startsWith('主世界分片已停止') ? legacy : null
 })
+
+/** 世界是否已就绪：运行中不等于能接客（玩家要等世界加载完才搜得到房间） */
+const readiness = computed(() => (props.instance ? resolveRuntimeReadinessView(props.instance) : null))
+
+/**
+ * 内存导致的启动失败：主动问一次「要不要加缓存区」。
+ *
+ * 用通知而不是卡片里常驻一条说明：这是个需要用户做决定的询问，不该混在状态信息里被当背景读过去。
+ * 同一实例在状态没变化前只问一次——反复弹同一条只会让人条件反射地关掉它；失败状态消失后
+ * 重新计数，下次再失败还会问。
+ *
+ * 只有「内存」这一种归因才会问：后端给的 `runtimeFailureKind` 带证据（cgroup OOM 计数、
+ * 反复重启且可用缓冲见底…），Mod 报错之类的未就绪走另一套措辞，避免白折腾一轮缓存区。
+ */
+const notification = useNotification()
+const swapGuideVisible = ref(false)
+const message = useMessage()
+const promptedMemoryFailure = new Set<string>()
+
+function askAboutSwapGuide() {
+  const notice = notification.warning({
+    title: '实例内存不足',
+    content: '是否尝试增加缓存区大小？',
+    duration: 0,
+    closable: true,
+    action: () => h('div', { class: 'flex items-center gap-2' }, [
+      h(
+        NButton,
+        {
+          size: 'tiny',
+          type: 'warning',
+          secondary: true,
+          onClick: () => {
+            notice.destroy()
+            swapGuideVisible.value = true
+          },
+        },
+        { default: () => '增加缓存区' },
+      ),
+      h(NButton, { size: 'tiny', secondary: true, onClick: () => notice.destroy() }, { default: () => '取消' }),
+    ]),
+  })
+}
+
+watch(
+  () => [props.instance?.id, props.instance?.runtimeFailureKind] as const,
+  ([instanceId, failureKind]) => {
+    if (!instanceId) {
+      return
+    }
+    if (failureKind !== 'memory') {
+      promptedMemoryFailure.delete(instanceId)
+      return
+    }
+    if (promptedMemoryFailure.has(instanceId)) {
+      return
+    }
+    promptedMemoryFailure.add(instanceId)
+    askAboutSwapGuide()
+  },
+  { immediate: true },
+)
+
+async function copySwapCommand() {
+  const copied = await copyTextToClipboard(HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND)
+  if (copied) {
+    message.success('命令已复制')
+    return
+  }
+  message.warning('复制失败，请手动选中命令复制')
+}
 const actionRunning = computed(() => Boolean(props.instance && isInstanceActionRunning(props.instance.id)))
 
 const isInstalling = computed(() => Boolean(props.instance && isInstanceInstallingStatus(props.instance.status)))
@@ -176,6 +250,13 @@ function goConsole() {
         </span>
         <span v-if="instance.updateAvailable" class="text-xs text-amber-600 dark:text-amber-400">
           服务端有新版本
+        </span>
+        <span
+          v-if="readiness"
+          class="text-xs"
+          :class="readiness.tone === 'warn' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
+        >
+          {{ readiness.label }}
         </span>
       </div>
 
@@ -289,5 +370,38 @@ function goConsole() {
     <p v-else class="text-sm text-muted-foreground">
       未找到实例。
     </p>
+
+    <NModal
+      v-model:show="swapGuideVisible"
+      preset="card"
+      title="增加缓存区"
+      class="max-w-lg"
+    >
+      <div class="space-y-3 text-sm leading-relaxed">
+        <p>
+          实例最近因为内存不足被系统终止。
+        </p>
+        <p class="font-medium">
+          1. 停止实例
+        </p>
+        <div class="space-y-2">
+          <p class="font-medium">
+            2. 在服务器上执行以下命令（需要 root 权限）
+          </p>
+          <div class="rounded-md bg-muted/60 px-3 py-2 font-mono text-xs break-all">
+            {{ HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND }}
+          </div>
+          <NButton size="tiny" secondary @click="copySwapCommand">
+            复制命令
+          </NButton>
+          <p class="text-muted-foreground">
+            若你用的不是 /swapfile-gsh，把命令里的路径换成 swapon --show 里显示的名字。
+          </p>
+        </div>
+        <p class="font-medium">
+          3. 重启实例
+        </p>
+      </div>
+    </NModal>
   </NCard>
 </template>

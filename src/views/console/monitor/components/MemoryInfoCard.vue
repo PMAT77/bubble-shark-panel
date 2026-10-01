@@ -25,11 +25,11 @@ function formatGb(value: number | null | undefined) {
 
 const memoryPercent = computed(() => clampPercent(props.info?.memory.usageRate ?? 0))
 const memoryGuidance = computed(() => props.info?.memoryGuidance ?? null)
-/** 未配置交换区时后端给 null：显示「未配置」，而不是伪装成 0% */
+/** 未配置缓存区时后端给 null：显示「未配置」，而不是伪装成 0% */
 const swap = computed(() => props.info?.memory.swap ?? null)
 
 /**
- * 可用缓冲 = 可用内存 + 交换区余量。
+ * 可用缓冲 = 可用内存 + 缓存区余量。
  *
  * 这正是启动守卫判断「还能不能再起一个分片」的那个和：只看内存占用百分比，
  * 会把「内存吃满但有 swap 兜底」和「内存与 swap 都见底」看成同一件事。
@@ -96,10 +96,10 @@ const bufferHint = computed(() => {
       </div>
       <div class="text-xs mt-1" :class="bufferClass">
         <template v-if="swap">
-          交换区 {{ formatGb(swap.usedGb) }} / {{ formatGb(swap.totalGb) }} GB
+          缓存区 {{ formatGb(swap.usedGb) }} / {{ formatGb(swap.totalGb) }} GB
         </template>
         <template v-else>
-          未配置交换区
+          未配置缓存区
         </template>
         · 可用缓冲 {{ bufferText }} GB
       </div>
@@ -136,10 +136,10 @@ const bufferHint = computed(() => {
         <span class="text-xs text-muted-foreground mt-4">{{ formatGb(info?.memory.usedGb) }} / {{ formatGb(info?.memory.totalGb) }} GB · 可用 {{ formatGb(info?.memory.freeGb) }} GB</span>
         <span class="text-xs text-muted-foreground mt-1">
           <template v-if="swap">
-            交换区 {{ formatGb(swap.usedGb) }} / {{ formatGb(swap.totalGb) }} GB
+            缓存区 {{ formatGb(swap.usedGb) }} / {{ formatGb(swap.totalGb) }} GB
           </template>
           <template v-else>
-            未配置交换区
+            未配置缓存区
           </template>
         </span>
         <span class="text-xs mt-1" :class="bufferClass">
@@ -155,7 +155,7 @@ const bufferHint = computed(() => {
         {{ memoryGuidance.summaryZh }}
       </p>
       <p class="text-muted-foreground mt-1">
-        「可用缓冲」= 可用内存 + 交换区余量，是启动新分片前真正能用的部分。
+        「可用缓冲」= 可用内存 + 缓存区余量，是启动新分片前真正能用的部分。
       </p>
     </div>
   </NPopover>

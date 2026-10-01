@@ -31,6 +31,21 @@ function computeUptimeSeconds(startedAt: string | null | undefined): number | nu
   return Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
 }
 
+/**
+ * 卡片上的「运行时长」。
+ *
+ * 优先用运行时给出的「当前进程已连续运行多久」：面板记录的 `runtimeStartedAt` 是点启动的时刻，
+ * 进程被 systemd / 容器运行时自动拉起后它不会更新，于是「刚崩过一次」会被显示成一切正常
+ * （线上就出现过「运行时长 16 分钟 + 已重启 1 次」这种自相矛盾的读数）。
+ * 运行时给不出时才退回那个旧口径，而不是显示空白。
+ */
+function resolveUptimeSeconds(
+  stats: { uptimeSeconds?: number | null },
+  runtimeStartedAt: string | null,
+): number | null {
+  return stats.uptimeSeconds ?? computeUptimeSeconds(runtimeStartedAt)
+}
+
 async function collectMetricsForInstance(instance: DbGameInstance): Promise<InstanceRuntimeMetrics | null> {
   if (instance.status !== 'running' || instance.nodeId !== LOCAL_NODE_ID) {
     return null
@@ -48,7 +63,7 @@ async function collectMetricsForInstance(instance: DbGameInstance): Promise<Inst
     return {
       cpuUsageRate: stats.cpuUsageRate,
       memoryMb: stats.memoryMb,
-      uptimeSeconds: computeUptimeSeconds(instance.runtimeStartedAt),
+      uptimeSeconds: resolveUptimeSeconds(stats, instance.runtimeStartedAt),
     }
   }
   catch {

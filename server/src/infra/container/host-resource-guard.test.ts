@@ -68,7 +68,7 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
     }
   }
 
-  const machine = { availableMb: 3517, totalMb: 3915, swapFreeMb: 0 }
+  const machine = { availableMb: 3517, totalMb: 3915, swapFreeMb: 0, swapTotalMb: 0 }
 
   it('没有 swap 时拒绝启动，并明确指向 gsh setup-swap', () => {
     withPanelEnv(() => {
@@ -85,8 +85,30 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
       assert.match(result.detail, /gsh setup-swap/)
       assert.match(result.detail, /关闭洞穴分片/)
       assert.match(result.detail, /减少订阅的 Mod/)
-      // 前端靠这个字段决定通知里是「未配置 Swap，先执行 sudo gsh setup-swap」还是「已有 Swap，继续」
+      // 前端靠 swapTotalMb 判定「系统有没有 swap」：总量为 0 才是「未配置」
+      assert.equal(result.data.swapTotalMb, 0)
       assert.equal(result.data.swapFreeMb, 0)
+    })
+  })
+
+  it('swap 配了但被用满时，给的是扩容做法而不是再跑一遍 setup-swap', () => {
+    withPanelEnv(() => {
+      const result = assessHostMemoryForHeavyOperation(
+        'dst-container-start',
+        { shardCount: 2, modCount: 36 },
+        { availableMb: 790, totalMb: 3915, swapFreeMb: 0, swapTotalMb: 2048 },
+      )
+      assert.equal(result.ok, false)
+      if (result.ok) {
+        return
+      }
+      // 总量非 0 说明 swap 是配过的：此时 gsh setup-swap 会直接返回、什么都不做
+      assert.equal(result.data.swapTotalMb, 2048)
+      assert.equal(result.data.swapFreeMb, 0)
+      assert.match(result.detail, /缓存区已用满（共 2048 MiB）/)
+      assert.match(result.detail, /扩缓存区/)
+      assert.match(result.detail, /GSH_SWAP_SIZE=4G gsh setup-swap/)
+      assert.doesNotMatch(result.detail, /创建 2 GiB swapfile/)
     })
   })
 
@@ -95,7 +117,7 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
       const result = assessHostMemoryForHeavyOperation(
         'dst-container-start',
         { shardCount: 2, modCount: 36 },
-        { ...machine, swapFreeMb: 2048 },
+        { ...machine, swapFreeMb: 2048, swapTotalMb: 2048 },
       )
       assert.equal(result.ok, true)
     })
@@ -106,13 +128,13 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
       const result = assessHostMemoryForHeavyOperation(
         'dst-container-start',
         { shardCount: 2, modCount: 36 },
-        { availableMb: 300, totalMb: 3915, swapFreeMb: 16 },
+        { availableMb: 300, totalMb: 3915, swapFreeMb: 16, swapTotalMb: 2048 },
       )
       assert.equal(result.ok, false)
       if (result.ok) {
         return
       }
-      // 非 0 即「有 swap」：通知里因此走「已配置 Swap，启动继续」分支，而不是又让人跑一遍命令
+      // 还有余量：通知里因此走「已配置缓存区，启动继续」分支，而不是又让人跑一遍命令
       assert.equal(result.data.swapFreeMb, 16)
     })
   })

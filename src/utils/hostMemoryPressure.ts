@@ -7,10 +7,12 @@ import { FRONTEND_ROUTE_PATHS } from '../../shared/constants/frontend-routes'
 export const HOST_MEMORY_PRESSURE_CODE = 'HOST_MEMORY_PRESSURE'
 
 export const HOST_MEMORY_PRESSURE_TITLE = '⚠ 主机可用内存不足'
-/** swap 为 0（没有）或 null（读不到 /proc/meminfo）时都按「没有落点」提示，方向不会错 */
-export const HOST_MEMORY_PRESSURE_NO_SWAP_HINT = '系统未配置 Swap，建议先执行：'
+export const HOST_MEMORY_PRESSURE_NO_SWAP_HINT = '系统未配置缓存区，建议先执行：'
 export const HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND = 'sudo gsh setup-swap'
-export const HOST_MEMORY_PRESSURE_SWAP_READY_HINT = '系统已配置 Swap，启动继续。'
+/** swap 已配置但被用满：此时 setup-swap 会直接返回，必须换一条能真正生效的命令 */
+export const HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND
+  = 'sudo swapoff /swapfile-gsh && sudo rm -f /swapfile-gsh && sudo sed -i \'\\#^/swapfile-gsh #d\' /etc/fstab && sudo GSH_SWAP_SIZE=4G gsh setup-swap'
+export const HOST_MEMORY_PRESSURE_SWAP_READY_HINT = '系统已配置缓存区，启动继续。'
 export const HOST_MEMORY_PRESSURE_FOOTER = '如启动后仍出现内存不足，请关闭其他服务或增加内存。'
 
 export interface HostMemoryPressureErrorPayload {
@@ -37,8 +39,26 @@ export function isHostMemoryPressureError(payload: unknown): payload is HostMemo
     && typeof item.data?.detail === 'string'
 }
 
-export function isSwapConfigured(data: Pick<HostMemoryPressureData, 'swapFreeMb'>): boolean {
-  return typeof data.swapFreeMb === 'number' && data.swapFreeMb > 0
+export type SwapPressureState = 'none' | 'exhausted' | 'ready'
+
+/**
+ * swap 落点状态；与 server 侧 `resolveSwapState` 同一口径。
+ *
+ * 只看 `swapFreeMb` 会把「配了但被用满」当成「没配」：前者执行 `gsh setup-swap` 会被直接跳过
+ * （脚本检测到已有 swap 就不动），照着提示跑一遍什么都不会变。
+ * 缺 `swapTotalMb`（旧载荷）时退回按余量判断，方向与从前一致。
+ */
+export function resolveSwapState(
+  data: Pick<HostMemoryPressureData, 'swapFreeMb'> & { swapTotalMb?: number | null },
+): SwapPressureState {
+  const total = data.swapTotalMb ?? null
+  if (total === null) {
+    return (data.swapFreeMb ?? 0) > 0 ? 'ready' : 'none'
+  }
+  if (total === 0) {
+    return 'none'
+  }
+  return (data.swapFreeMb ?? 0) > 0 ? 'ready' : 'exhausted'
 }
 
 /**
@@ -119,10 +139,17 @@ export function renderMonitorAction(
   )
 }
 
-/** swap 提示：未配置时把命令单独成行，方便直接照着敲 */
+/** swap 提示：命令单独成行，方便直接照着敲；「没配」与「配了但用满」给的是两条不同的命令 */
 function renderSwapSections(data: HostMemoryPressureData) {
-  if (isSwapConfigured(data)) {
+  const state = resolveSwapState(data)
+  if (state === 'ready') {
     return [h('div', null, HOST_MEMORY_PRESSURE_SWAP_READY_HINT)]
+  }
+  if (state === 'exhausted') {
+    return [
+      h('div', null, `缓存区已用满（共 ${data.swapTotalMb} MiB），加载尖峰没有落点，建议扩到 4 GiB：`),
+      h('div', { class: 'font-medium break-all' }, HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND),
+    ]
   }
   return [
     h('div', null, HOST_MEMORY_PRESSURE_NO_SWAP_HINT),

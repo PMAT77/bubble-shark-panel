@@ -36,6 +36,34 @@ export function getInstanceState(
   return { ...INSTANCE_STATE[instance.status], key: instance.status }
 }
 
+/**
+ * 「运行中」之外还要说清世界有没有就绪。
+ *
+ * 只看 `status` 会把「进程在跑」当成「服务器能接客」：加载整套 Mod 与世界的那几分钟里，
+ * 房间还没向大厅注册，玩家搜不到——线上就是这么被误导的（卡片写着运行中，游戏里没有房间）。
+ *
+ * 语气交给后端的 `runtimeFailureKind`：它带证据（cgroup OOM 计数、反复重启且可用缓冲见底…），
+ * 前端不复刻阈值，免得两处口径各说各话。
+ */
+export function resolveRuntimeReadinessView(
+  instance: Pick<InstanceItem, 'status' | 'runtimeReadyAt' | 'runtimeStartedAt' | 'runtimeFailureKind'>,
+  nowMs = Date.now(),
+): { label: string, tone: 'ok' | 'warn' } | null {
+  if (instance.status !== 'running') {
+    return null
+  }
+  if (instance.runtimeReadyAt) {
+    return { label: '世界已就绪', tone: 'ok' }
+  }
+  const tone = instance.runtimeFailureKind ? 'warn' : 'ok'
+  const startedMs = instance.runtimeStartedAt ? Date.parse(instance.runtimeStartedAt) : Number.NaN
+  if (!Number.isFinite(startedMs)) {
+    return { label: '世界尚未就绪', tone }
+  }
+  const minutes = Math.floor(Math.max(0, nowMs - startedMs) / 60_000)
+  return { label: `世界尚未就绪（已加载 ${minutes} 分钟）`, tone }
+}
+
 /** 判断 lastCommand 是否为运行时启动命令（非安装日志） */
 export function looksLikeRuntimeCommand(text: string | null | undefined) {
   if (!text?.trim()) {

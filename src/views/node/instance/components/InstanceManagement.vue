@@ -32,6 +32,7 @@ import {
   getInstanceState,
   isInstanceInstallingStatus,
   resolveInstallPhase,
+  resolveRuntimeReadinessView,
   shouldShowInstallDetail,
 } from '../instanceDisplay'
 import {
@@ -565,6 +566,31 @@ function renderInstanceStateColumn(row: InstanceItem) {
     state.label,
   )
   const badges: ReturnType<typeof h>[] = [tag]
+  /**
+   * 运行中但世界还没就绪：大厅里搜不到这个房间，列表上必须能一眼看出，
+   * 否则服主会以为「已经在跑」而去查别的地方。
+   */
+  const readiness = resolveRuntimeReadinessView(row)
+  if (readiness && !row.runtimeReadyAt) {
+    badges.push(
+      h(
+        NTooltip,
+        { trigger: 'hover' },
+        {
+          trigger: () => h(
+            'span',
+            {
+              class: readiness.tone === 'warn'
+                ? 'text-xs px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                : 'text-xs px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground',
+            },
+            readiness.tone === 'warn' ? '未就绪' : '加载中',
+          ),
+          default: () => `${readiness.label}：加载完成前，玩家在大厅搜不到这个房间`,
+        },
+      ),
+    )
+  }
   const unexpectedExitAt = row.unexpectedExitAt?.trim()
   if (unexpectedExitAt) {
     badges.push(

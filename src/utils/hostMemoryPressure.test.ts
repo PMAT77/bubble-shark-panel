@@ -4,22 +4,24 @@ import type { HostMemoryPressureData } from '../../shared/contracts/host-memory-
 import {
   buildHostMemoryPressureSummaryLines,
   buildMonitorHref,
+  HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND,
   HOST_MEMORY_PRESSURE_FOOTER,
   HOST_MEMORY_PRESSURE_NO_SWAP_HINT,
   HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND,
   HOST_MEMORY_PRESSURE_SWAP_READY_HINT,
   HOST_MEMORY_PRESSURE_TITLE,
-  isSwapConfigured,
   renderMonitorAction,
+  resolveSwapState,
   showHostMemoryPressureNotification,
 } from './hostMemoryPressure'
 
 /**
  * 内存不足通知：文案要短到一眼能看完，按钮要真的能跳。
  *
- * 两件事都在这里钉住：
- * 1. 有没有 swap 决定中间那段是「先执行 sudo gsh setup-swap」还是「启动继续」——判据来自契约字段
- *    `swapFreeMb`，0 与 null 都要按「没有」处理；
+ * 三件事都在这里钉住：
+ * 1. swap 的三种状态给三条不同的话——「没配」要建（`gsh setup-swap`），
+ *    「配了但用满」要扩（那条命令会被 `gsh setup-swap` 直接跳过，照抄没用），
+ *    只有还有余量时才说「启动继续」。判据是 `swapTotalMb` 与 `swapFreeMb` 的组合；
  * 2. 「查看内存占用」点击后必须先销毁通知再导航，并且带 `<a href>` 兜底——此前是点击时才
  *    动态 import router 的写法，加载失败即静默中止，表现就是「点了没反应」。
  */
@@ -31,7 +33,8 @@ function makeData(overrides: Partial<HostMemoryPressureData> = {}): HostMemoryPr
     totalMb: 3915,
     capMb: 1536,
     swapFreeMb: 0,
-    detail: '当前可用约 3359 MiB，可用 swap 约 0 MiB，本操作建议至少 3456 MiB（总内存约 3915 MiB）。',
+    swapTotalMb: 0,
+    detail: '当前可用约 3359 MiB，未配置缓存区，本操作建议至少 3456 MiB（总内存约 3915 MiB）。',
     ...overrides,
   }
 }
@@ -87,15 +90,25 @@ function captureNotice(data: HostMemoryPressureData): CapturedNotice {
   return captured
 }
 
-describe('isSwapConfigured', () => {
-  it('swapFreeMb 为 0 或 null 时按未配置处理', () => {
-    assert.equal(isSwapConfigured({ swapFreeMb: 0 }), false)
-    assert.equal(isSwapConfigured({ swapFreeMb: null }), false)
+describe('resolveSwapState', () => {
+  it('总量为 0 才是「没配」', () => {
+    assert.equal(resolveSwapState({ swapFreeMb: 0, swapTotalMb: 0 }), 'none')
+    assert.equal(resolveSwapState({ swapFreeMb: null, swapTotalMb: 0 }), 'none')
   })
 
-  it('只要有 swap 余量就算已配置', () => {
-    assert.equal(isSwapConfigured({ swapFreeMb: 1 }), true)
-    assert.equal(isSwapConfigured({ swapFreeMb: 2048 }), true)
+  it('配了但余量为 0 是「用满」，要扩不要建', () => {
+    assert.equal(resolveSwapState({ swapFreeMb: 0, swapTotalMb: 2048 }), 'exhausted')
+  })
+
+  it('还有余量时按已就绪处理', () => {
+    assert.equal(resolveSwapState({ swapFreeMb: 1, swapTotalMb: 2048 }), 'ready')
+    assert.equal(resolveSwapState({ swapFreeMb: 2048, swapTotalMb: 2048 }), 'ready')
+  })
+
+  it('旧载荷没有总量字段时退回按余量判断', () => {
+    assert.equal(resolveSwapState({ swapFreeMb: 0 }), 'none')
+    assert.equal(resolveSwapState({ swapFreeMb: null }), 'none')
+    assert.equal(resolveSwapState({ swapFreeMb: 512 }), 'ready')
   })
 })
 
@@ -193,7 +206,7 @@ describe('showHostMemoryPressureNotification', () => {
   })
 
   it('已有 swap 时只说启动继续', () => {
-    const text = collectText(captureNotice(makeData({ swapFreeMb: 2048 })).content())
+    const text = collectText(captureNotice(makeData({ swapFreeMb: 2048, swapTotalMb: 2048 })).content())
     assert.deepEqual(text, [
       '当前可用内存：3359 MiB',
       '本次启动预计需要：3456 MiB',
@@ -203,8 +216,16 @@ describe('showHostMemoryPressureNotification', () => {
     assert.ok(!text.includes(HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND))
   })
 
-  it('读不到 meminfo（null）时按没有 swap 提示', () => {
-    const text = collectText(captureNotice(makeData({ swapFreeMb: null })).content())
+  it('缓存区已用满时给扩容命令，而不是让人再跑一遍 setup-swap', () => {
+    const text = collectText(captureNotice(makeData({ swapFreeMb: 0, swapTotalMb: 2048 })).content())
+    assert.ok(text.some(line => line.includes('缓存区已用满（共 2048 MiB）')))
+    assert.ok(text.includes(HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND))
+    assert.ok(!text.includes(HOST_MEMORY_PRESSURE_NO_SWAP_HINT))
+    assert.ok(!text.includes(HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND))
+  })
+
+  it('读不到 meminfo（null）时按没有缓存区提示', () => {
+    const text = collectText(captureNotice(makeData({ swapFreeMb: null, swapTotalMb: null })).content())
     assert.ok(text.includes(HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND))
   })
 })

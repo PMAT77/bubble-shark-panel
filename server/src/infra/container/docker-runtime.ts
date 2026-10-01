@@ -4,6 +4,7 @@ import Docker from 'dockerode'
 import { decodeDockerMultiplexLogChunk } from './docker-log'
 import { isDockerUnavailableError, resolveDockerConnectOptions } from '../docker-connect'
 import { buildInstanceShardNetworkName } from './instance-network'
+import { resolveUptimeSecondsFromIso } from './uptime'
 import type {
   ContainerInspect,
   ContainerRef,
@@ -270,11 +271,13 @@ export class DockerContainerRuntime implements ContainerRuntime {
       const container = this.docker.getContainer(ref.id)
       const data = await container.inspect()
       const running = Boolean(data.State?.Running)
+      const uptimeSeconds = resolveUptimeSecondsFromIso(data.State?.StartedAt)
       return {
         id: data.Id,
         name: data.Name?.replace(/^\//, '') ?? ref.name,
         running,
         startedAt: data.State?.StartedAt,
+        ...(uptimeSeconds !== undefined ? { uptimeSeconds } : {}),
       }
     }
     catch (error) {
@@ -308,7 +311,16 @@ export class DockerContainerRuntime implements ContainerRuntime {
     const memoryMb = stats.memory_stats?.usage
       ? Math.round(stats.memory_stats.usage / 1024 / 1024)
       : null
-    return { cpuUsageRate, memoryMb }
+    // 运行时长取容器自己的 StartedAt：容器被自动拉起后，面板记录的那个启动时刻不会更新，
+    // 「刚崩过一次」会被读数盖住。问不到就为 null，由调用方退回面板记录的启动时刻。
+    let uptimeSeconds: number | null = null
+    try {
+      uptimeSeconds = (await this.inspect(ref)).uptimeSeconds ?? null
+    }
+    catch {
+      uptimeSeconds = null
+    }
+    return { cpuUsageRate, memoryMb, uptimeSeconds }
   }
 
   async findByName(name: string): Promise<ContainerRef | undefined> {

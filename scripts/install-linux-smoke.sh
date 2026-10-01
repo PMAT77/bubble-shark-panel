@@ -622,7 +622,9 @@ swapon() {
   fi
   return 0
 }
-fallocate() { printf 'fallocate-stub\n'; }
+# 标记与 swapfile 都由「创建」这一步产生：用例 2 要的就是「调用前没有 swap、调用后有」，
+# 少了它，创建成功后 has_active_swap 仍为假、swapfile 也不存在，实现会如实报 failed。
+fallocate() { printf 'fallocate-stub\n'; : > "${SWAP_FILE}"; : > "${SWAP_MARKER}"; }
 chmod() { :; }
 mkswap() { printf 'mkswap-stub\n'; }
 sysctl() { :; }
@@ -635,7 +637,10 @@ df() {
 }
 read_host_mem_total_mb() { printf '%s' "${STUB_MEM_MB}"; }
 
-# 1) 已有生效中的 swap：一个字节都不许改（幂等）
+# 1) 小内存 + 已有生效中的 swap：一个字节都不许改（幂等）
+# 内存必须设在阈值以下：内存够大时实现本来就会整体跳过 swap 处理，那样这条用例
+# 验到的只是「大内存机器不碰 swap」，验不到「已有 swap 时不重复创建」。
+STUB_MEM_MB='3915'
 : > "${SWAP_MARKER}"
 AUTO_SWAP_STATE='none'
 ensure_small_host_swap

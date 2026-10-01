@@ -260,7 +260,7 @@ describe('instanceInstallGuide', () => {
 
   it('builds top-right install terminal notifications with 5s duration', () => {
     assert.deepEqual(
-      buildInstallResultNotification({ name: 'My DST', status: 'stopped' }),
+      buildInstallResultNotification({ name: 'My DST', status: 'stopped', lastErrorPhase: null }),
       {
         type: 'success',
         title: '实例安装完成',
@@ -269,7 +269,7 @@ describe('instanceInstallGuide', () => {
       },
     )
     assert.deepEqual(
-      buildInstallResultNotification({ name: 'My DST', status: 'error' }),
+      buildInstallResultNotification({ name: 'My DST', status: 'error', lastErrorPhase: 'install' }),
       {
         type: 'error',
         title: '实例安装失败',
@@ -277,6 +277,11 @@ describe('instanceInstallGuide', () => {
         durationMs: 5000,
       },
     )
-    assert.equal(buildInstallResultNotification({ name: 'My DST', status: 'installing' }), null)
+    // 安装就绪后启动失败也落在 error：那不是安装的结果，不该弹「安装失败」
+    assert.equal(
+      buildInstallResultNotification({ name: 'My DST', status: 'error', lastErrorPhase: 'runtime' }),
+      null,
+    )
+    assert.equal(buildInstallResultNotification({ name: 'My DST', status: 'installing', lastErrorPhase: null }), null)
   })
 })

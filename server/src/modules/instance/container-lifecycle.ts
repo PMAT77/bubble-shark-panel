@@ -878,6 +878,7 @@ async function startCavesAfterMasterReady(
       runtimePid: null,
       runtimeStartedAt: null,
       lastError: message,
+      lastErrorPhase: 'runtime',
       whereStatus: 'running',
     })
     app.log.error({ instanceId: input.instanceId }, message)

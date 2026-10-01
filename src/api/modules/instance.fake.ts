@@ -16,6 +16,7 @@ interface FakeInstanceItem {
   rconPort: number | null
   lastCommand: string | null
   lastError: string | null
+  lastErrorPhase: 'install' | 'runtime' | null
   installLogStatus: 'running' | 'success' | 'failed' | null
   installPercent: number | null
   installLogUpdatedAt: string | null
@@ -280,6 +281,7 @@ export default defineFakeRoute([
         rconPort: Number.isInteger(body.rconPort) ? body.rconPort : null,
         lastCommand: '等待安装任务启动',
         lastError: null,
+        lastErrorPhase: null,
         ...defaultInstallMeta,
         ...defaultUpdateMeta,
         createdAt,
@@ -355,6 +357,7 @@ export default defineFakeRoute([
           status: 'installing',
           lastCommand: '正在准备更新服务端...',
           lastError: null,
+          lastErrorPhase: null,
           installLogStatus: 'running',
           installPercent: 12,
           installLogUpdatedAt: updatedAt,
@@ -371,6 +374,7 @@ export default defineFakeRoute([
             status: 'stopped',
             lastCommand: '更新完成（fake）',
             lastError: null,
+            lastErrorPhase: null,
             installLogStatus: 'success',
             installPercent: 100,
             installLogUpdatedAt: nowIso(),

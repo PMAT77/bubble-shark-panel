@@ -36,7 +36,8 @@ import apiCluster from '@/api/modules/cluster'
 import apiInstance from '@/api/modules/instance'
 import { useHostMemoryGuidance } from '@/composables/useHostMemoryGuidance'
 import { useNarrowFormLayout } from '@/composables/useNarrowFormLayout'
-import { routeToDstPlayerManage, routeToDstRoomList, routeToDstWorldSettings } from '@/navigation/game-routes'
+import { routeToConsoleMonitor, routeToDstPlayerManage, routeToDstRoomList, routeToDstWorldSettings } from '@/navigation/game-routes'
+import router from '@/router'
 import { isInstanceInstallingStatus } from '@/views/node/instance/instanceDisplay'
 import { getPortConflictDialogLabels, isInstancePortConflictError } from '@/utils/instancePortConflict'
 import { tryNotifyHostMemoryPressure } from '@/utils/hostMemoryPressure'
@@ -377,7 +378,7 @@ async function saveConfig(restart = false) {
       })
       return
     }
-    if (tryNotifyHostMemoryPressure(notification, error)) {
+    if (tryNotifyHostMemoryPressure(notification, error, () => router.push(routeToConsoleMonitor()))) {
       return
     }
     // 其余业务错误由全局拦截器统一提示，这里仅避免未处理的 Promise 拒绝

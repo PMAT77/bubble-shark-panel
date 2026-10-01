@@ -44,17 +44,62 @@ if (!/PANEL_PORT="\$\{PANEL_PORT:-9527\}"/.test(source)) {
   failures.push('scripts/gsh.sh 的面板端口默认值与安装器的 9527 不一致')
 }
 
-// 4) fstab 写入必须生成合法行：格式串带换行，且追加前补齐文件行尾
+// 4) fstab 写入必须生成合法行：格式串带换行，且追加前补齐文件行尾。
+//    fstab 路径在函数内取（安装器要把它指到自己的目录），所以这里不锁死路径写法，
+//    改为要求默认值仍是 /etc/fstab。
 if (!source.includes("printf '%s none swap sw 0 0\\n'")) {
   failures.push("scripts/gsh.sh 的 fstab 写入格式串不是 '\\n' 结尾")
 }
-if (!source.includes('tail -c 1 /etc/fstab')) {
+if (!source.includes('tail -c 1')) {
   failures.push('scripts/gsh.sh 写入 fstab 前未校验文件是否以换行结尾')
+}
+if (!source.includes('/etc/fstab')) {
+  failures.push('scripts/gsh.sh 的 fstab 默认路径不再是 /etc/fstab')
 }
 
 // 5) 诊断日志路径必须来自 panel.env，不能硬编码安装目录
 if (/DIAGNOSTICS_LOG="\/opt\//.test(source)) {
   failures.push('scripts/gsh.sh 的 DIAGNOSTICS_LOG 仍硬编码为安装目录路径')
+}
+
+// 6) 安装器与 gsh CLI 的库模式契约：小内存机安装时自动创建 swap 靠 install.linux.sh
+//    source 本脚本并直接调用 cmd_setup_swap。这三条任何一条被删掉，自动配置 swap 都会静默失效
+//    （要么把交互菜单跑起来，要么读不到 GSH_SWAP_SIZE，要么调用点消失）。
+const installerPath = path.join(repoRoot, 'scripts', 'install.linux.sh')
+if (!fs.existsSync(installerPath)) {
+  failures.push('scripts/install.linux.sh 不存在，无法校验库模式契约')
+}
+else {
+  const installer = fs.readFileSync(installerPath, 'utf8')
+  const installerLineCount = installer.split(/\r?\n/).length
+
+  if (!/GSH_GSH_LIB_ONLY:-0/.test(source)) {
+    failures.push('scripts/gsh.sh 缺少 GSH_GSH_LIB_ONLY 逃生阀，安装器 source 它会把交互菜单一起跑起来')
+  }
+  if (!installer.includes('ensure_small_host_swap')) {
+    failures.push('scripts/install.linux.sh 未调用 ensure_small_host_swap')
+  }
+  if (!installer.includes('GSH_GSH_LIB_ONLY=1')) {
+    failures.push('scripts/install.linux.sh 未以库模式（GSH_GSH_LIB_ONLY=1）加载 gsh.sh')
+  }
+  if (!installer.includes('cmd_setup_swap')) {
+    failures.push('scripts/install.linux.sh 未复用 gsh 的 cmd_setup_swap（自动配置 swap 会与 gsh setup-swap 漂移）')
+  }
+  if (!/--no-swap/.test(installer)) {
+    failures.push('scripts/install.linux.sh 缺少 --no-swap 开关')
+  }
+  // gsh CLI 必须先于自动 swap 就位：安装器复用本地 gsh.sh，但 curl | bash 路线只能靠已部署的 gsh。
+  const cliLine = installer.split(/\r?\n/).findIndex(line => line.includes('install_gsh_cli'))
+  const swapCallLine = installer.split(/\r?\n/).findIndex(line => line.trim() === 'ensure_small_host_swap')
+  if (cliLine < 0 || swapCallLine < 0) {
+    failures.push('scripts/install.linux.sh 未找到 install_gsh_cli 或 ensure_small_host_swap 调用点')
+  }
+  else if (cliLine > swapCallLine) {
+    failures.push('scripts/install.linux.sh 的 install_gsh_cli 必须排在 ensure_small_host_swap 之前')
+  }
+  if (installerLineCount < 100) {
+    failures.push('scripts/install.linux.sh 行数异常，疑似被截断')
+  }
 }
 
 if (failures.length > 0) {

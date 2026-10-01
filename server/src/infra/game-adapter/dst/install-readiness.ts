@@ -41,6 +41,11 @@ export interface DstStartBlockedContext {
   installLogStatus?: string | null
   instanceStatus?: string
   lastError?: string | null
+  /**
+   * 最近一次失败的环节（`last_error_phase`）。启动/运行期失败（内存不足、端口占用）的
+   * 实例同样是 error，把它的原因当"安装未就绪"的说明拼进提示，会把人引去重装服务端文件。
+   */
+  lastErrorPhase?: 'install' | 'runtime' | null
 }
 
 const GAME_FILES_PREFIX = '游戏文件未安装'
@@ -111,7 +116,7 @@ export function buildGameFilesBlockedMessage(
   context?: DstStartBlockedContext,
 ): string {
   const installFailed = context?.installLogStatus === 'failed'
-    || context?.instanceStatus === 'error'
+    || (context?.instanceStatus === 'error' && context?.lastErrorPhase !== 'runtime')
   const storedError = context?.lastError?.trim()
 
   if (storedError && isPanelGameFilesMessage(storedError)) {

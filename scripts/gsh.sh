@@ -13,8 +13,8 @@ PANEL_PORT="8888"
 RUNTIME_MODE=""
 NATIVE_SERVICE="game-server-hub.service"
 DIAGNOSTICS_LOG="" # 由 load_config 依 panel.env 的日志目录解析
-SWAP_SIZE="${GSH_SWAP_SIZE:-2G}"
-SWAP_FILE="${GSH_SWAP_FILE:-/swapfile-gsh}"
+# swap 的大小与路径不在这里取值：安装器用 GSH_SWAP_SIZE 指定档位，若把它固化成脚本级变量，
+# 函数里的 local 声明会遮蔽它，GSH_SWAP_SIZE=4G gsh setup-swap 就变成静默失效（见 cmd_setup_swap）。
 
 # ---------- 基础输出 ----------
 
@@ -246,8 +246,15 @@ cmd_doctor() {
 }
 
 # 小内存主机一键 swap（2G 默认，可用 GSH_SWAP_SIZE 覆盖）。
+# 安装器会以库方式加载本脚本并直接调用这个函数（GSH_GSH_LIB_ONLY=1），
+# 所以路径与大小都在函数内取值：既让 GSH_SWAP_SIZE / GSH_SWAP_FILE 覆盖真正生效，
+# 也让安装器能把 fstab / sysctl.d 重定向到自己的目录。
 cmd_setup_swap() {
   require_root setup-swap
+  local swap_size="${GSH_SWAP_SIZE:-2G}"
+  local swap_file="${GSH_SWAP_FILE:-/swapfile-gsh}"
+  local fstab_file="${GSH_SWAP_FSTAB_FILE:-/etc/fstab}"
+  local sysctl_dir="${GSH_SWAP_SYSCTL_DIR:-/etc/sysctl.d}"
   if ! have swapon; then
     log_error "swapon not found; install util-linux first."
     return 1
@@ -257,21 +264,20 @@ cmd_setup_swap() {
     swapon --show
     return 0
   fi
-  log_info "Creating ${SWAP_SIZE} swapfile at ${SWAP_FILE}..."
-  fallocate -l "${SWAP_SIZE}" "${SWAP_FILE}" || dd if=/dev/zero of="${SWAP_FILE}" bs=1M count=2048 status=progress
-  chmod 600 "${SWAP_FILE}"
-  mkswap "${SWAP_FILE}"
-  swapon "${SWAP_FILE}"
-  if ! grep -qE "^${SWAP_FILE}[[:space:]]" /etc/fstab; then
+  log_info "Creating ${swap_size} swapfile at ${swap_file}..."
+  fallocate -l "${swap_size}" "${swap_file}" || dd if=/dev/zero of="${swap_file}" bs=1M count=2048 status=progress
+  chmod 600 "${swap_file}"
+  mkswap "${swap_file}"
+  swapon "${swap_file}"
+  if ! grep -qE "^${swap_file}[[:space:]]" "${fstab_file}"; then
     # 追加前补齐文件行尾：若 /etc/fstab 最后一行没有换行，新条目会与它拼成一行，
     # 第 6 个字段随之变成非法值，mount -a 与开机挂载都会解析失败。
-    if [[ -s /etc/fstab && -n "$(tail -c 1 /etc/fstab)" ]]; then
-      printf '\n' >> /etc/fstab
+    if [[ -s "${fstab_file}" && -n "$(tail -c 1 "${fstab_file}")" ]]; then
+      printf '\n' >> "${fstab_file}"
     fi
-    printf '%s none swap sw 0 0\n' "${SWAP_FILE}" >> /etc/fstab
-    log_info "Added ${SWAP_FILE} to /etc/fstab."
+    printf '%s none swap sw 0 0\n' "${swap_file}" >> "${fstab_file}"
+    log_info "Added ${swap_file} to ${fstab_file}."
   fi
-  local sysctl_dir="/etc/sysctl.d"
   if [[ -d "$sysctl_dir" ]]; then
     cat > "${sysctl_dir}/99-game-server-hub.conf" <<EOF
 # game-server-hub memory pressure guards (written by gsh setup-swap)
@@ -343,8 +349,9 @@ Scope: this CLI manages the panel stack only; DST instance lifecycle belongs to 
 
 Environment overrides:
   GSH_PANEL_ENV_FILE   panel.env path (default: /opt/game-server-hub/panel.env)
-  GSH_SWAP_SIZE        swapfile size (default: 2G)
+  GSH_SWAP_SIZE        swapfile size (default: 2G; the installer also honors it)
   GSH_SWAP_FILE        swapfile path (default: /swapfile-gsh)
+  GSH_SWAP_ON_INSTALL  installer-only: 0 disables the automatic swapfile (default: 1)
 EOF
 }
 
@@ -367,4 +374,8 @@ main() {
   esac
 }
 
-main "$@"
+# 以库方式加载（GSH_GSH_LIB_ONLY=1）时只定义函数：安装器要复用 cmd_setup_swap 在安装阶段
+# 创建 swap，不能顺手把交互菜单/命令分发也跑起来。
+if [[ "${GSH_GSH_LIB_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi

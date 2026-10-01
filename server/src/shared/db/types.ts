@@ -75,6 +75,13 @@ export interface SaveServerNodeInput {
 
 export type DbGameInstanceStatus = 'pending_install' | 'running' | 'stopped' | 'installing' | 'error'
 export type DbInstallLogStatus = 'running' | 'success' | 'failed'
+/**
+ * 实例最近一次失败发生的环节。
+ *
+ * install = 安装/更新游戏服务端（含安装环境未就绪）；runtime = 启动或运行期。
+ * 展示层用它拆分「安装失败 / 运行异常」，不再从 lastError 文案里判。
+ */
+export type DbInstanceErrorPhase = 'install' | 'runtime'
 
 export interface DbGameInstance {
   id: string
@@ -93,6 +100,8 @@ export interface DbGameInstance {
   lastCommand: string | null
   lastExitCode: number | null
   lastError: string | null
+  /** 最近一次失败的环节；与 lastError 同生命周期（lastError 清空时一并清空） */
+  lastErrorPhase: DbInstanceErrorPhase | null
   /** 运行期警告（重启循环 / 退出原因 / 分片残留）；与 lastError 分开，停止实例不清空 */
   runtimeWarning: string | null
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
@@ -124,6 +133,7 @@ export interface CreateGameInstanceInput {
   lastCommand?: string | null
   lastExitCode?: number | null
   lastError?: string | null
+  lastErrorPhase?: DbInstanceErrorPhase | null
   runtimeWarning?: string | null
 }
 
@@ -141,6 +151,8 @@ export interface UpdateGameInstanceRuntimeInput {
   lastCommand?: string | null
   lastExitCode?: number | null
   lastError?: string | null
+  /** 与 lastError 同一次写入给出；非空 lastError 不带环节时前端按 runtime 兜底 */
+  lastErrorPhase?: DbInstanceErrorPhase | null
   runtimeWarning?: string | null
   unexpectedExitAt?: string | null
   installLogStatus?: DbInstallLogStatus | null

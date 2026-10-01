@@ -12,30 +12,26 @@ export function getStatusBadgeClass(status: InstanceStatus) {
   return statusBadgeClass(INSTANCE_STATUS[status].tone)
 }
 
-/** 判定 error 是否源于运行期失败（而非安装失败） */
-function looksLikeRuntimeFailure(instance: Pick<InstanceItem, 'status' | 'lastError' | 'lastCommand'>) {
-  const error = instance.lastError?.trim() ?? ''
-  const command = instance.lastCommand?.trim() ?? ''
-  if (error.includes('安装失败') || command.includes('安装失败')) {
-    return false
-  }
-  if (looksLikeRuntimeCommand(command)) {
-    return true
-  }
-  return error.includes('启动') && !error.includes('Steam') && !error.includes('steamcmd')
+/** 最近一次失败是否发生在安装环节（后端写入失败时一并落库，见 `last_error_phase`） */
+function isInstallPhaseFailure(instance: Pick<InstanceItem, 'lastErrorPhase'>) {
+  return instance.lastErrorPhase === 'install'
 }
 
 /**
  * 实例展示状态：将 error 拆分为「安装失败 / 运行异常」，
  * 其余状态直接映射词典。列表/详情/通知应统一使用本函数。
+ *
+ * 依据是 `lastErrorPhase`（后端写入失败时一并落库的环节），不是错误文案——
+ * 内存守卫拒绝启动时写的说明里同时提到「安装」「启动」，靠文案判不出真实环节。
+ * 环节未知（旧数据、手工改库）按运行异常兜底，与 `INSTANCE_STATUS.error` 的口径一致。
  */
 export function getInstanceState(
-  instance: Pick<InstanceItem, 'status' | 'lastError' | 'lastCommand'>,
+  instance: Pick<InstanceItem, 'status' | 'lastErrorPhase'>,
 ): StatusDescriptor & { key: keyof typeof INSTANCE_STATE } {
   if (instance.status === 'error') {
-    return looksLikeRuntimeFailure(instance)
-      ? { ...INSTANCE_STATE.runtime_error, key: 'runtime_error' }
-      : { ...INSTANCE_STATE.install_failed, key: 'install_failed' }
+    return isInstallPhaseFailure(instance)
+      ? { ...INSTANCE_STATE.install_failed, key: 'install_failed' }
+      : { ...INSTANCE_STATE.runtime_error, key: 'runtime_error' }
   }
   return { ...INSTANCE_STATE[instance.status], key: instance.status }
 }
@@ -57,10 +53,7 @@ export function resolveInstallPhase(instance: InstanceItem): string {
   const text = `${command}\n${error}`.trim()
 
   if (instance.status === 'error') {
-    if (error.includes('安装失败') || command.includes('安装失败')) {
-      return '安装失败'
-    }
-    return error ? '安装失败' : '安装异常'
+    return isInstallPhaseFailure(instance) ? '安装失败' : '—'
   }
 
   if (!text) {
@@ -131,9 +124,13 @@ export function extractInstallProgressPercent(instance: InstanceItem): number | 
 
 /** 是否应在安装列展示详细进度/阶段 */
 export function shouldShowInstallDetail(instance: InstanceItem) {
+  if (instance.status === 'error') {
+    // 只有安装环节失败才谈得上「安装进度 / 安装阶段」；
+    // 启动或运行期失败的实例，安装早已就绪，展示安装区块只会把人往重装方向引
+    return isInstallPhaseFailure(instance)
+  }
   return instance.status === 'pending_install'
     || instance.status === 'installing'
-    || instance.status === 'error'
 }
 
 /** 是否可打开 SteamCMD 安装日志弹窗 */

@@ -1,0 +1,2 @@
+ALTER TABLE `game_instances` ADD `last_error_phase` text;--> statement-breakpoint
+UPDATE `game_instances` SET `last_error_phase` = 'install' WHERE `status` = 'error' AND (`last_error` LIKE '%安装失败%' OR `last_command` LIKE '%安装失败%');

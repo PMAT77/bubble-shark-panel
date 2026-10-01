@@ -155,6 +155,8 @@ export const instanceItemSchema = z.object({
   rconPort: portSchema.nullable(),
   lastCommand: z.string().nullable(),
   lastError: z.string().nullable(),
+  /** 最近一次失败的环节：install = 安装/更新，runtime = 启动或运行期；未知为 null */
+  lastErrorPhase: z.enum(['install', 'runtime']).nullable(),
   /** 运行期警告（重启循环 / 退出原因 / 分片残留）；停止实例不清空，与 lastError 分开 */
   runtimeWarning: z.string().nullable(),
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
@@ -180,8 +182,8 @@ export type InstanceItem = z.infer<typeof instanceItemSchema>
  * `/app/instance/list`（要求 `instance:read`），于是"看房间"被迫等于"能看实例管理"；
  * 现在它们走 `/app/instance/options`，只拿这里的字段，权限也只需要自己的那个读权限点。
  *
- * 字段恰好够用：`status/lastError/lastCommand` 是 `getInstanceState()` 判定
- * 「安装失败 / 运行异常」的输入，`gameCode` 用于筛出本游戏的实例。
+ * 字段恰好够用：`status/lastError/lastErrorPhase/lastCommand` 是
+ * `getInstanceState()` 判定「安装失败 / 运行异常」的输入，`gameCode` 用于筛出本游戏的实例。
  */
 export const instanceSummaryItemSchema = z.object({
   id: instanceIdSchema,
@@ -189,6 +191,7 @@ export const instanceSummaryItemSchema = z.object({
   gameCode: z.string(),
   status: instanceStatusSchema,
   lastError: z.string().nullable(),
+  lastErrorPhase: z.enum(['install', 'runtime']).nullable(),
   lastCommand: z.string().nullable(),
 })
 export type InstanceSummaryItem = z.infer<typeof instanceSummaryItemSchema>

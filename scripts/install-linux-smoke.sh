@@ -18,22 +18,22 @@ SMOKE_INSTALLED_TAG='v0.6.0'
 # 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
 SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.13.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${GSH_RELEASE_TAG}" == "v0.13.0" ]]
+# v0.13.1 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${GSH_RELEASE_TAG}" == "v0.13.1" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.13.0"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.13.1"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.13.0" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.13.1" ]]
 [[ "${GSH_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${GSH_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 
@@ -598,5 +598,86 @@ DIAGNOSTICS_LINE="$(grep -n 'Diagnostics:' "${SCRIPT_DIR}/install.linux.sh" | ta
 if grep -Fq -- '--check' "${SCRIPT_DIR}/../README.md" || grep -Fq -- '--check' "${SCRIPT_DIR}/../docs/install-docker.md"; then
   grep -Fq -- '--check' "${SCRIPT_DIR}/install.linux.sh"
 fi
+
+# ---- 小内存机自动 swap：文件标记法驱动 swapon stub ----
+# 创建 swap 需要 root，面板自己做不到（面板不以 root 运行），所以这件事必须在安装阶段做掉。
+# 标记文件让「调用前无 swap、调用后有 swap」可以按顺序模拟，而不用在同一轮里做状态机。
+SWAP_TEST_DIR="$(mktemp -d)"
+SWAP_MARKER="${SWAP_TEST_DIR}/swap-active"
+SWAP_FILE="${SWAP_TEST_DIR}/swapfile-gsh"
+SWAP_FSTAB="${SWAP_TEST_DIR}/fstab"
+SWAP_SYSCTL_DIR="${SWAP_TEST_DIR}/sysctl.d"
+# 这些名字必须与安装器/cmd_setup_swap 真正读取的键一致：invoke_swap_setup 在子 shell 里
+# source gsh.sh 再调 cmd_setup_swap，只有导出的环境变量能传进去。
+export SWAP_MARKER
+export GSH_SWAP_FILE="${SWAP_FILE}"
+export GSH_SWAP_FSTAB_FILE="${SWAP_FSTAB}"
+export GSH_SWAP_SYSCTL_DIR="${SWAP_SYSCTL_DIR}"
+export STUB_MEM_MB='7629'
+mkdir -p "${SWAP_SYSCTL_DIR}"
+printf '/dev/vda1 / ext4 defaults 0 1' > "${SWAP_FSTAB}" # 故意不带行尾换行
+swapon() {
+  if [[ -e "${SWAP_MARKER}" ]]; then
+    printf '/swapfile-gsh file 2097148 0 -2\n'
+  fi
+  return 0
+}
+fallocate() { printf 'fallocate-stub\n'; }
+chmod() { :; }
+mkswap() { printf 'mkswap-stub\n'; }
+sysctl() { :; }
+df() {
+  if [[ "${1:-}" == '-Pm' ]]; then
+    printf 'Filesystem 1048576-blocks Used Available Capacity Mounted on\n'
+    printf '/dev/vda1 40960 10240 30720 26%% /\n'
+  fi
+  return 0
+}
+read_host_mem_total_mb() { printf '%s' "${STUB_MEM_MB}"; }
+
+# 1) 已有生效中的 swap：一个字节都不许改（幂等）
+: > "${SWAP_MARKER}"
+AUTO_SWAP_STATE='none'
+ensure_small_host_swap
+[[ "${AUTO_SWAP_STATE}" == 'active' ]]
+[[ ! -e "${SWAP_FILE}" ]]
+[[ "$(cat "${SWAP_FSTAB}")" == '/dev/vda1 / ext4 defaults 0 1' ]]
+
+# 2) 小内存且无 swap：创建 swapfile、写入 fstab（补齐行尾）与 sysctl
+rm -f "${SWAP_MARKER}"
+AUTO_SWAP_STATE='none'
+STUB_MEM_MB='3915'
+ensure_small_host_swap
+[[ "${AUTO_SWAP_STATE}" == 'created' ]]
+[[ -e "${SWAP_FILE}" ]]
+if ! grep -Fq "${SWAP_FILE} none swap sw 0 0" "${SWAP_FSTAB}"; then
+  printf 'swapfile entry missing from fstab: %s\n' "$(cat "${SWAP_FSTAB}")" >&2
+  exit 1
+fi
+# fstab 末尾若没有换行，新条目会被拼到上一行，第 6 个字段随之非法（历史上真炸过一次）
+grep -Fq '/dev/vda1 / ext4 defaults 0 1' "${SWAP_FSTAB}" || {
+  printf 'fstab head line was corrupted\n' >&2
+  exit 1
+}
+grep -Fq 'vm.swappiness = 20' "${SWAP_SYSCTL_DIR}/99-game-server-hub.conf"
+
+# 3) 内存档位够用：不创建 swapfile
+rm -f "${SWAP_MARKER}" "${SWAP_FILE}"
+AUTO_SWAP_STATE='none'
+STUB_MEM_MB='7629'
+ensure_small_host_swap
+[[ "${AUTO_SWAP_STATE}" == 'skipped' ]]
+[[ ! -e "${SWAP_FILE}" ]]
+
+# 4) GSH_SWAP_ON_INSTALL=0：即使内存很小也不创建
+GSH_SWAP_ON_INSTALL='0'
+AUTO_SWAP_STATE='none'
+STUB_MEM_MB='3915'
+ensure_small_host_swap
+[[ "${AUTO_SWAP_STATE}" == 'skipped' ]]
+[[ ! -e "${SWAP_FILE}" ]]
+GSH_SWAP_ON_INSTALL='1'
+STUB_MEM_MB='7629'
+rm -rf "${SWAP_TEST_DIR}"
 
 printf 'install-linux-smoke-ok\n'

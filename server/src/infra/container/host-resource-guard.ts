@@ -195,6 +195,7 @@ function buildHostMemoryPressureFailure(
     requiredMb,
     totalMb,
     capMb: capMb ?? null,
+    swapFreeMb,
     detail,
   }
   return { ok: false, availableMb, requiredMb, summary, detail, data }

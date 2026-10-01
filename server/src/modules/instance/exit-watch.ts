@@ -57,6 +57,7 @@ export async function reconcileUnexpectedExits(app: FastifyInstance): Promise<nu
       runtimePid: null,
       runtimeStartedAt: null,
       lastError: `检测到实例进程异常退出（${exitAt.replace('T', ' ').slice(0, 19)}）。Docker 模式 on-failure 重试耗尽后需手动启动；Native 模式 systemd 会自动拉起。`,
+      lastErrorPhase: 'runtime',
       unexpectedExitAt: exitAt,
       whereStatus: 'running',
     })

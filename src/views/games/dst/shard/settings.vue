@@ -32,9 +32,11 @@ import { useNarrowFormLayout } from '@/composables/useNarrowFormLayout'
 import { useUnsavedChangesGuard } from '@/composables/useUnsavedChangesGuard'
 import ConfigActionBar from '@/components/ConfigActionBar.vue'
 import {
+  routeToConsoleMonitor,
   routeToDstRoomSettings,
   routeToDstWorldList,
 } from '@/navigation/game-routes'
+import router from '@/router'
 import { isInstanceInstallingStatus } from '@/views/node/instance/instanceDisplay'
 import { resolveShardDisplayStatus, statusTagType } from '@/constants/statusDictionary'
 import { tryNotifyHostMemoryPressure } from '@/utils/hostMemoryPressure'
@@ -533,7 +535,7 @@ async function saveShard(shard: ShardId, restart: boolean) {
       })
       return
     }
-    if (tryNotifyHostMemoryPressure(notification, error)) {
+    if (tryNotifyHostMemoryPressure(notification, error, () => router.push(routeToConsoleMonitor()))) {
       return
     }
     const msg = error instanceof Error

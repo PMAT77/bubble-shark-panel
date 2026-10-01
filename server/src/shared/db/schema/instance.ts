@@ -18,6 +18,15 @@ export const gameInstances = sqliteTable('game_instances', {
   lastExitCode: integer('last_exit_code'),
   lastError: text('last_error'),
   /**
+   * 最近一次失败发生的环节：install = 安装/更新游戏服务端（含安装环境未就绪），runtime = 启动或运行期。
+   *
+   * 与 lastError 同生命周期：写入失败时一并给出，lastError 被清空时自动清空。
+   * 展示层据此把 error 拆成「安装失败 / 运行异常」——此前靠 lastError 文案里有没有
+   * 「安装失败」「启动」来猜，内存守卫拒绝启动时写的说明里恰好有「启动」才判成运行异常，
+   * 文案一改就会被显示成「安装失败」。
+   */
+  lastErrorPhase: text('last_error_phase'),
+  /**
    * 运行期警告（重启循环、退出原因、分片残留）。
    *
    * 与 lastError 分开存：lastError 会被「启动失败」「停止实例」「状态对账」反复覆盖，

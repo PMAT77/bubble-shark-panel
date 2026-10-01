@@ -5,7 +5,7 @@ import { h, ref } from 'vue'
 import apiCluster from '@/api/modules/cluster'
 import apiInstance from '@/api/modules/instance'
 import apiShard from '@/api/modules/shard'
-import { routeToDstRoomSettings, routeToDstWorldSettings } from '@/navigation/game-routes'
+import { routeToConsoleMonitor, routeToDstRoomSettings, routeToDstWorldSettings } from '@/navigation/game-routes'
 import { blurFocusedElement } from '@/utils'
 import { tryNotifyHostMemoryPressure } from '@/utils/hostMemoryPressure'
 import {
@@ -120,7 +120,7 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
         }))
         return
       }
-      if (tryNotifyHostMemoryPressure(notification, error)) {
+      if (tryNotifyHostMemoryPressure(notification, error, () => router.push(routeToConsoleMonitor()))) {
         return
       }
       faToast.error(action === 'restart' ? '重启失败' : '启动失败', {
@@ -321,7 +321,7 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
       await options.onUpdateAccepted?.(row)
     }
     catch (error) {
-      if (tryNotifyHostMemoryPressure(notification, error)) {
+      if (tryNotifyHostMemoryPressure(notification, error, () => router.push(routeToConsoleMonitor()))) {
         await options.refresh()
         return
       }

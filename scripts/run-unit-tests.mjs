@@ -23,6 +23,7 @@ const args = [
   'src/api/**/*.test.ts',
   'src/composables/**/*.test.ts',
   'src/store/**/*.test.ts',
+  'src/utils/**/*.test.ts',
   'src/views/**/*.test.ts',
 ]
 

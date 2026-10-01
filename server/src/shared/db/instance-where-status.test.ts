@@ -10,15 +10,15 @@ import { updateGameInstanceRuntime } from './instance-repository'
 const dbFilePath = path.join(os.tmpdir(), `gsh-where-status-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
+before(async () => {
+  await initDatabase(dbFilePath, migrationsFolder)
+})
+
+after(() => {
+  closeDatabase()
+})
+
 describe('updateGameInstanceRuntime whereStatus guard', () => {
-  before(async () => {
-    await initDatabase(dbFilePath, migrationsFolder)
-  })
-
-  after(() => {
-    closeDatabase()
-  })
-
   it('skips the write when the current status does not match (状态机竞态保护)', async () => {
     const instance = await createGameInstance({
       nodeId: 'local-node',
@@ -61,5 +61,60 @@ describe('updateGameInstanceRuntime whereStatus guard', () => {
     })
     assert.equal(multi?.status, 'stopped')
     assert.equal(multi?.lastCommand, '安装已完成')
+  })
+})
+
+describe('updateGameInstanceRuntime lastErrorPhase', () => {
+  it('记录失败环节，并在错误被清空时一并清空', async () => {
+    const instance = await createGameInstance({
+      nodeId: 'local-node',
+      name: 'phase-test',
+      gameCode: 'dst',
+      status: 'stopped',
+    })
+
+    const failed = await updateGameInstanceRuntime(instance.id, {
+      status: 'error',
+      lastError: '宿主机可用内存不足',
+      lastErrorPhase: 'runtime',
+    })
+    assert.equal(failed?.lastErrorPhase, 'runtime')
+
+    // 启动成功会清空 lastError：环节不能残留，否则下一次失败没带环节时会被算到上一次头上
+    const recovered = await updateGameInstanceRuntime(instance.id, { status: 'running', lastError: null })
+    assert.equal(recovered?.lastError, null)
+    assert.equal(recovered?.lastErrorPhase, null)
+  })
+
+  it('只接受 install / runtime，其余值按未知落 null', async () => {
+    const instance = await createGameInstance({
+      nodeId: 'local-node',
+      name: 'phase-invalid-test',
+      gameCode: 'dst',
+      status: 'stopped',
+    })
+
+    const install = await updateGameInstanceRuntime(instance.id, {
+      status: 'error',
+      lastError: '安装失败',
+      lastErrorPhase: 'install',
+    })
+    assert.equal(install?.lastErrorPhase, 'install')
+
+    const bogus = await updateGameInstanceRuntime(instance.id, {
+      lastError: '手改库写进来的值',
+      lastErrorPhase: 'nonsense' as never,
+    })
+    assert.equal(bogus?.lastErrorPhase, null)
+  })
+
+  it('创建时缺省为空，展示层据此按运行异常兜底', async () => {
+    const instance = await createGameInstance({
+      nodeId: 'local-node',
+      name: 'phase-default-test',
+      gameCode: 'dst',
+      status: 'stopped',
+    })
+    assert.equal(instance.lastErrorPhase, null)
   })
 })

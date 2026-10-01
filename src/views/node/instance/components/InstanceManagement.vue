@@ -13,11 +13,13 @@ import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRef
 import apiInstance from '@/api/modules/instance'
 import apiSystem from '@/api/modules/system'
 import {
+  routeToConsoleMonitor,
   routeToDstRoomSettings,
   routeToDstWorldSettings,
   routeToInstanceConsole,
   routeToInstanceDetail,
 } from '@/navigation/game-routes'
+import router from '@/router'
 import { blurFocusedElement } from '@/utils'
 import {
   tryNotifyHostMemoryPressure,
@@ -598,7 +600,14 @@ function renderInstallColumn(instance: InstanceItem) {
     return h('span', { class: 'text-sm text-muted-foreground' }, '已安装')
   }
   if (instance.status === 'error') {
-    return h('span', { class: 'text-sm text-red-500' }, '安装失败')
+    /**
+     * 只有安装环节失败才叫「安装失败」。启动/运行期失败（内存不足、端口、运行时异常……）
+     * 的实例安装是就绪的——环节判为 runtime 的前提就是安装就绪检查已通过——
+     * 这一列写「安装失败」会把用户引向重下服务端文件，而那解决不了问题。
+     */
+    return getInstanceState(instance).key === 'install_failed'
+      ? h('span', { class: 'text-sm text-red-500' }, '安装失败')
+      : h('span', { class: 'text-sm text-muted-foreground' }, '已安装')
   }
   if (!shouldShowInstallDetail(instance)) {
     return h('span', { class: 'text-sm text-muted-foreground' }, '—')
@@ -1132,7 +1141,7 @@ async function createInstance() {
     openPostCreateGuide(created.data as InstanceItem)
   }
   catch (error) {
-    if (tryNotifyHostMemoryPressure(notification, error)) {
+    if (tryNotifyHostMemoryPressure(notification, error, () => router.push(routeToConsoleMonitor()))) {
       return
     }
   }

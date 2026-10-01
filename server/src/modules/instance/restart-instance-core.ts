@@ -64,6 +64,7 @@ export async function restartInstanceCore(
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: message,
+        lastErrorPhase: 'runtime',
       })
       return businessError(message, request)
     }

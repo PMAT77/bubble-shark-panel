@@ -40,6 +40,7 @@ export function toInstanceSummaryItem(instance: DbGameInstance): InstanceSummary
     gameCode: instance.gameCode,
     status: instance.status,
     lastError: instance.lastError,
+    lastErrorPhase: instance.lastErrorPhase,
     lastCommand: instance.lastCommand,
   }
 }

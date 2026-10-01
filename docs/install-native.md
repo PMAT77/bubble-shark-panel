@@ -4,31 +4,31 @@
 
 **环境要求**：Debian 12 或 Ubuntu 22.04 / 24.04（只支持 apt 系），root 或 sudo，x86_64，至少 4 GiB 内存，根分区至少 4 GiB 空闲——游戏本体要数 GB，另外要给存档备份留地方。安装器会装 32 位运行库（`libcurl4:i386` 等），DST 与 SteamCMD 需要。
 
-4 GiB 内存的机器先执行 `sudo gsh setup-swap`，档位参考[内存档位](MEMORY.md)。Windows 不是部署目标，只用于本机开发调试。
+小内存机的 swap 由安装器自动配置（总内存低于 5 GiB 且当前没有 swap 时创建 swapfile 并写进 `/etc/fstab`，`--no-swap` 可关闭）；从旧版本升级上来的机器可手动执行 `sudo gsh setup-swap`。档位参考[内存档位](MEMORY.md)。Windows 不是部署目标，只用于本机开发调试。
 
 ## 安装（海外机器）
 
 一条命令装完。
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.13.0/scripts/install.linux.sh" \
+curl -fsSL "https://raw.githubusercontent.com/PMAT77/game-serve-hub/v0.13.1/scripts/install.linux.sh" \
   | sudo bash -s -- --mode native
 ```
 
 管道安装的默认模式是 Docker，**Native 必须显式写 `--mode native`**。GitHub Raw 慢的话，把 `https://raw.githubusercontent.com` 换成 `https://gh-proxy.com/https://raw.githubusercontent.com`。
 
-安装器按顺序做这些事：装基础依赖与 32 位运行库 → 创建 `gsh` 系统用户并开启 linger → 下载校验 Native Release（自带 Node 运行时）→ 解压到 `/opt/game-server-hub/releases/v0.13.0` 并原子切换 `current` 符号链接 → 装 SteamCMD → 写 `panel.env` → 启动面板并等待健康检查。
+安装器按顺序做这些事：装基础依赖与 32 位运行库 → 创建 `gsh` 系统用户并开启 linger → 下载校验 Native Release（自带 Node 运行时）→ 解压到 `/opt/game-server-hub/releases/v0.13.1` 并原子切换 `current` 符号链接 → 装 SteamCMD → 写 `panel.env` → 启动面板并等待健康检查。
 
 ## 安装（国内服务器）
 
 Native 不拉容器镜像，境外依赖只有两处：GitHub Raw（安装器组件）与 GitHub Release（Native 包）。安装器自带加速代理池（`gh-proxy.com`、`ghfast.top`、`ghproxy.com`），全部失败才走直连，国内一般可以直接装。先把脚本下载到本地更稳妥：
 
 ```bash
-tag=v0.13.0
+tag=v0.13.1
 curl -fL --retry 3 -o "install-${tag}.sh" \
   "https://gh-proxy.com/https://raw.githubusercontent.com/PMAT77/game-serve-hub/${tag}/scripts/install.linux.sh"
 
-# 自证版本：必须输出 ...:-v0.13.0}}，对不上就停下排查
+# 自证版本：必须输出 ...:-v0.13.1}}，对不上就停下排查
 sed -n '9p' "install-${tag}.sh"
 
 # 安装：--network cn 把 apt 源临时切到国内镜像，SteamCMD 走 cn 区域并重试 8 次
@@ -43,7 +43,7 @@ sudo env GSH_RELEASE_TAG="${tag}" bash "install-${tag}.sh" --mode native --netwo
 包旁必须放同名 `.sha256`，也可以用 `GSH_NATIVE_RELEASE_SHA256` 直接给出摘要。
 
 ```bash
-tag=v0.13.0
+tag=v0.13.1
 base="https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/${tag}"
 curl -fL --retry 3 -o "game-server-hub-native-${tag}-linux-x64.tar.gz"        "${base}/game-server-hub-native-${tag}-linux-x64.tar.gz"
 curl -fL --retry 3 -o "game-server-hub-native-${tag}-linux-x64.tar.gz.sha256" "${base}/game-server-hub-native-${tag}-linux-x64.tar.gz.sha256"

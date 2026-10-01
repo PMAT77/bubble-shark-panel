@@ -37,7 +37,7 @@ Game Server Hub 支持 **Docker 与 Native systemd 双运行时**。下文的档
 
 ---
 
-## swap：4 GiB 机器几乎是必做
+## swap：小内存机由安装器自动配置
 
 **DST 的内存占用是尖峰型的。** 世界跑起来之后单分片大约 1–1.2 GiB，但**启动时要把整套 Mod 与世界读一遍**，峰值可以到 2 GiB 上下（实测：36 个 Mod 的主世界分片峰值 `anon-rss` 2026 MiB）。4 GiB 的机器装得下稳态，**装不下这个尖峰**——内核会在加载途中直接杀掉分片，`dmesg` 里是：
 
@@ -55,7 +55,11 @@ sudo gsh setup-swap
 
 它会创建 2 GiB 的 swapfile（`/swapfile-gsh`）、写进 `/etc/fstab`（**重启后仍然有效**），并设置 `vm.swappiness=20`（优先用内存、必要时才换出）与 `vm.min_free_kbytes=100000`。**做一次即可**，之后升级面板、重启实例都不用再管。
 
-**为什么要手动**：创建 swap 需要 root，而面板以普通用户 `gsh` 运行（这是有意的安全设计，面板不应是 root），所以这一步只能由你执行一次。
+**小内存机由安装器自动完成**：`install.linux.sh` 检测到总内存低于 5 GiB 且当前没有 swap 时，会创建同样的 swapfile 并写入 fstab 与 sysctl，安装摘要里会写明结果。换档规则是总内存低于 3800 MiB 时给 4 GiB，其余小内存机给 2 GiB。关闭方式：`--no-swap` 或 `GSH_SWAP_ON_INSTALL=0`；改大小用 `GSH_SWAP_SIZE`。
+
+**为什么要 root**：创建 swap 需要 root，而面板以普通用户 `gsh` 运行（这是有意的安全设计，面板不应是 root），所以面板做不到这一步。**从旧版本升级上来的机器**（安装时还没这个行为）需要手动执行一次上面的命令。
+
+swapfile 会占用根分区磁盘空间；余量不足时安装器会跳过并提示，不会写出半途而废的配置。
 
 确认是否已生效：
 
@@ -69,7 +73,7 @@ swapon --show     # 有输出即已生效；没有任何输出说明还没配
 
 加了 swap 仍被拒绝时，按顺序考虑：
 
-1. 把 swap 加到 4 GiB。注意 **`setup-swap` 在已有 swap 时不会做任何改动**（它检测到系统已有 swap 就直接返回），要先关掉旧的再重建：
+1. 把 swap 加到 4 GiB。**`setup-swap` 在检测到已有 swap 时不做任何改动**（直接返回，安装器的自动配置同样跳过），所以要先关掉旧的再重建：
 
    ```bash
    sudo swapoff /swapfile-gsh
@@ -122,6 +126,8 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 | `GSH_HOST_DST_PLANNING_MB` | DST 启动守卫的单分片规划**下界**（MiB）；实际按「512 + 每个启用中的 Mod 32 MiB」估算，双分片再乘 2 并加余量。**设小不会让守卫更宽松** |
 | `GSH_HOST_MEMORY_HEADROOM_MB` | 安装/启动守卫保留空闲（默认 512） |
 | `GSH_HOST_MIN_AVAILABLE_MB` | 设为 `0` 可关闭守卫（小内存慎用） |
+| `GSH_SWAP_ON_INSTALL` | 安装器在小内存机上自动创建 swapfile（默认 `1`，设 `0` 关闭；等同 `--no-swap`） |
+| `GSH_SWAP_SIZE` | 自动创建或 `gsh setup-swap` 的交换区大小（默认 `2G`，总内存低于 3800 MiB 时安装器用 `4G`） |
 | `GSH_SHARD_READY_WAIT_SEC` | 等待主世界分片就绪的上限秒数（默认 900）；超时会照常启动洞穴分片 |
 | `GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS` | 单次 app_update 超时（毫秒，默认 3600000 = 60 分钟），超时终止后重试断点续传 |
 
@@ -176,7 +182,7 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 
 ```bash
 free -h                                          # 看 available 还有多少
-swapon --show                                    # 没有输出说明还没配 swap → sudo gsh setup-swap
+swapon --show                                    # 没有输出说明没有 swap：小内存机看安装摘要（自动创建失败或磁盘不足），其余机器执行 sudo gsh setup-swap
 sudo dmesg -T | grep -iE 'killed process|oom'    # 有输出即确实被内核 OOM 杀掉
 ```
 

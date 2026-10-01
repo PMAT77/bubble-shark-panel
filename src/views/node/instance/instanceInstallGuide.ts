@@ -3,7 +3,7 @@ import { GAME_CODES } from '@/constants/games'
 
 type InstallStatus = Pick<InstanceItem, 'status'>
 type InstallGuideTarget = Pick<InstanceItem, 'gameCode' | 'status'>
-type InstallResultTarget = Pick<InstanceItem, 'name' | 'status'>
+type InstallResultTarget = Pick<InstanceItem, 'name' | 'status' | 'lastErrorPhase'>
 
 export interface InstallResultNotificationPayload {
   type: 'success' | 'error'
@@ -34,6 +34,13 @@ export function buildInstallResultNotification(
       content: `「${instance.name}」安装完成，可以启动实例`,
       durationMs: 5000,
     }
+  }
+  /**
+   * error 未必是安装的结果：安装成功后启动失败（内存不足、端口占用）也会落到 error。
+   * 只有安装环节的失败才作为「安装失败」上报，其余的交给启动路径自己的提示。
+   */
+  if (instance.lastErrorPhase !== 'install') {
+    return null
   }
   return {
     type: 'error',

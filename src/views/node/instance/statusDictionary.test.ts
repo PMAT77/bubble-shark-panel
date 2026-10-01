@@ -76,31 +76,37 @@ describe('resolveShardDisplayStatus', () => {
 })
 
 describe('getInstanceState error split', () => {
-  it('reports install failure for install-related errors', () => {
-    const state = getInstanceState({ status: 'error', lastError: '安装失败：SteamCMD 退出码 8', lastCommand: null })
+  it('reports install failure when the failure phase is install', () => {
+    const state = getInstanceState({ status: 'error', lastErrorPhase: 'install' })
     assert.equal(state.key, 'install_failed')
     assert.equal(state.label, '安装失败')
   })
 
-  it('reports runtime failure for runtime start commands', () => {
-    const state = getInstanceState({
-      status: 'error',
-      lastError: '启动失败',
-      lastCommand: './dontstarve_dedicated_server_nullrenderer_x64 -console',
-    })
+  it('reports runtime failure when the failure phase is runtime', () => {
+    const state = getInstanceState({ status: 'error', lastErrorPhase: 'runtime' })
     assert.equal(state.key, 'runtime_error')
     assert.equal(state.label, '运行异常')
   })
 
-  it('reports install failure by default when evidence is inconclusive', () => {
-    const state = getInstanceState({ status: 'error', lastError: '未知错误', lastCommand: null })
-    assert.equal(state.key, 'install_failed')
+  it('reports runtime failure when the phase is unknown', () => {
+    // 旧数据没有环节字段：按运行异常兜底，与 INSTANCE_STATUS.error 的口径一致
+    assert.equal(getInstanceState({ status: 'error', lastErrorPhase: null }).key, 'runtime_error')
+  })
+
+  it('reports runtime failure for a start blocked by host memory pressure', () => {
+    // 守卫的说明里同时写了「安装/启动」：靠文案判定会翻成安装失败，按环节判定才是对的
+    const instance = {
+      status: 'error' as const,
+      lastErrorPhase: 'runtime' as const,
+      lastError: '宿主机可用内存不足（当前约 3365 MiB，可用 swap 约 0 MiB）。说明：安装/启动按典型峰值估算，并非按容器上限占满内存。',
+    }
+    assert.equal(getInstanceState(instance).key, 'runtime_error')
   })
 
   it('passes through non-error statuses from the dictionary', () => {
-    assert.equal(getInstanceState({ status: 'running', lastError: null, lastCommand: null }).key, 'running')
-    assert.equal(getInstanceState({ status: 'pending_install', lastError: null, lastCommand: null }).label, '未安装')
-    assert.equal(getInstanceState({ status: 'installing', lastError: null, lastCommand: null }).label, '安装中')
+    assert.equal(getInstanceState({ status: 'running', lastErrorPhase: null }).key, 'running')
+    assert.equal(getInstanceState({ status: 'pending_install', lastErrorPhase: null }).label, '未安装')
+    assert.equal(getInstanceState({ status: 'installing', lastErrorPhase: null }).label, '安装中')
   })
 })
 

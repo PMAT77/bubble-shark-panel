@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # 安装脚本默认参数与运行时路径
 # -----------------------------------------------------------------------------
 SCRIPT_NAME="$(basename "$0")" # 当前脚本名称（用于日志展示）。
-GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.13.0}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
+GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.13.1}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
 INSTALLER_REPO_RAW="${INSTALLER_REPO_RAW:-}" # 兼容旧变量：指定单一安装资源源（为空时使用 INSTALLER_REPO_MIRRORS）。
 # GitHub 资源加速代理（前缀拼接型）：安装资源与 Native 包共用；GSH_GITHUB_PROXY 可强制指定单一节点。
 GITHUB_PROXY_SITES="${GITHUB_PROXY_SITES:-https://gh-proxy.com/,https://ghfast.top/,https://ghproxy.com/}"
@@ -14,7 +14,7 @@ GSH_GITHUB_PROXY="${GSH_GITHUB_PROXY:-}" # 强制指定 GitHub 加速代理（�
 INSTALLER_REPO_MIRRORS="${INSTALLER_REPO_MIRRORS:-}" # 安装资源镜像池；为空时由 init_installer_repo_pool 按代理清单生成。
 # 校验对象是镜像源提供的 git blob 原始字节（LF）；改动 compose 后必须同步更新此处。
 # 历史 pin eb30aeae... 与 v0.1.4 tag 内 compose blob（a34665e2...）不匹配，导致严格校验必然失败。
-INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-7875a12ce1830ff3f3c12922385c824c51f11dfb925cd7bda884beed106ae17b}"
+INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-8d3b994185cefd50f85f5e48350f28a2505fcae9767ade8fa74af525f72046d4}"
 INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML:-525eaf74e17df33887fe47248f414c0de3e6cd94a8d20e072ab5d66284c760ae}"
 # Debian 12 等发行版源不含 Compose v2 时，从 docker/compose GitHub Release 自动补装 CLI 插件。
 # 摘要与官方 .sha256 / checksums.txt 资产双源核对；升级插件版本时需同步替换版本号与两个摘要。
@@ -32,6 +32,15 @@ HOST_MEMORY_WARN_MIN_MB=3800 # 总内存低于此值（约 4GiB）时输出 WARN
 HOST_MEMORY_TIER_SMALL_MAX_MB=5120 # < 此值视为 small 预设。
 HOST_MEMORY_TIER_MEDIUM_MAX_MB=8192 # < 此值视为 medium 预设。
 GSH_PANEL_ENV_PRESET="${GSH_PANEL_ENV_PRESET:-auto}" # auto | small | medium | large | none
+# 小内存机安装时自动创建 swapfile（1=开启，默认）。面板容器不以 root 运行，创建 swap 需要 root，
+# 所以留给用户的不该是「装完再自己 SSH 执行一次」，而是在这里做掉；--no-swap 或 GSH_SWAP_ON_INSTALL=0 关闭。
+GSH_SWAP_ON_INSTALL="${GSH_SWAP_ON_INSTALL:-1}"
+# 自动创建 swap 的总内存阈值（MiB），与 HOST_MEMORY_TIER_SMALL_MAX_MB 同档：< 5 GiB 视为小内存机。
+GSH_SWAP_AUTO_THRESHOLD_MB="${GSH_SWAP_AUTO_THRESHOLD_MB:-${HOST_MEMORY_TIER_SMALL_MAX_MB}}"
+# 自动创建 swap 的结果（供 print_summary 分支）：none | active | created | skipped | failed
+AUTO_SWAP_STATE="none"
+AUTO_SWAP_TARGET_MB=0
+AUTO_SWAP_SKIPPED_REASON=""
 RETRY_MAX=3 # 可重试操作的最大重试次数。
 RETRY_DELAY_SECONDS=3 # 每次重试之间的等待秒数。
 REPO_DOWNLOAD_MAX_ATTEMPTS="${REPO_DOWNLOAD_MAX_ATTEMPTS:-2}" # 每个安装资源源最大下载重试次数。
@@ -1777,6 +1786,7 @@ Options:
   --check            Print the preflight report and exit without changing the system
   --open-panel-port  Open panel TCP port (${PANEL_PORT}) via ufw/firewalld
   --open-dst-ports   Open default DST UDP ports for master (${DST_GAME_PORT}, ${DST_AUTH_PORT}, ${DST_MASTER_PORT}) and caves (${DST_CAVES_GAME_PORT}, ${DST_CAVES_AUTH_PORT}, ${DST_CAVES_MASTER_PORT}) via ufw/firewalld
+  --no-swap          Do not create a swapfile on small-RAM hosts (same as GSH_SWAP_ON_INSTALL=0)
   -h, --help         Show this help
 
 Environment (optional):
@@ -1801,6 +1811,10 @@ Environment (optional):
   USE_CN_DEBIAN_MIRROR=1        Enable CN Debian/Ubuntu mirror
   GSH_NATIVE_RELEASE_ARCHIVE=PATH  Install a local Native Release archive
   GSH_NATIVE_UPDATE_DIR=PATH    Native panel-update exchange directory (default: <data dir>/panel-update)
+  GSH_SWAP_ON_INSTALL=0         Do not create a swapfile automatically on small-RAM hosts (default: 1)
+  GSH_SWAP_SIZE=4G              Swapfile size when one is created (default: 2G, or 4G below ${HOST_MEMORY_WARN_MIN_MB} MB)
+  GSH_SWAP_FILE=PATH            Swapfile path (default: /swapfile-gsh)
+  GSH_SWAP_AUTO_THRESHOLD_MB=5120  Total RAM below which the swapfile is created (default: ${HOST_MEMORY_TIER_SMALL_MAX_MB})
   STRICT_INSTALLER_ASSET_CHECKSUM=0  Skip embedded checksum verification (not recommended)
   v0.2.0 unified image: one docker pull provides the panel, DST runtime libraries and SteamCMD.
 
@@ -2137,6 +2151,123 @@ warn_host_memory_tier() {
   fi
 }
 
+# ---------- 安装时自动配置 swap（小内存机） ----------
+# 创建 swap 需要 root，而面板在 Docker 模式是非特权容器、在 Native 模式以 gsh 用户运行 systemd，
+# 面板自己做不到这件事（这是有意的安全设计）。安装器本来就是 root，顺手做掉能消掉一整类
+# 「实例显示运行中、大厅却搜不到」的隐性故障。
+
+# 是否已有生效中的 swap：不区分来源（发行版默认分区、云镜像自带、或安装器自己创建的）。
+has_active_swap() {
+  command -v swapon >/dev/null 2>&1 || return 1
+  swapon --show=NAME --noheadings 2>/dev/null | grep -q .
+}
+
+# 自动创建的 swapfile 大小（MiB）：4 GiB 类机器给 2 GiB 即可把加载尖峰落下去；
+# MemTotal 更小的机器（约 3.7 GiB 及以下）多给一档，否则尖峰仍可能溢出。
+resolve_auto_swap_size_mb() {
+  local total_mb="$1"
+  if [[ "${total_mb}" -lt "${HOST_MEMORY_WARN_MIN_MB}" ]]; then
+    printf '%s' "4096"
+  else
+    printf '%s' "2048"
+  fi
+}
+
+# 真正执行创建：优先复用仓库里的 gsh.sh（与 gsh setup-swap 完全同一份实现，避免两处漂移），
+# gsh.sh 不在本地时退回已部署的 gsh CLI（curl | bash 安装路线）。
+invoke_swap_setup() {
+  local size_mb="$1"
+  local script_dir candidate
+
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  candidate="${script_dir}/gsh.sh"
+  if [[ -f "${candidate}" ]]; then
+    (
+      GSH_GSH_LIB_ONLY=1
+      GSH_SWAP_SIZE="${size_mb}M"
+      # shellcheck source=scripts/gsh.sh
+      source "${candidate}"
+      cmd_setup_swap
+    )
+    return $?
+  fi
+
+  if command -v gsh >/dev/null 2>&1; then
+    GSH_SWAP_SIZE="${size_mb}M" gsh setup-swap
+    return $?
+  fi
+
+  log_warn "gsh.sh (or the gsh CLI) is unavailable; skipping the automatic swapfile."
+  return 1
+}
+
+# 小内存且当前没有 swap 时，创建 swapfile 并保证重启后仍然生效。
+ensure_small_host_swap() {
+  local total_mb size_mb swap_file free_disk_mb
+
+  if [[ "${GSH_SWAP_ON_INSTALL}" == "0" || "${GSH_SWAP_ON_INSTALL}" == "off" || "${GSH_SWAP_ON_INSTALL}" == "false" ]]; then
+    AUTO_SWAP_STATE="skipped"
+    AUTO_SWAP_SKIPPED_REASON="disabled"
+    log_info "Automatic swap setup disabled (GSH_SWAP_ON_INSTALL=${GSH_SWAP_ON_INSTALL})."
+    return 0
+  fi
+
+  total_mb="$(read_host_mem_total_mb)"
+  if [[ -z "${total_mb}" || "${total_mb}" -le 0 ]]; then
+    AUTO_SWAP_STATE="skipped"
+    AUTO_SWAP_SKIPPED_REASON="unknown-memory"
+    log_warn "Cannot read host MemTotal; skipping the automatic swapfile."
+    return 0
+  fi
+
+  if [[ "${total_mb}" -ge "${GSH_SWAP_AUTO_THRESHOLD_MB}" ]]; then
+    AUTO_SWAP_STATE="skipped"
+    AUTO_SWAP_SKIPPED_REASON="memory-ok"
+    log_info "Host RAM ${total_mb} MB >= ${GSH_SWAP_AUTO_THRESHOLD_MB} MB; no swapfile needed."
+    return 0
+  fi
+
+  if has_active_swap; then
+    AUTO_SWAP_STATE="active"
+    log_info "Host RAM ${total_mb} MB, but swap is already active; leaving it untouched."
+    swapon --show 2>/dev/null || true
+    return 0
+  fi
+
+  size_mb="$(resolve_auto_swap_size_mb "${total_mb}")"
+  AUTO_SWAP_TARGET_MB="${size_mb}"
+  swap_file="${GSH_SWAP_FILE:-/swapfile-gsh}"
+
+  # 没地方放 swapfile 时不要写出一个半途而废的配置：明确告警，让用户自行决定。
+  free_disk_mb="$(df -Pm / | awk 'NR == 2 { print $4 }')"
+  if [[ -n "${free_disk_mb}" && "${free_disk_mb}" =~ ^[0-9]+$ ]] && [[ "${free_disk_mb}" -lt $((size_mb + 512)) ]]; then
+    AUTO_SWAP_STATE="skipped"
+    AUTO_SWAP_SKIPPED_REASON="disk"
+    log_warn "Root filesystem has ${free_disk_mb} MB free; a ${size_mb} MiB swapfile does not fit. Skipping automatic swap."
+    log_warn "Free some space and run: sudo gsh setup-swap"
+    return 0
+  fi
+
+  # 非 root 环境下 require_root 会直接 exit，这里先自行判断，避免把安装流程带走。
+  if [[ "$(id -u)" -ne 0 ]]; then
+    AUTO_SWAP_STATE="skipped"
+    AUTO_SWAP_SKIPPED_REASON="not-root"
+    log_warn "Not running as root; skipping the automatic swapfile. Run: sudo gsh setup-swap"
+    return 0
+  fi
+
+  log_info "Host RAM ${total_mb} MB and no swap detected; creating a ${size_mb} MiB swapfile at ${swap_file}..."
+  if invoke_swap_setup "${size_mb}" && has_active_swap; then
+    AUTO_SWAP_STATE="created"
+    log_info "Automatic swapfile ready (${size_mb} MiB). It survives reboots via /etc/fstab."
+    return 0
+  fi
+
+  AUTO_SWAP_STATE="failed"
+  log_warn "Automatic swapfile setup failed; the installer continues. Run manually: sudo gsh setup-swap"
+  return 0
+}
+
 # 同步 panel.env 预设到安装目录（优先本地仓库，其次脚本内置，最后镜像池下载）。
 sync_panel_env_presets() {
   local script_dir src_dir dest_dir item
@@ -2262,7 +2393,24 @@ preflight_checks() {
     report_item 0 "内存" "${host_mem_total_mb} MB"
   else
     report_item 1 "内存" "${host_mem_total_mb} MB（低于 ${HOST_MEMORY_WARN_MIN_MB} MB）"
+  fi
+
+  # 交换区现状 + 本次安装会不会顺手创建：--check 在这里之后就会退出，所以这一项只是陈述。
+  local swap_auto_threshold_mb swap_target_mb
+  swap_auto_threshold_mb="${GSH_SWAP_AUTO_THRESHOLD_MB}"
+  [[ "${swap_auto_threshold_mb}" =~ ^[0-9]+$ ]] || swap_auto_threshold_mb="${HOST_MEMORY_TIER_SMALL_MAX_MB}"
+  if ! command -v swapon >/dev/null 2>&1; then
+    report_item 1 "交换区" "无法检测（缺少 swapon，属于 util-linux 包）"
+  elif has_active_swap; then
+    report_item 0 "交换区" "已配置；安装阶段不再改动它（swapon --show 可看详情）"
+  elif [[ "${GSH_SWAP_ON_INSTALL}" == "0" || "${GSH_SWAP_ON_INSTALL}" == "off" || "${GSH_SWAP_ON_INSTALL}" == "false" ]]; then
+    report_item 1 "交换区" "未配置；已按 GSH_SWAP_ON_INSTALL=${GSH_SWAP_ON_INSTALL} 关闭自动创建"
     PREFLIGHT_NEXT_STEP="安装完成后执行 sudo gsh setup-swap：分片加载整套 Mod 时会短时冲高内存。"
+  elif [[ "${host_mem_total_mb}" -gt 0 && "${host_mem_total_mb}" -lt "${swap_auto_threshold_mb}" ]]; then
+    swap_target_mb="$(resolve_auto_swap_size_mb "${host_mem_total_mb}")"
+    report_item 1 "交换区" "未配置；安装阶段会创建 ${swap_target_mb} MiB swapfile（重启后仍生效，--no-swap 可关闭）"
+  else
+    report_item 1 "交换区" "未配置；内存档位不需要（低于 ${swap_auto_threshold_mb} MB 的机器会自动创建）"
   fi
 
   # 2) 平台与运行时
@@ -3002,7 +3150,39 @@ print_summary() {
   esac
   printf ' 3. 到「实例管理」创建第一个实例：填房间名与端口后启动，面板会拉取游戏本体并生成世界\n'
   printf ' 4. 开服前放行 6 个 UDP 端口（主世界与洞穴各 3 个），否则玩家搜不到房间\n'
-  printf ' 5. 内存偏小（≤ 6 GiB）建议执行 sudo gsh setup-swap，详见 docs/MEMORY.md\n'
+  # 注意：这里不能用 `[[ ... ]] && printf`——条件不成立时整个语句返回非零码，
+  # 在 set -e 下会触发 ERR trap，把一次正常安装判成失败。
+  case "${AUTO_SWAP_STATE}" in
+    created)
+      printf ' 5. 已自动创建 %s MiB 交换区（/etc/fstab 已写入，重启后仍生效）；\n' "${AUTO_SWAP_TARGET_MB}"
+      printf '    查看：swapon --show；调整大小见 docs/MEMORY.md\n'
+      ;;
+    active)
+      printf ' 5. 检测到已有交换区，安装器未做改动；内存偏小时见 docs/MEMORY.md\n'
+      ;;
+    skipped)
+      case "${AUTO_SWAP_SKIPPED_REASON}" in
+        disk)
+          printf ' 5. 根分区余量不足，未创建交换区；腾出空间后执行 sudo gsh setup-swap\n'
+          ;;
+        disabled)
+          printf ' 5. 已按要求跳过自动交换区；需要时执行 sudo gsh setup-swap（docs/MEMORY.md）\n'
+          ;;
+        memory-ok)
+          printf ' 5. 内存充足，未创建交换区\n'
+          ;;
+        *)
+          printf ' 5. 未能自动配置交换区；内存偏小时执行 sudo gsh setup-swap（docs/MEMORY.md）\n'
+          ;;
+      esac
+      ;;
+    failed)
+      printf ' 5. 自动创建交换区失败（不阻断安装）；请手动执行 sudo gsh setup-swap，详见 docs/MEMORY.md\n'
+      ;;
+    *)
+      printf ' 5. 内存偏小（≤ 6 GiB）建议执行 sudo gsh setup-swap，详见 docs/MEMORY.md\n'
+      ;;
+  esac
   printf '%s\n\n' "${rule}"
 
   # 排障用的长命令留在带前缀的日志里，方便复制粘贴。
@@ -3045,6 +3225,10 @@ main() {
         ;;
       --open-dst-ports)
         OPEN_DST_PORTS=1
+        shift
+        ;;
+      --no-swap)
+        GSH_SWAP_ON_INSTALL=0
         shift
         ;;
       --check)
@@ -3117,7 +3301,14 @@ main() {
     ensure_native_service_user
     write_status "dependencies" "ok" "Native systemd dependencies installed"
   fi
+  # gsh CLI 必须在自动 swap 之前就位：面板容器不以 root 运行，创建 swap 需要 root，
+  # 所以安装器是唯一能一次性把这件事做掉的环节（也是 gsh setup-swap 的兜底）。
+  install_gsh_cli
   backup_existing_install_state
+
+  begin_stage "swap" "Preparing the swapfile for small-RAM hosts"
+  ensure_small_host_swap
+  write_status "swap" "ok" "Swap check finished (${AUTO_SWAP_STATE})"
 
   begin_stage "network" "Checking panel port and firewall"
   check_port_conflict
@@ -3142,7 +3333,6 @@ main() {
     deploy_native_panel
   fi
 
-  install_gsh_cli
   print_summary
 }
 

@@ -26,7 +26,7 @@ import { userPermissions } from '../../shared/db/schema/index'
  *   1. 权限映射：房间投影只认 `room:read`、世界只认 `world:read`、玩家只认 `player:read`，
  *      互相之间不能越界；
  *   2. 可见范围仍然是过滤条件：没被授权的实例连"存在过"都不该出现；
- *   3. 标识接口只回 `instanceSummaryItemSchema` 那六个字段——安装路径与端口不能漏出去。
+ *   3. 标识接口只回 `instanceSummaryItemSchema` 那几个字段——安装路径与端口不能漏出去。
  */
 
 interface ApiEnvelope<T> {
@@ -165,7 +165,7 @@ describe('DST 投影接口与实例标识选项', () => {
     }
   })
 
-  it('实例标识选项：任一"能在界面上看到实例"的读权限点即可，且只回六个字段', async () => {
+  it('实例标识选项：任一"能在界面上看到实例"的读权限点即可，且只回这几个字段', async () => {
     for (const permission of ['mod:read', 'backup:read', 'schedule:read', 'member:read', 'instance:read']) {
       await setPermissions([permission])
       const body = await post<Array<Record<string, unknown>>>('/app/instance/options')
@@ -173,8 +173,8 @@ describe('DST 投影接口与实例标识选项', () => {
       assert.equal(body.data.length, 1, '未授权实例不该出现在选项里')
       assert.deepEqual(
         Object.keys(body.data[0] ?? {}).sort(),
-        ['gameCode', 'id', 'lastCommand', 'lastError', 'name', 'status'],
-        '标识接口只有这六个字段：安装路径与端口不能在这里漏出去',
+        ['gameCode', 'id', 'lastCommand', 'lastError', 'lastErrorPhase', 'name', 'status'],
+        '标识接口只有这几个字段：安装路径与端口不能在这里漏出去',
       )
     }
   })

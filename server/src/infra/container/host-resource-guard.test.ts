@@ -85,6 +85,8 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
       assert.match(result.detail, /gsh setup-swap/)
       assert.match(result.detail, /关闭洞穴分片/)
       assert.match(result.detail, /减少订阅的 Mod/)
+      // 前端靠这个字段决定通知里是「未配置 Swap，先执行 sudo gsh setup-swap」还是「已有 Swap，继续」
+      assert.equal(result.data.swapFreeMb, 0)
     })
   })
 
@@ -96,6 +98,22 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
         { ...machine, swapFreeMb: 2048 },
       )
       assert.equal(result.ok, true)
+    })
+  })
+
+  it('swap 存在但已被吃穿时仍然拒绝，并把当前 swap 余量透给前端', () => {
+    withPanelEnv(() => {
+      const result = assessHostMemoryForHeavyOperation(
+        'dst-container-start',
+        { shardCount: 2, modCount: 36 },
+        { availableMb: 300, totalMb: 3915, swapFreeMb: 16 },
+      )
+      assert.equal(result.ok, false)
+      if (result.ok) {
+        return
+      }
+      // 非 0 即「有 swap」：通知里因此走「已配置 Swap，启动继续」分支，而不是又让人跑一遍命令
+      assert.equal(result.data.swapFreeMb, 16)
     })
   })
 

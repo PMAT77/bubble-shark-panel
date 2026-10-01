@@ -11,6 +11,7 @@ import type {
   CreateGameInstanceInput,
   DbGameInstance,
   DbGameInstanceStatus,
+  DbInstanceErrorPhase,
   DbInstanceMod,
   DbInstallLogStatus,
   DbMaintenanceDraft,
@@ -19,6 +20,12 @@ import type {
   InsertMaintenancePushLogInput,
   UpdateGameInstanceRuntimeInput,
 } from './types'
+
+/** 失败环节只认这两个值；库里出现别的值（手改、旧版本）一律当未知，展示层按 runtime 兜底 */
+function normalizeInstanceErrorPhase(phase: string | null | undefined): DbInstanceErrorPhase | null {
+  return phase === 'install' || phase === 'runtime' ? phase : null
+}
+
 function normalizeInstanceStatus(status: string | undefined): DbGameInstanceStatus {
   if (status === 'pending_install' || status === 'running' || status === 'stopped' || status === 'installing' || status === 'error') {
     return status
@@ -53,6 +60,7 @@ function mapDbGameInstance(row: {
   lastCommand: string | null
   lastExitCode: number | null
   lastError: string | null
+  lastErrorPhase: string | null
   runtimeWarning: string | null
   unexpectedExitAt: string | null
   installLogStatus: string | null
@@ -75,6 +83,7 @@ function mapDbGameInstance(row: {
     gamePort: row.gamePort === null ? null : Number(row.gamePort),
     rconPort: row.rconPort === null ? null : Number(row.rconPort),
     lastExitCode: row.lastExitCode === null ? null : Number(row.lastExitCode),
+    lastErrorPhase: normalizeInstanceErrorPhase(row.lastErrorPhase),
     installLogStatus: installLogStatus === 'running' || installLogStatus === 'success' || installLogStatus === 'failed'
       ? installLogStatus
       : null,
@@ -105,6 +114,7 @@ function gameInstanceSelectFields() {
     lastCommand: gameInstances.lastCommand,
     lastExitCode: gameInstances.lastExitCode,
     lastError: gameInstances.lastError,
+    lastErrorPhase: gameInstances.lastErrorPhase,
     runtimeWarning: gameInstances.runtimeWarning,
     unexpectedExitAt: gameInstances.unexpectedExitAt,
     installLogStatus: gameInstances.installLogStatus,
@@ -141,6 +151,7 @@ export async function createGameInstance(input: CreateGameInstanceInput): Promis
       lastCommand: input.lastCommand ?? null,
       lastExitCode: input.lastExitCode ?? null,
       lastError: input.lastError ?? null,
+      lastErrorPhase: normalizeInstanceErrorPhase(input.lastErrorPhase),
       runtimeWarning: input.runtimeWarning ?? null,
       createdAt: now,
       updatedAt: now,
@@ -547,6 +558,7 @@ export async function updateGameInstanceRuntime(
     lastCommand?: string | null
     lastExitCode?: number | null
     lastError?: string | null
+    lastErrorPhase?: DbInstanceErrorPhase | null
     runtimeWarning?: string | null
     unexpectedExitAt?: string | null
     installLogStatus?: DbInstallLogStatus | null
@@ -582,7 +594,16 @@ export async function updateGameInstanceRuntime(
     setPayload.lastExitCode = Number.isInteger(input.lastExitCode) ? input.lastExitCode : null
   }
   if (typeof input.lastError !== 'undefined') {
-    setPayload.lastError = input.lastError?.trim() || null
+    const error = input.lastError?.trim() || null
+    setPayload.lastError = error
+    // 环节与错误同生命周期：错误被清空（启动成功 / 停止实例 / 状态对账）时一并清空，
+    // 否则下一次失败若忘了带环节，就会继承上一次的环节。
+    if (!error) {
+      setPayload.lastErrorPhase = null
+    }
+  }
+  if (typeof input.lastErrorPhase !== 'undefined') {
+    setPayload.lastErrorPhase = normalizeInstanceErrorPhase(input.lastErrorPhase)
   }
   if (typeof input.runtimeWarning !== 'undefined') {
     setPayload.runtimeWarning = input.runtimeWarning?.trim() || null

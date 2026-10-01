@@ -21,6 +21,7 @@ const instance = {
   status: 'running',
   lastCommand: null,
   lastError: null,
+  lastErrorPhase: null,
 }
 
 describe('DST 投影接口的契约', () => {
@@ -97,8 +98,8 @@ describe('DST 投影接口的契约', () => {
     })
     assert.deepEqual(
       Object.keys(parsed.items[0]!.instance).sort(),
-      ['gameCode', 'id', 'lastCommand', 'lastError', 'name', 'status'],
-      '实例标识只该有这六个字段：多一个就说明安装路径/端口这类信息又漏出来了',
+      ['gameCode', 'id', 'lastCommand', 'lastError', 'lastErrorPhase', 'name', 'status'],
+      '实例标识只该有这几个字段：多一个就说明安装路径/端口这类信息又漏出来了',
     )
   })
 

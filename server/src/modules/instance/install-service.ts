@@ -147,6 +147,7 @@ export async function markInstallInterrupted(
     status: 'error',
     lastCommand: null,
     lastError: detail ?? INSTALL_INTERRUPTED_MESSAGE,
+    lastErrorPhase: 'install',
     installPercent: null,
     // 状态机守卫：管线已落终态（成功/失败）时取消不得回头覆盖
     whereStatus: ['pending_install', 'installing'],
@@ -301,6 +302,7 @@ async function finalizeSuccessfulInstall(
     lastError: startScriptResult.ok
       ? (runtimeImageFailed ? '运行环境镜像未就绪，启动实例时将自动重试拉取' : null)
       : startScriptResult.message ?? null,
+    lastErrorPhase: startScriptResult.ok ? (runtimeImageFailed ? 'runtime' : null) : 'install',
     installPercent: startScriptResult.ok ? 100 : null,
     // 状态机守卫：仅当仍在安装中时落终态，避免与取消并发时覆盖取消结果
     whereStatus: 'installing',
@@ -340,6 +342,7 @@ async function runInstallPipeline(
       status: 'error',
       lastCommand: null,
       lastError: memoryError,
+      lastErrorPhase: 'install',
       installPercent: null,
     })
     return
@@ -353,6 +356,7 @@ async function runInstallPipeline(
       status: 'error',
       lastCommand: null,
       lastError: pathError,
+      lastErrorPhase: 'install',
       installPercent: null,
     })
     return
@@ -487,6 +491,7 @@ async function runInstallPipeline(
       status: 'error',
       lastCommand: null,
       lastError: failureMessage,
+      lastErrorPhase: 'install',
       installPercent: null,
       whereStatus: 'installing',
     })
@@ -562,6 +567,7 @@ async function runInstallPipeline(
       status: 'error',
       lastCommand: null,
       lastError: combined,
+      lastErrorPhase: 'install',
       installPercent: null,
     })
     return
@@ -580,6 +586,7 @@ async function runInstallPipeline(
     status: 'error',
     lastCommand: null,
     lastError: failureMessage,
+    lastErrorPhase: 'install',
     installPercent: null,
     whereStatus: 'installing',
   })
@@ -606,6 +613,7 @@ async function runInstallJobInBackground(
       status: 'error',
       lastCommand: null,
       lastError: message,
+      lastErrorPhase: 'install',
       installPercent: null,
       whereStatus: 'installing',
     })
@@ -698,6 +706,7 @@ export async function reconcileStaleInstallingInstances(app: FastifyInstance): P
       installLogStatus: 'failed',
       lastCommand: null,
       lastError: INSTALL_RESTART_INTERRUPTED_MESSAGE,
+      lastErrorPhase: 'install',
       installPercent: null,
     })
     reconciled++

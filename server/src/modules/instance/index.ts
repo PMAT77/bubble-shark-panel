@@ -1116,6 +1116,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: installPathError,
+        lastErrorPhase: 'install',
       })
       return businessError(installPathError, request)
     }
@@ -1125,6 +1126,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: errorMessage,
+        lastErrorPhase: 'install',
       })
       return businessError(errorMessage, request)
     }
@@ -1133,6 +1135,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: errorMessage,
+        lastErrorPhase: 'install',
       })
       return businessError(errorMessage, request)
     }
@@ -1145,6 +1148,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: errorMessage,
+        lastErrorPhase: 'install',
       })
       return businessError(errorMessage, request)
     }
@@ -1153,6 +1157,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: errorMessage,
+        lastErrorPhase: 'install',
       })
       return businessError(errorMessage, request)
     }
@@ -1169,10 +1174,12 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         installLogStatus: current.installLogStatus,
         instanceStatus: current.status,
         lastError: current.lastError,
+        lastErrorPhase: current.lastErrorPhase,
       })
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: errorMessage,
+        lastErrorPhase: 'install',
       })
       return businessError(errorMessage, request)
     }
@@ -1202,6 +1209,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         await updateGameInstanceRuntime(id, {
           status: 'error',
           lastError: portResult.message,
+          lastErrorPhase: 'runtime',
         })
         return businessError(portResult.message, request)
       }
@@ -1222,11 +1230,13 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
           installLogStatus: current.installLogStatus,
           instanceStatus: current.status,
           lastError: current.lastError,
+          lastErrorPhase: current.lastErrorPhase,
         },
       )
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: errorMessage,
+        lastErrorPhase: 'install',
       })
       return businessError(errorMessage, request)
     }
@@ -1239,6 +1249,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         await updateGameInstanceRuntime(id, {
           status: 'error',
           lastError: message,
+          lastErrorPhase: 'runtime',
         })
         return businessError(message, request)
       }
@@ -1287,6 +1298,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         await updateGameInstanceRuntime(id, {
           status: 'error',
           lastError: started.message,
+          lastErrorPhase: 'runtime',
         })
         if (started.hostMemoryPressure) {
           return hostMemoryPressureError(started.hostMemoryPressure, request)
@@ -1367,6 +1379,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       await updateGameInstanceRuntime(id, {
         status: 'error',
         lastError: message,
+        lastErrorPhase: 'runtime',
       })
       return businessError(message, request)
     }
@@ -1414,7 +1427,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       }
       catch (error) {
         const message = error instanceof Error ? error.message : '计划重启时停止实例失败'
-        await updateGameInstanceRuntime(instanceId, { status: 'error', lastError: message })
+        await updateGameInstanceRuntime(instanceId, { status: 'error', lastError: message, lastErrorPhase: 'runtime' })
         return { ok: false, message }
       }
     }
@@ -1473,7 +1486,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       }
       catch (error) {
         const message = error instanceof Error ? error.message : '停止实例失败'
-        await updateGameInstanceRuntime(instanceId, { status: 'error', lastError: message })
+        await updateGameInstanceRuntime(instanceId, { status: 'error', lastError: message, lastErrorPhase: 'runtime' })
         return { ok: false, message }
       }
       currentApp.log.info({ instanceId, source: 'plugin' }, '插件请求停止实例')

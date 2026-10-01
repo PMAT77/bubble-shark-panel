@@ -65,7 +65,7 @@ export function statusTextClass(tone: StatusTone): string {
 
 /**
  * 实例展示状态（error 在展示层拆分为 install_failed / runtime_error，
- * 由 instanceDisplay.getInstanceState 依据 lastCommand/lastError 判定）。
+ * 由 instanceDisplay.getInstanceState 依据 lastErrorPhase 判定）。
  */
 export type InstanceDisplayState =
   | 'pending_install'
@@ -84,7 +84,7 @@ export const INSTANCE_STATE: Record<InstanceDisplayState, StatusDescriptor> = {
   runtime_error: { label: '运行异常', tone: 'error', icon: 'i-lucide:triangle-alert' },
 }
 
-/** 仅有原始枚举（无 lastCommand/lastError 上下文）时的兜底：error 展示为运行异常 */
+/** 仅有原始枚举（无 lastErrorPhase 上下文）时的兜底：error 展示为运行异常 */
 export const INSTANCE_STATUS: Record<InstanceDisplayState | 'error', StatusDescriptor> = {
   ...INSTANCE_STATE,
   error: INSTANCE_STATE.runtime_error,

@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | `GSH_INSTALL_MODE` | `auto` | 同 `--mode` |
 | `GSH_NETWORK_PROFILE` | `auto` | 同 `--network` |
-| `GSH_RELEASE_TAG` | 脚本内置 `v0.13.0` | 安装指定版本。升级时填**目标**版本 |
+| `GSH_RELEASE_TAG` | 脚本内置 `v0.13.1` | 安装指定版本。升级时填**目标**版本 |
 | `GSH_PANEL_ENV_PRESET` | `auto` | 内存预设档位：`auto` / `small` / `medium` / `large` / `none` |
 | `PANEL_IMAGE` | GHCR 当前 tag | 统一镜像的完整引用（tag 或 digest），自建仓库时用 |
 | `INSTALL_STEAMCMD_IMAGE` | `1` | 设 `0` 跳过预拉 SteamCMD 镜像 |
@@ -44,9 +44,11 @@
 | `PANEL_LOG_DIR` | `/var/log/game-server-hub` | 日志与安装状态目录 |
 
 <details>
-<summary>注意：内存不改预设也能跑，但小内存机建议先加 swap</summary>
+<summary>注意：内存不改预设也能跑，小内存机的 swap 由安装器自动配置</summary>
 
-4 GiB 机器先执行 `sudo gsh setup-swap`。分片加载整套 Mod 时内存会短时冲高，物理内存不足会让内核在加载途中直接杀掉分片，表现为「实例显示运行中但大厅搜不到」。档位与预设见[内存档位](MEMORY.md)。
+总内存低于 5 GiB 且当前没有 swap 时，安装器会自动创建 swapfile 并写进 `/etc/fstab`（重启后仍生效）；总内存低于 3800 MiB 给 4 GiB，其余小内存机给 2 GiB。用 `--no-swap` 或 `GSH_SWAP_ON_INSTALL=0` 关闭，大小用 `GSH_SWAP_SIZE` 指定。面板不以 root 运行，做不到这一步，所以从旧版本升级上来的机器仍需执行一次 `sudo gsh setup-swap`。
+
+分片加载整套 Mod 时内存会短时冲高，物理内存不足会让内核在加载途中直接杀掉分片，表现为「实例显示运行中但大厅搜不到」。档位与预设见[内存档位](MEMORY.md)。
 
 </details>
 
@@ -94,7 +96,7 @@
 
 | 变量 | 默认 | 用途 |
 | --- | --- | --- |
-| `PANEL_IMAGE` | `ghcr.io/pmat77/game-server-hub:v0.13.0` | 统一镜像引用，自建仓库或固定 digest 时用 |
+| `PANEL_IMAGE` | `ghcr.io/pmat77/game-server-hub:v0.13.1` | 统一镜像引用，自建仓库或固定 digest 时用 |
 | `GSH_IMAGE_SOURCE` | `auto` | 安装阶段取运行时镜像的路线：`auto`（国内档或层数据不可达时用离线包，否则直拉）/ `offline`（固定离线包）/ `native`（固定 GHCR 直拉） |
 | `GSH_FORCE_IMAGE_PULL` | `0` | 设为 `1` 时即使本地已有同名镜像也重新拉取 |
 | `DOCKER_PULL_STALL_SECONDS` | `90` | 直拉时连续多少秒没有进度就判定停滞并放弃本次尝试 |
@@ -121,6 +123,9 @@
 | `GSH_HOST_STEAMCMD_PLANNING_MB` | `1280` | 安装前守卫按这个值预留可用内存 |
 | `GSH_HOST_DST_PLANNING_MB` | `512` | 分片启动守卫的单分片规划下界（MiB） |
 | `GSH_HOST_MEMORY_HEADROOM_MB` | `512` | 守卫额外留的余量（MiB） |
+| `GSH_HOST_MIN_AVAILABLE_MB` | 不设置 | 设为 `0` 关闭启动前的内存守卫（小内存慎用） |
+| `GSH_SWAP_ON_INSTALL` | `1` | 安装器在小内存机上自动创建 swapfile，设 `0` 关闭（等同 `--no-swap`） |
+| `GSH_SWAP_SIZE` | `2G` | 自动创建或 `gsh setup-swap` 的交换区大小；总内存低于 3800 MiB 时安装器用 `4G` |
 
 <details>
 <summary>启动守卫怎么估算，以及为什么建议用预设文件而不是手抄</summary>

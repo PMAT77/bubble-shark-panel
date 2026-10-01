@@ -20,6 +20,7 @@ import {
   isShardPortBound,
   readClusterMasterPort,
   resolveShardReadyWaitSec,
+  summarizeLoadedMods,
   waitForMasterShardReady,
 } from './container-lifecycle.ts'
 
@@ -444,5 +445,48 @@ describe('readClusterMasterPort', () => {  it('读取 cluster.ini 的 master_por
 
   it('配置文件缺失时退回 DST 默认端口', () => {
     assert.equal(readClusterMasterPort(createTempDir()), 10888)
+  })
+})
+
+/**
+ * 回归：面板此前只能回答「Mod 内容已就绪」，无法回答「游戏到底加载了几个」。
+ * 落位目录与游戏读取目录不一致时（实测发生过：内容写进 ugc_mods、游戏读 mods/），
+ * 面板显示全部就绪、游戏里一个 Mod 都没有，而日志里连报错都没有——只能靠自己数。
+ */
+describe('summarizeLoadedMods', () => {
+  it('统计本轮真正被加载的 Mod（真实日志片段）', () => {
+    const logText = [
+      '[00:00:04]: ModIndex: Beginning normal load sequence for dedicated server.',
+      '[00:00:30]: Mod: workshop-378160973 (Global Positions)\t  Registering prefabs\t',
+      '[00:00:31]: Mod: workshop-1207269058 (Food Values)\t  Registering prefabs\t',
+      '[00:00:39]: ModIndex: Load sequence finished successfully.',
+      '',
+    ].join('\n')
+
+    const summary = summarizeLoadedMods(logText)
+
+    assert.equal(summary.indexFinished, true)
+    assert.deepEqual(summary.workshopIds.sort(), ['1207269058', '378160973'])
+  })
+
+  it('索引还没跑完时不下结论', () => {
+    const summary = summarizeLoadedMods('[00:00:04]: ModIndex: Beginning normal load sequence for dedicated server.\n')
+    assert.equal(summary.indexFinished, false)
+    assert.deepEqual(summary.workshopIds, [])
+  })
+
+  it('索引跑完却没有任何 Mod 加载行（这一次故障的形态）', () => {
+    const summary = summarizeLoadedMods('[00:00:39]: ModIndex: Load sequence finished successfully.\n')
+    assert.equal(summary.indexFinished, true)
+    assert.deepEqual(summary.workshopIds, [])
+  })
+
+  it('同一个 Mod 的多行注册只算一次', () => {
+    const logText = [
+      '[00:00:30]: Mod: workshop-1 (X)\t  Registering prefabs\t',
+      '[00:00:31]: Mod: workshop-1 (X)\t  Registering prefabs\t',
+      '[00:00:39]: ModIndex: Load sequence finished successfully.',
+    ].join('\n')
+    assert.deepEqual(summarizeLoadedMods(logText).workshopIds, ['1'])
   })
 })

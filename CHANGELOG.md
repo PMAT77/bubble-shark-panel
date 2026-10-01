@@ -2,6 +2,14 @@
 
 本文件记录面向用户的版本变更，格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **面板显示「已就绪」的 Mod 在游戏里一个都没有**：面板一直把创意工坊 Mod 内容落位到实例目录的 `ugc_mods/<存档名>/<分片>/content/322330/<id>`，而游戏实际从 `<实例目录>/mods/workshop-<id>` 加载。内容齐全、`modoverrides.lua` 里也写好了 `enabled=true`，游戏却一个 Mod 都不加载；启动参数里的 `-skip_update_server_mods` 又禁止游戏自己补下载，于是表现为启动成功、进游戏全是原版内容、日志里没有任何 Mod 加载行。现在落位到 `ugc_mods` 之后会把它一并接入 `mods/workshop-<id>`——同一份内容用相对软链接，不占双份磁盘，内容更新后自动指向新版本；链接不可用的环境退化为复制。取消订阅、导入存档替换 Mod 清单时一并把接入清掉，不留会被继续加载的残留。
+- **内置的世界种子 Mod 同样只写 `ugc_mods`**：它也不进 `dedicated_server_mods_setup.lua`，因此此前和普通 Mod 一样不会被游戏加载。现在同样接入 `mods/workshop-<id>`；但只有在两个分片用同一个种子（或没开洞穴）时才接入——`mods/` 是两个分片共用的一份，接过去会让洞穴也用上地上世界的种子，那比内置 Mod 不生效更糟。
+- **确认 Mod 有没有真被加载不必再翻日志找答案**：主世界的 Mod 索引完成后，控制台会写明「本次启动已加载 N 个 Mod（面板启用 M 个）」，一个都没加载时直接点出来并提示去「模组管理」核对，同时列出已启用但未被加载的那些。
+
 ## [0.13.1] - 2026-10-01
 
 ### Added

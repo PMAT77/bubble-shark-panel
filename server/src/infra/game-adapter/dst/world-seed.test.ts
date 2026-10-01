@@ -20,6 +20,7 @@ import {
   toWorldSeedModName,
   validateWorldSeed,
 } from './world-seed'
+import { resolveDstLegacyModDir } from './ugc-mod-install'
 
 const tempDirs: string[] = []
 
@@ -73,6 +74,64 @@ describe('world-seed', () => {
     assert.deepEqual(folders, ['Master'])
     assert.equal(fs.existsSync(cavesDir), false)
     assert.equal(fs.existsSync(resolveWorldSeedModDir(installPath, 'Master')), true)
+  })
+
+  /**
+   * 回归：DST 从 `mods/workshop-<id>` 加载 Mod（见 resolveDstLegacyModDir），
+   * 内置的世界种子 Mod 只写 ugc_mods 时同样不会被加载。
+   */
+  it('把内置 Mod 接入 DST 实际读取的 mods/workshop-<id>', () => {
+    const installPath = createInstallPath()
+    ensureWorldSeedModLayout(installPath, ['Master'], { master: '123456' })
+
+    const legacyDir = resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)
+    assert.match(fs.readFileSync(path.join(legacyDir, 'modinfo.lua'), 'utf8'), /GSH World Seed/)
+    assert.match(fs.readFileSync(path.join(legacyDir, 'modworldgenmain.lua'), 'utf8'), /GLOBAL\.SEED = 123456/)
+  })
+
+  it('清掉种子后同时撤掉接入', () => {
+    const installPath = createInstallPath()
+    ensureWorldSeedModLayout(installPath, ['Master'], { master: '123456' })
+    const legacyDir = resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)
+    assert.equal(fs.existsSync(legacyDir), true)
+
+    ensureWorldSeedModLayout(installPath, ['Master'], {})
+
+    assert.equal(fs.existsSync(legacyDir), false)
+  })
+
+  it('两个分片种子不同时不接入（mods/ 是两个分片共用的一份）', () => {
+    const installPath = createInstallPath()
+    const cavesDir = path.join(installPath, 'klei-storage', 'DoNotStarveTogether', 'Cluster_1', 'Caves')
+    fs.mkdirSync(cavesDir, { recursive: true })
+    fs.writeFileSync(path.join(cavesDir, 'server.ini'), '[SHARD]\n')
+
+    ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], { master: '123456', caves: '654321' })
+
+    // 接入过去会让洞穴也用上地上世界的种子，比内置 Mod 不生效更糟
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)), false)
+  })
+
+  it('只给地上设了种子、洞穴却开着时同样不接入', () => {
+    const installPath = createInstallPath()
+    const cavesDir = path.join(installPath, 'klei-storage', 'DoNotStarveTogether', 'Cluster_1', 'Caves')
+    fs.mkdirSync(cavesDir, { recursive: true })
+    fs.writeFileSync(path.join(cavesDir, 'server.ini'), '[SHARD]\n')
+
+    ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], { master: '123456' })
+
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)), false)
+  })
+
+  it('两个分片用同一个种子时接入', () => {
+    const installPath = createInstallPath()
+    const cavesDir = path.join(installPath, 'klei-storage', 'DoNotStarveTogether', 'Cluster_1', 'Caves')
+    fs.mkdirSync(cavesDir, { recursive: true })
+    fs.writeFileSync(path.join(cavesDir, 'server.ini'), '[SHARD]\n')
+
+    ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], { master: '123456', caves: '123456' })
+
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)), true)
   })
 
   it('treats invalid seeds as unset and does not rewrite unchanged files', () => {

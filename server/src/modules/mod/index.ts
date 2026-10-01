@@ -48,6 +48,7 @@ import {
   writeModDependencyMap,
 } from '../../infra/game-adapter/dst/mod-service'
 import { isWorldSeedModId } from '../../infra/game-adapter/dst/world-seed'
+import { removeDstLegacyModLinks } from '../../infra/game-adapter/dst/ugc-mod-install'
 import { LOCAL_NODE_ID, resolveLocalDstInstance } from '../../shared/dst/local-dst-instance'
 import type { ModReadinessResult } from './mod-readiness-service'
 import { reconcileInstanceModReadiness } from './mod-readiness-service'
@@ -1162,6 +1163,8 @@ export function registerModModule(app: FastifyInstance) {
     if (!deleted) {
       return businessError('Mod 不存在', request)
     }
+    // 删记录的同时收掉 mods/workshop-<id> 接入：残留的链接会被 DST 当成仍在订阅的 Mod 加载
+    removeDstLegacyModLinks(resolved.instance.installPath, [modId])
     const dependencyMap = readModDependencyMap(resolved.instance.installPath)
     delete dependencyMap[modId]
     for (const workshopId of Object.keys(dependencyMap)) {

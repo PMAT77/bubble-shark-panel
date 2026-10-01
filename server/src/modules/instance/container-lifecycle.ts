@@ -95,6 +95,16 @@ const SHARD_PORT_EARLY_BIND_GRACE_SEC = 60
  */
 const MASTER_READY_MARKER = /Shard server started on port|About to start a shard with these settings|Reconstructing topology/
 
+/** DST 执行某个 Mod 的 modmain 时会打印的行（取自用户服务器上的真实输出） */
+const MOD_LOADED_LINE_PATTERN = /Mod:\s*workshop-(\d+)/g
+/** 本轮分片的 Mod 索引流程已完成；只有它出现后才能对「加载了几个 Mod」下结论 */
+const MOD_INDEX_DONE_MARKER = /ModIndex: Load sequence finished successfully/
+/** Mod 数量级：一行的 Mod 下 2 MiB 足以覆盖整个索引段 */
+const MOD_LOAD_REPORT_MAX_BYTES = 2 * 1024 * 1024
+/** 小机器上 36 个 Mod 的索引实测约 40 秒完成，留足余量 */
+const MOD_LOAD_REPORT_TIMEOUT_MS = 5 * 60 * 1000
+const MOD_LOAD_REPORT_POLL_INTERVAL_MS = 3000
+
 /** 读文件尾部若干字节；日志可达数百 KB，只关心结尾 */
 function readTailText(filePath: string, maxBytes = 64 * 1024): string {
   let descriptor: number | undefined
@@ -144,6 +154,96 @@ export function hasMasterReadyMarker(instanceId: string, installPath?: string): 
   }
   const logPath = path.join(resolveShardRoot(installPath, 'master'), 'server_log.txt')
   return MASTER_READY_MARKER.test(readTailText(logPath))
+}
+
+/**
+ * 从分片日志文本里读出「本轮 Mod 索引是否完成」与「实际被加载的 Mod ID」。
+ *
+ * 抽成纯函数是为了能用真实日志片段固化口径：DST 只在实际执行某个 Mod 的 modmain 时
+ * 打印 `Mod: workshop-<id> ... Registering prefabs`，因此这个集合就是游戏真正加载的 Mod。
+ */
+export function summarizeLoadedMods(logText: string): { indexFinished: boolean, workshopIds: string[] } {
+  const workshopIds = new Set<string>()
+  for (const match of logText.matchAll(MOD_LOADED_LINE_PATTERN)) {
+    workshopIds.add(match[1] as string)
+  }
+  return {
+    indexFinished: MOD_INDEX_DONE_MARKER.test(logText),
+    workshopIds: [...workshopIds],
+  }
+}
+
+/**
+ * 启动后在控制台回答「游戏这次到底加载了几个 Mod」。
+ *
+ * 面板此前只能回答「内容已就绪」，而「内容在盘上」与「游戏真的加载」是两件事：
+ * 落位目录与游戏读取目录不一致时，面板显示全部就绪、游戏里一个 Mod 都没有，且没有任何报错
+ * （`-skip_update_server_mods` 还禁止了游戏自己补下载）。
+ *
+ * 读 DST 自己写的 `server_log.txt`：该文件每次分片启动都会被重写，天然只含本轮。
+ * 只有看到本轮的 Mod 索引完成标记才下结论，否则宁可不说话——把「还没加载到那一步」
+ * 说成「一个都没加载」会误导排查方向。
+ */
+async function reportLoadedModsAfterStart(input: { instanceId: string, installPath: string }): Promise<void> {
+  const logPath = path.join(resolveShardRoot(input.installPath, 'master'), 'server_log.txt')
+  const deadline = Date.now() + MOD_LOAD_REPORT_TIMEOUT_MS
+  let loadedIds: Set<string> | null = null
+  // NaN 保证首轮必读：文件还不存在时 size 也是 -1，用 -1 初始化会一直跳过读取
+  let lastSize = Number.NaN
+  while (Date.now() < deadline) {
+    let size = -1
+    try {
+      size = fs.statSync(logPath).size
+    }
+    catch {
+      // 日志还没写出来：下一轮再看
+    }
+    // 日志没长就不重复读：索引完成后它基本不再变化，避免一直空转读盘
+    if (size !== lastSize) {
+      lastSize = size
+      const summary = summarizeLoadedMods(readTailText(logPath, MOD_LOAD_REPORT_MAX_BYTES))
+      if (summary.indexFinished) {
+        loadedIds = new Set(summary.workshopIds)
+        break
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, MOD_LOAD_REPORT_POLL_INTERVAL_MS))
+  }
+  if (!loadedIds) {
+    return
+  }
+
+  const expected = (await listInstanceMods(input.instanceId))
+    .filter(mod => mod.enabled && mod.installStatus === 'ready')
+    .map(mod => mod.workshopId)
+
+  if (loadedIds.size === 0) {
+    if (expected.length === 0) {
+      return
+    }
+    instanceConsoleLogStore.appendSystem(
+      input.instanceId,
+      `游戏本次没有加载任何 Mod（面板启用 ${expected.length} 个）：请到「模组管理」核对这些 Mod 的状态，`
+      + '并确认实例目录下 mods/workshop-<ID> 有内容',
+      'master',
+    )
+    return
+  }
+
+  instanceConsoleLogStore.appendSystem(
+    input.instanceId,
+    `本次启动已加载 ${loadedIds.size} 个 Mod（面板启用 ${expected.length} 个）`,
+    'master',
+  )
+  const missing = expected.filter(workshopId => !loadedIds.has(workshopId))
+  if (missing.length > 0) {
+    instanceConsoleLogStore.appendSystem(
+      input.instanceId,
+      `以下已启用的 Mod 未被游戏加载：${missing.slice(0, 10).join('、')}`
+      + `${missing.length > 10 ? ` 等 ${missing.length} 个` : ''}`,
+      'master',
+    )
+  }
 }
 
 export type ConsoleCommandShard = 'master' | 'caves'
@@ -798,6 +898,13 @@ export async function startInstanceContainer(
     shardEnabled,
   }, '实例运行时已启动')
   startShardLogFollow(input.instanceId, ref, 'master')
+  // 不阻塞启动：等本轮的 Mod 索引完成后，把「实际加载了几个 Mod」写进控制台
+  void reportLoadedModsAfterStart({
+    instanceId: input.instanceId,
+    installPath: input.installPath,
+  }).catch((error) => {
+    app.log.warn({ instanceId: input.instanceId, err: error }, 'Mod 加载情况上报失败')
+  })
 
   if (cavesSpec) {
     instanceConsoleLogStore.appendSystem(

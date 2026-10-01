@@ -4,7 +4,8 @@ import type { ShardId } from '../../../../../shared/contracts/shard'
 import { worldSeedPattern } from '../../../../../shared/contracts/shard'
 import { DST_CLUSTER_NAME, DST_WORKSHOP_APP_ID } from './constants'
 import { writeFileAtomic } from './atomic-write'
-import type { DstShardFolder } from './ugc-mod-install'
+import { ensureDstLegacyModLink, removeDstLegacyModLinks, type DstShardFolder } from './ugc-mod-install'
+import { isCavesShardConfigured } from './shard-layout'
 
 /**
  * 面板内置的世界种子 Mod。
@@ -164,5 +165,30 @@ export function ensureWorldSeedModLayout(
     writeIfChanged(path.join(modDir, 'modworldgenmain.lua'), buildWorldSeedModWorldgenMainContent(seed))
     enabledFolders.push(shardFolder)
   }
+  syncWorldSeedLegacyLink(installPath, enabledFolders, seeds)
   return enabledFolders
+}
+
+/**
+ * 内置 Mod 同样要接入 DST 实际读取的 `mods/workshop-<id>`（理由见 resolveDstLegacyModDir）。
+ *
+ * 但 `mods/` 是两个分片共用的一份：分片各自有不同种子时无法表达，链接过去会让洞穴
+ * 也用上地上世界的种子——那是比「内置 Mod 不生效」更糟的结果，所以这种情况下不建链接。
+ */
+function syncWorldSeedLegacyLink(
+  installPath: string,
+  enabledFolders: DstShardFolder[],
+  seeds: Partial<Record<ShardId, string>>,
+): void {
+  const sameSeed = (seeds.master?.trim() ?? '') === (seeds.caves?.trim() ?? '')
+  if (enabledFolders.length === 0 || (isCavesShardConfigured(installPath) && !sameSeed)) {
+    removeDstLegacyModLinks(installPath, [GSH_WORLD_SEED_MOD_ID])
+    return
+  }
+  try {
+    ensureDstLegacyModLink(installPath, GSH_WORLD_SEED_MOD_ID, resolveWorldSeedModDir(installPath, enabledFolders[0]))
+  }
+  catch {
+    // best-effort：接入失败只影响内置种子生效，不影响实例启动
+  }
 }

@@ -6,8 +6,11 @@ import { afterEach, describe, it } from 'node:test'
 import { strToU8, zipSync } from 'fflate'
 import { DST_CLUSTER_NAME, DST_CONF_DIR, DST_STORAGE_DIR, resolveDstSteamWorkshopModDir } from './constants'
 import {
+  ensureDstLegacyModLinks,
   ensureDstUgcModLayout,
   isDstUgcModReady,
+  removeDstLegacyModLinks,
+  resolveDstLegacyModDir,
   resolveDstUgcModDir,
   resolveDstUgcShardFolders,
   resolveDstWorkshopModSource,
@@ -49,25 +52,26 @@ function writeCavesShardConfig(installPath: string) {
   fs.writeFileSync(path.join(cavesDir, 'server.ini'), '[SHARD]\n')
 }
 
+/** 落位与接入两类临时产物都不许有残留：ugc_mods 下与 mods/ 下各扫一遍 */
 function listTempResidue(installPath: string): string[] {
-  const ugcRoot = path.join(installPath, 'ugc_mods')
-  if (!fs.existsSync(ugcRoot)) {
-    return []
-  }
   const found: string[] = []
   const walk = (dir: string) => {
+    if (!fs.existsSync(dir)) {
+      return
+    }
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name)
+      if (full.includes('.tmp-') || full.includes('.link-')) {
+        found.push(full)
+        continue
+      }
       if (entry.isDirectory()) {
-        if (entry.name.includes('.tmp-')) {
-          found.push(full)
-          continue
-        }
         walk(full)
       }
     }
   }
-  walk(ugcRoot)
+  walk(path.join(installPath, 'ugc_mods'))
+  walk(path.join(installPath, 'mods'))
   return found
 }
 
@@ -266,5 +270,113 @@ describe('ensureDstUgcModLayout', () => {
 
     assert.deepEqual(outcomes, [{ workshopId: '1010', status: 'installed' }])
     assert.deepEqual(await ensureDstUgcModLayout(installPath, []), [])
+  })
+})
+
+/**
+ * 回归：DST 实际从 `mods/workshop-<id>` 加载创意工坊 Mod，只落位到 ugc_mods 时
+ * 面板显示全部就绪、游戏里一个 Mod 都没有（实测日志里没有任何 Mod 加载行）。
+ */
+describe('mods 接入（DST 实际读取的布局）', () => {
+  it('落位后同一份内容也出现在 mods/workshop-<id> 下', async () => {
+    const installPath = createInstallPath()
+    writeSteamappsSource(installPath, '3793502052')
+
+    await ensureDstUgcModLayout(installPath, ['3793502052'])
+
+    const legacyDir = resolveDstLegacyModDir(installPath, '3793502052')
+    assert.equal(fs.readFileSync(path.join(legacyDir, 'modinfo.lua'), 'utf8').includes('Mod 3793502052'), true)
+    assert.equal(fs.existsSync(path.join(legacyDir, 'modmain.lua')), true)
+    // 生产环境（Linux）用相对软链接：同一份内容不占两份磁盘
+    if (process.platform !== 'win32') {
+      assert.equal(fs.lstatSync(legacyDir).isSymbolicLink(), true)
+    }
+    assert.deepEqual(listTempResidue(installPath), [])
+  })
+
+  it('已就绪（skipped 分支）的 Mod 也会补上接入', async () => {
+    const installPath = createInstallPath()
+    writeSteamappsSource(installPath, '111')
+    await ensureDstUgcModLayout(installPath, ['111'])
+    fs.rmSync(resolveDstLegacyModDir(installPath, '111'), { recursive: true, force: true })
+
+    const outcomes = await ensureDstUgcModLayout(installPath, ['111'])
+
+    assert.deepEqual(outcomes, [{ workshopId: '111', status: 'skipped' }])
+    assert.equal(fs.existsSync(path.join(resolveDstLegacyModDir(installPath, '111'), 'modinfo.lua')), true)
+  })
+
+  it('更新内容后游戏侧读到的是新版本', async () => {
+    const installPath = createInstallPath()
+    const sourceDir = writeSteamappsSource(installPath, '777')
+    await ensureDstUgcModLayout(installPath, ['777'])
+
+    fs.writeFileSync(path.join(sourceDir, 'modinfo.lua'), 'name = "Mod 777 v2"\n')
+    await ensureDstUgcModLayout(installPath, ['777'], { refresh: true })
+
+    const content = fs.readFileSync(path.join(resolveDstLegacyModDir(installPath, '777'), 'modinfo.lua'), 'utf8')
+    assert.equal(content.includes('Mod 777 v2'), true)
+  })
+
+  // Windows 无特权建不了目录软链接，这条路径只能在 Linux 上验
+  it('指向别处的接入会被重建为本次落位的内容', { skip: process.platform === 'win32' }, async () => {
+    const installPath = createInstallPath()
+    writeSteamappsSource(installPath, '1234')
+    await ensureDstUgcModLayout(installPath, ['1234'])
+    const legacyDir = resolveDstLegacyModDir(installPath, '1234')
+    // 人为把接入指到一个内容完整、但不是本次落位结果的位置
+    const strayDir = path.join(installPath, 'ugc_mods', 'stray')
+    fs.mkdirSync(strayDir, { recursive: true })
+    fs.writeFileSync(path.join(strayDir, 'modinfo.lua'), 'name = "Stray"\n')
+    removeDstLegacyModLinks(installPath, ['1234'])
+    fs.symlinkSync(path.relative(path.dirname(legacyDir), strayDir), legacyDir, 'dir')
+
+    const outcomes = await ensureDstUgcModLayout(installPath, ['1234'])
+
+    assert.deepEqual(outcomes, [{ workshopId: '1234', status: 'skipped' }])
+    assert.equal(fs.readFileSync(path.join(legacyDir, 'modinfo.lua'), 'utf8').includes('Mod 1234'), true)
+  })
+
+  it('不把面板自己建的接入当成下载来源', async () => {
+    const installPath = createInstallPath()
+    writeSteamappsSource(installPath, '321')
+    await ensureDstUgcModLayout(installPath, ['321'])
+    // 下载目录被清理后只剩接入：跟随它等于把 ugc_mods 的内容再复制回 ugc_mods
+    fs.rmSync(resolveDstSteamWorkshopModDir(installPath, '321'), { recursive: true, force: true })
+
+    assert.equal(resolveDstWorkshopModSource(installPath, '321'), null)
+  })
+
+  it('外部手工放置的 mods/workshop-<id> 仍可作为下载来源', () => {
+    const installPath = createInstallPath()
+    const externalDir = path.join(installPath, 'mods', 'workshop-888')
+    fs.mkdirSync(externalDir, { recursive: true })
+    fs.writeFileSync(path.join(externalDir, 'modinfo.lua'), 'name = "外部放置"\n')
+
+    assert.equal(resolveDstWorkshopModSource(installPath, '888')?.kind, 'dir')
+  })
+
+  it('内容还没落位时接入失败并给出原因', async () => {
+    const installPath = createInstallPath()
+
+    const outcomes = await ensureDstLegacyModLinks(installPath, ['999'])
+
+    assert.equal(outcomes.length, 1)
+    assert.equal(outcomes[0]?.status, 'failed')
+    assert.match(outcomes[0]?.error ?? '', /尚未落位/)
+  })
+
+  it('清理只删自己建的接入，不动外部放置的目录', async () => {
+    const installPath = createInstallPath()
+    writeSteamappsSource(installPath, '555')
+    await ensureDstUgcModLayout(installPath, ['555'])
+    const externalDir = path.join(installPath, 'mods', 'workshop-666')
+    fs.mkdirSync(externalDir, { recursive: true })
+    fs.writeFileSync(path.join(externalDir, 'modinfo.lua'), 'name = "外部放置"\n')
+
+    removeDstLegacyModLinks(installPath, ['555', '666'])
+
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, '555')), false)
+    assert.equal(fs.existsSync(externalDir), true)
   })
 })

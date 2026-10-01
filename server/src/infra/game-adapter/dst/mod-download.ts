@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { runSteamcmdWorkshopDownloadInContainer } from '../../container/steamcmd-runner'
-import { DST_CLUSTER_NAME, DST_WORKSHOP_APP_ID, resolveDstSteamWorkshopModDir } from './constants'
+import { resolveDstSteamWorkshopModDir } from './constants'
+import { resolveDstLegacyModDir, resolveDstUgcModDir } from './ugc-mod-install'
 
 const DEFAULT_WORKSHOP_DOWNLOAD_TIMEOUT_MS = readPositiveIntEnv('GSH_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS', 10 * 60 * 1000)
 
@@ -47,15 +48,8 @@ function hasWorkshopDownloadArtifacts(modDir: string): boolean {
 
 export { resolveDstSteamWorkshopModDir }
 
-function resolveDstLegacyModDir(installPath: string, workshopId: string): string {
-  return path.join(installPath, 'mods', `workshop-${workshopId}`)
-}
-
 function resolveDstUgcModDirs(installPath: string, workshopId: string): string[] {
-  const clusterRoot = path.join(installPath, 'ugc_mods', DST_CLUSTER_NAME)
-  return ['Master', 'Caves'].map(shard =>
-    path.join(clusterRoot, shard, 'content', DST_WORKSHOP_APP_ID, workshopId),
-  )
+  return (['Master', 'Caves'] as const).map(shard => resolveDstUgcModDir(installPath, shard, workshopId))
 }
 
 export function isDstWorkshopModPresent(installPath: string, workshopId: string): boolean {

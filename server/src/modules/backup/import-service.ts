@@ -27,6 +27,7 @@ import {
   parseModOverridesEntries,
 } from '../../infra/game-adapter/dst/mod-config'
 import { isDstWorkshopModPresent } from '../../infra/game-adapter/dst/mod-download'
+import { removeDstLegacyModLinks } from '../../infra/game-adapter/dst/ugc-mod-install'
 import { isWorldSeedModId } from '../../infra/game-adapter/dst/world-seed'
 import {
   buildServerIni,
@@ -43,6 +44,7 @@ import { LOCAL_NODE_ID } from '../../shared/dst/local-dst-instance'
 import {
   deleteInstanceModsByInstanceId,
   getGameInstanceById,
+  listInstanceMods,
   updateGameInstanceRuntime,
   upsertInstanceMod,
 } from '../../shared/db/index'
@@ -493,7 +495,11 @@ async function syncImportedModsToDb(options: {
   const entries = readSourceModEntries(clusterRoot)
   const missingWorkshopContent: string[] = []
   try {
+    // 导入是整个替换库里的 Mod 清单：先按旧清单收掉 mods/workshop-<id> 接入，
+    // 否则被换掉的那些 Mod 会留下链接、继续被 DST 当成仍订阅的 Mod 加载
+    const previousMods = await listInstanceMods(instanceId)
     await deleteInstanceModsByInstanceId(instanceId)
+    removeDstLegacyModLinks(installPath, previousMods.map(mod => mod.workshopId))
     for (const [index, entry] of entries.entries()) {
       // 源档 modoverrides.lua 只有创意工坊 ID，内容在不在本机必须按磁盘判定：
       // 把没下载的记成「已就绪」会让面板显示全部开启、游戏里却只加载出有文件的那几个。

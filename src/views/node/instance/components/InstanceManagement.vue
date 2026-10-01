@@ -19,7 +19,6 @@ import {
   routeToInstanceConsole,
   routeToInstanceDetail,
 } from '@/navigation/game-routes'
-import router from '@/router'
 import { blurFocusedElement } from '@/utils'
 import {
   tryNotifyHostMemoryPressure,

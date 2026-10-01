@@ -36,7 +36,6 @@ import {
   routeToDstRoomSettings,
   routeToDstWorldList,
 } from '@/navigation/game-routes'
-import router from '@/router'
 import { isInstanceInstallingStatus } from '@/views/node/instance/instanceDisplay'
 import { resolveShardDisplayStatus, statusTagType } from '@/constants/statusDictionary'
 import { tryNotifyHostMemoryPressure } from '@/utils/hostMemoryPressure'

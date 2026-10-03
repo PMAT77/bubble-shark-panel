@@ -2,6 +2,18 @@
 
 本文件记录面向用户的版本变更，格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.13.4] - 2026-10-03
+
+### Added
+
+- 实例列表与详情增加「校验并更新游戏文件」，停止实例后可强制执行 SteamCMD 校验，保留存档。
+
+### Fixed
+
+- 修复游戏更新检查截断 SteamCMD 输出并误取测试分支版本的问题，Native 与 Docker 均按正式分支判断；查询失败明确提示无法判断版本。
+- 安装与恢复不再用远端版本改写本地安装清单；手动更新重新查询版本，已受理的更新与强制校验不再跳过 SteamCMD。
+- 本地复制游戏文件前核对供体与当前正式分支版本，避免使用旧清单误判为最新的供体。
+
 ## [0.13.3] - 2026-10-01
 
 ### Fixed
@@ -924,7 +936,8 @@
 - DST 房间 / 世界 / Mod 管理
 - 面板与 DST 镜像 GHCR 发布（`v*` tag）
 
-[Unreleased]: https://github.com/PMAT77/game-serve-hub/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/PMAT77/game-serve-hub/compare/v0.13.4...HEAD
+[0.13.4]: https://github.com/PMAT77/game-serve-hub/compare/v0.13.3...v0.13.4
 [0.4.2]: https://github.com/PMAT77/game-serve-hub/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/PMAT77/game-serve-hub/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.10...v0.4.0

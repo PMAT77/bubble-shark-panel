@@ -46,7 +46,7 @@
     "test:map-smoke": "tsx server/scripts/map-http-smoke.ts",
     "release:verify": "node scripts/check-release-consistency.mjs",
     "docs:check": "node scripts/check-docs.mjs",
-    "release:check": "pnpm run release:verify && pnpm run docs:check && pnpm run check:gsh && pnpm run check:presets && pnpm run lint && pnpm run lint:ox && pnpm run lint:copy && pnpm run check:transition && pnpm run check:routes && pnpm run check:write-entries && pnpm run check:menu-pages && pnpm test:unit && pnpm run check:installer && pnpm run build"
+    "release:check": "node scripts/run-local-checks.mjs"
   },
   "dependencies": {
     "@fantastic-admin/components": "workspace:*",

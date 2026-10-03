@@ -37,81 +37,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check
-        run: pnpm run lint
-
-      - name: Lint (oxlint)
-        run: pnpm run lint:ox
-
-      # 这三项此前只在本地 release:check 里跑，CI 不跑等于没有门禁：
-      # 文档死链、界面文案泄露实现细节、gsh CLI 的转义笔误都能一路进 main。
-      - name: Lint (UI copy)
-        run: pnpm run lint:copy
-
-      - name: Docs consistency
-        run: pnpm run docs:check
-
-      - name: gsh CLI checks
-        run: pnpm run check:gsh
-
-      # panel.env 预设有两份拷贝（仓库文件 + 安装器内置 heredoc），历史上因不同步
-      # 让走兜底路径安装的小内存机器拿到了一半的 DST 内存上限。
-      - name: panel.env preset consistency
-        run: pnpm run check:presets
-
-      # 整页转场的结构性护栏：KeepAlive 与 out-in/in-out 同处会让切页永久空白，
-      # 而在代码里只体现为一个属性值，本地 release:check 跑不代表 main 有门禁。
-      - name: Page transition guard
-        run: pnpm run check:transition
-
-      # 路由鉴权护栏：本项目鉴权逐路由手写、没有全局兜底，漏写一条就是匿名接口。
-      # RBAC 改造时它抓到过四条路由被误删鉴权（补丁脚本的解构 bug），
-      # 那种错误肉眼几乎看不出来，只有这类机械检查拦得住。
-      - name: Route permission guard
-        run: pnpm run check:routes
-
-      - name: Unit tests
-        env:
-          GSH_UNIT_TEST: '1'
-        run: |
-          pnpm test:unit 2>&1 | tee unit-tests.log
-          exit ${PIPESTATUS[0]}
-
-      - name: Publish unit test failure summary
-        if: failure()
-        run: |
-          {
-            echo '### Unit test failures'
-            echo ''
-            echo '```'
-            grep -E '✖|not ok|AssertionError|failing tests' unit-tests.log | head -80
-            echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
-          # 同步输出为 annotations（匿名 API 可读，便于远程诊断）
-          grep -E '✖|not ok|AssertionError|failing tests' unit-tests.log | head -30 | cut -c1-240 | while IFS= read -r line; do
-            echo "::error::$line"
-          done
-          # 失败测试的完整 TAP 块（含期望/实际值）
-          awk '/^not ok|^✖/{p=1} p{print; n++} n>60{exit}' unit-tests.log > unit-fail-block.txt
-          if [ -s unit-fail-block.txt ]; then
-            head -c 6000 unit-fail-block.txt
-          fi
-
-      - name: Release reference consistency
-        run: pnpm run release:verify
-
-      - name: Production build
-        run: pnpm run build && pnpm run build:server
+      - name: Quality checks
+        run: pnpm run release:check
 
       - name: Database schema drift check
         run: |
-          pnpm exec drizzle-kit generate --config server/drizzle.config.ts
+          pnpm run db:generate
           git diff --exit-code -- server/drizzle
-
-      - name: Installer syntax and smoke test
-        run: |
-          bash -n scripts/install.linux.sh
-          bash -n scripts/install-linux-smoke.sh
-          bash -n scripts/gsh.sh
-          bash -n scripts/gsh-native-update.sh
-          bash scripts/install-linux-smoke.sh
+          untracked="$(git ls-files --others --exclude-standard -- server/drizzle)"
+          if [ -n "$untracked" ]; then
+            printf 'Untracked generated migrations:\n%s\n' "$untracked" >&2
+            exit 1
+          fi

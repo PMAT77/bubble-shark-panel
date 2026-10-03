@@ -9,8 +9,8 @@
 // 用法：node scripts/check-installer-smoke.mjs（也通过 pnpm run check:installer 调用）
 // bash 来源：Linux/macOS 取 PATH 里的 bash；Windows 自动探测 Git for Windows 自带的 bash，
 //           也可用 GSH_BASH=<bash 路径> 指定。确实找不到 bash 时打印跳过提示并成功退出
-//           （CI 的 Ubuntu runner 始终会真跑，本地跳过不等于通过）。
-// 逃生阀：GSH_SKIP_INSTALLER_SMOKE=1 跳过（例如临时无网络时）。
+//           （本地跳过不等于通过，CI 禁止跳过）。
+// 逃生阀：GSH_SKIP_INSTALLER_SMOKE=1 仅在本地跳过。
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -57,16 +57,22 @@ function findBash() {
   return null
 }
 
-if (process.env.GSH_SKIP_INSTALLER_SMOKE === '1') {
-  console.log('[installer-smoke] GSH_SKIP_INSTALLER_SMOKE=1，已跳过安装器语法与冒烟测试')
+function skip(reason) {
+  if (process.env.CI) {
+    console.error(`[installer-smoke] CI 禁止跳过：${reason}`)
+    process.exit(1)
+  }
+  console.log(`[installer-smoke] SKIP: ${reason}`)
   process.exit(0)
+}
+
+if (process.env.GSH_SKIP_INSTALLER_SMOKE === '1') {
+  skip('GSH_SKIP_INSTALLER_SMOKE=1，已跳过安装器语法与冒烟测试')
 }
 
 const bash = findBash()
 if (!bash) {
-  console.log('[installer-smoke] 未找到 bash，跳过安装器语法与冒烟测试')
-  console.log('[installer-smoke] Windows 可安装 Git for Windows 后重跑，或用 GSH_BASH=<bash 路径> 指定解释器')
-  process.exit(0)
+  skip('未找到 bash；可用 GSH_BASH=<bash 路径> 指定解释器')
 }
 
 console.log(`[installer-smoke] 使用 ${bash}`)

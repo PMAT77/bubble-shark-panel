@@ -24,11 +24,12 @@ import { findInstallSeedDonor } from './install-seed'
 
 const app = Fastify({ logger: false })
 const root = fs.mkdtempSync(path.join(process.cwd(), '.gsh-update-regression-'))
-const envKeys = ['DB_PATH', 'GSH_RUNTIME_MODE', 'GSH_INSTANCES_ROOT', 'GSH_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'GSH_UNIT_TEST'] as const
+const envKeys = ['DB_PATH', 'GSH_RUNTIME_MODE', 'GSH_INSTANCES_ROOT', 'GSH_PANEL_CONTAINER_NAME', 'GSH_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'GSH_UNIT_TEST'] as const
 const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]))
 process.env.DB_PATH = path.join(root, 'test.sqlite')
 process.env.GSH_RUNTIME_MODE = 'docker'
 process.env.GSH_INSTANCES_ROOT = path.join(root, 'instances')
+process.env.GSH_PANEL_CONTAINER_NAME = 'gsh-update-regression-panel'
 process.env.SERVER_LOG_DIR = path.join(root, 'logs')
 process.env.GSH_UNIT_TEST = '1'
 process.env.GSH_INSTALL_DEFER_DST_IMAGE_PULL = '1'
@@ -78,14 +79,21 @@ async function waitForInstall(id: string) {
     await new Promise(resolve => setTimeout(resolve, 20))
   }
   assert.equal(isInstallJobActive(id), false, '安装任务应结束')
-  assert.equal((await getGameInstanceById(id))?.status, 'stopped')
+  const current = await getGameInstanceById(id)
+  assert.equal(current?.status, 'stopped', current?.lastError ?? current?.lastCommand ?? undefined)
 }
 
 before(async () => {
   mock.method(Docker.prototype, 'ping', async () => 'OK')
   mock.method(Docker.prototype, 'listContainers', async () => [])
   mock.method(Docker.prototype, 'info', async () => ({ MemTotal: 16 * 1024 ** 3 }))
-  mock.method(Docker.prototype, 'getContainer', () => ({ inspect: async () => ({ Mounts: [], State: { Running: false } }) }))
+  // POSIX 实例路径需要真实的面板挂载映射；Windows 直 bind 不经过这一分支。
+  mock.method(Docker.prototype, 'getContainer', () => ({
+    inspect: async () => ({
+      Mounts: [{ Type: 'bind', Source: process.env.GSH_INSTANCES_ROOT!, Destination: process.env.GSH_INSTANCES_ROOT! }],
+      State: { Running: false },
+    }),
+  }))
   mock.method(Docker.prototype, 'getImage', () => ({ inspect: async () => ({ Id: 'fixture' }) }))
   mock.method(os, 'freemem', () => 16 * 1024 ** 3)
   mock.method(fs, 'chownSync', () => {})

@@ -141,6 +141,11 @@
 | `GSH_STACK_DIR` | `/opt/game-server-hub` | 面板栈目录，`gsh` CLI 与面板内更新按它定位 compose 文件 |
 | `GSH_COMPOSE_FILES` | `docker-compose.yml:docker-compose.bind.yml` | 面板栈使用的 compose 文件，冒号分隔 |
 | `GSH_BACKUPS_ROOT` | 数据目录下的 `backups` | 备份根目录（存档包与数据库快照） |
+| `GSH_MOD_IMPORT_ROOT` | 系统临时目录下的 `gsh-mod-import` | Mod ZIP 预览目录，绑定上传用户与实例，有效期 1 小时 |
+| `GSH_MOD_IMPORT_MAX_ARCHIVE_BYTES` | 实例文件上传上限（默认 256 MiB） | 本地 Mod ZIP 上传字节上限 |
+| `GSH_MOD_IMPORT_MAX_EXTRACTED_BYTES` | `1073741824`（1 GiB） | Mod ZIP 解压字节上限 |
+| `GSH_MOD_IMPORT_MAX_FILES` | `50000` | Mod ZIP 文件与目录条目上限 |
+| `GSH_MOD_IMPORT_MAX_DEPTH` | `32` | Mod ZIP 条目路径最大层数 |
 | `GSH_INSTALL_SEED_ENABLED` | `1` | 同机第二个实例从已停止实例复制游戏文件，跳过重复下载 |
 | `GSH_INSTALL_DEFER_DST_IMAGE_PULL` | `1` | 安装完成时不预拉 DST 运行镜像，首次启动再拉 |
 

@@ -1,4 +1,6 @@
 import type {
+  ModImportCommit,
+  ModImportInspection,
   ModBatchUpdatePayload,
   ModConfigDto,
   ModConfigPayload,
@@ -93,6 +95,16 @@ function isModInstallJobTerminal(status: ModInstallJobDto['status']): boolean {
 }
 
 export default {
+  getImportLimits: (instanceId: string) => api.get(`app/instances/${instanceId}/mods/import/limits`) as Promise<{ data: { maxArchiveBytes: number } }>,
+  inspectImport: (instanceId: string, file: File, signal: AbortSignal, progress: (percent: number) => void) => api.post(`app/instances/${instanceId}/mods/import/inspect`, file, {
+    params: { fileName: file.name },
+    headers: { 'Content-Type': 'application/x-gsh-mod-archive' },
+    signal,
+    timeout: 0,
+    onUploadProgress: event => progress(Math.min(100, Math.round(event.loaded / (event.total || file.size) * 100))),
+  }) as Promise<{ data: ModImportInspection }>,
+  commitImport: (instanceId: string, input: ModImportCommit) => api.post(`app/instances/${instanceId}/mods/import/commit`, input, { timeout: 0 }) as Promise<{ data: ModMutationResult }>,
+  discardImport: (instanceId: string, importId: string) => api.delete(`app/instances/${instanceId}/mods/import/${importId}`),
   getModList: (instanceId: string, options?: { enrich?: string }) =>
     api.get(`app/instances/${instanceId}/mods`, {
       params: options?.enrich ? { enrich: options.enrich } : undefined,

@@ -1,3 +1,4 @@
+import { withInstanceContentActivity } from '../../shared/instance-content/operation'
 import type { FastifyInstance } from 'fastify'
 import type { HostMemoryPressureFailure } from '../../infra/container/host-resource-guard'
 import fs from 'node:fs'
@@ -747,7 +748,7 @@ export async function waitForMasterShardReady(
   return { kind: 'timed-out' }
 }
 
-export async function startInstanceContainer(
+async function startInstanceContainerUnlocked(
   app: FastifyInstance,
   input: {
     instanceId: string
@@ -1149,4 +1150,9 @@ export async function sendInstanceContainerCommand(
     return { ok: false, message: result.output || '命令发送失败' }
   }
   return { ok: true }
+}
+
+export async function startInstanceContainer(...args: Parameters<typeof startInstanceContainerUnlocked>): ReturnType<typeof startInstanceContainerUnlocked> {
+  try { return await withInstanceContentActivity(args[1].instanceId, () => startInstanceContainerUnlocked(...args)) }
+  catch (error) { return { ok: false, message: error instanceof Error ? error.message : '启动失败' } }
 }

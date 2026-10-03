@@ -31,7 +31,7 @@ import type { WorkshopInstalledItem } from './workshop-manifest'
 const CONTENT_MARKER_FILES = ['modinfo.lua', 'modmain.lua', 'mod.manifest']
 const LEGACY_ARCHIVE_SUFFIX = '_legacy.bin'
 
-export type LocalModContentVersionSource = 'workshop-manifest' | 'content-mtime'
+export type LocalModContentVersionSource = 'workshop-manifest' | 'content-mtime' | 'migration-manifest'
 
 export interface LocalModContentVersion {
   /** 本机内容对应的时间（ISO）；无从得知为 null */
@@ -114,7 +114,8 @@ function isLoadedCopyStale(installPath: string, workshopId: string, downloadedMt
   }
   for (const shardFolder of resolveDstUgcShardFolders(installPath)) {
     const mtime = readContentMtimeMs(resolveDstUgcModDir(installPath, shardFolder, workshopId))
-    if (mtime !== null && mtime < downloadedMtimeMs) {
+    // utimes / 文件系统精度可能让同一次复制的时间小于来源不足 1 ms。
+    if (mtime !== null && mtime + 1 < downloadedMtimeMs) {
       return true
     }
   }
@@ -130,11 +131,15 @@ function isLoadedCopyStale(installPath: string, workshopId: string, downloadedMt
 export function resolveLocalModContentVersion(
   installPath: string,
   workshopId: string,
-  options?: { installedItems?: Map<string, WorkshopInstalledItem> },
+  options?: { installedItems?: Map<string, WorkshopInstalledItem>, contentSource?: 'steam' | 'local' | 'migration', knownUpdatedAt?: string | null },
 ): LocalModContentVersion {
   const normalizedId = workshopId.trim()
   if (!installPath?.trim() || !normalizedId) {
     return UNKNOWN_LOCAL_MOD_CONTENT_VERSION
+  }
+  if (options?.contentSource === 'local') return UNKNOWN_LOCAL_MOD_CONTENT_VERSION
+  if (options?.contentSource === 'migration') {
+    return { updatedAt: options.knownUpdatedAt ?? null, source: options.knownUpdatedAt ? 'migration-manifest' : null, loadedCopyStale: false }
   }
   const downloadedMtimeMs = readDownloadedContentMtimeMs(installPath, normalizedId)
   const loadedCopyStale = isLoadedCopyStale(installPath, normalizedId, downloadedMtimeMs)

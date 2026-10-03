@@ -69,6 +69,7 @@ export function registerMigrationExportRoutes(app: FastifyInstance): void {
       instanceId: resolved.instance.id,
       installPath: resolved.instance.installPath,
       reportOnly: parsed.data.reportOnly,
+      includeMods: parsed.data.includeMods,
     })
     if (!outcome.ok) {
       return reply.status(400).send(businessError(outcome.message, request))
@@ -110,6 +111,7 @@ export function registerMigrationExportRoutes(app: FastifyInstance): void {
       instanceId: resolved.instance.id,
       installPath: resolved.instance.installPath,
       reportOnly: true,
+      includeMods: parsed.data.includeMods,
     })
     if (!outcome.ok) {
       return businessError(outcome.message, request)
@@ -120,6 +122,7 @@ export function registerMigrationExportRoutes(app: FastifyInstance): void {
       reportText: outcome.reportText,
       warnings: outcome.warnings,
       packaged: false,
+      modContent: outcome.modContent,
     }, request)
   })
 
@@ -156,6 +159,13 @@ export function registerMigrationExportRoutes(app: FastifyInstance): void {
       ))
       return
     }
+    try {
+      const owner = JSON.parse(fs.readFileSync(`${archivePath}.owner.json`, 'utf8')) as { instanceId: string }
+      if (owner.instanceId !== instanceId || Date.now() - fs.statSync(archivePath).mtimeMs > 24 * 60 * 60 * 1000) {
+        return reply.status(403).send(businessError('迁移包不属于该实例或已过期，请重新导出', request))
+      }
+    }
+    catch { return reply.status(403).send(businessError('迁移包归属记录缺失，请重新导出', request)) }
     return sendFileDownload(reply, {
       filePath: archivePath,
       contentType: 'application/gzip',

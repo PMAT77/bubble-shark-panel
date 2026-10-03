@@ -1,8 +1,15 @@
-import { createHash } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
+import { assertInstanceRuntimeStopped } from '../../infra/container/instance-stopped'
+import type { MigrationContentSummary, MigrationMod } from '../../../../shared/contracts/migration'
+import { listInstanceMods, getGameInstanceById } from '../../shared/db/index'
+import { withInstanceContentOperation } from '../../shared/instance-content/operation'
+import { inspectMigrationContents, resolveInstanceMigrationModSource, writeMigrationBundle } from '../../infra/game-adapter/dst/migration-bundle'
+import { parseStoredModConfig } from '../../infra/game-adapter/dst/mod-config'
+import { readModDependencies } from '../../infra/game-adapter/dst/mod-service'
+import { sha256File } from '../../infra/game-adapter/dst/mod-content'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { createDirectoryArchive } from '../../infra/backup/archive'
 import {
   buildMigrationReportText,
   inspectClusterForMigration,
@@ -35,6 +42,7 @@ export interface MigrationExportOutcome {
   sizeBytes: number
   reportText: string
   warnings: string[]
+  modContent: MigrationContentSummary
 }
 
 export type MigrationExportResult = MigrationExportOutcome | { ok: false, message: string }
@@ -46,15 +54,6 @@ export function resolveMigrationExportRoot(): string {
     return path.resolve(configured)
   }
   return path.join(path.dirname(loadServerConfig().dbPath), MIGRATION_EXPORT_DIR_NAME)
-}
-
-async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash('sha256')
-  const stream = fs.createReadStream(filePath)
-  for await (const chunk of stream) {
-    hash.update(chunk as Buffer)
-  }
-  return hash.digest('hex')
 }
 
 /** 清理同一实例的旧导出包与报告，避免数据目录里越堆越多 */
@@ -90,6 +89,7 @@ export interface ExportInstanceMigrationOptions {
   installPath: string
   /** true 时只体检与出报告，不打包 */
   reportOnly?: boolean
+  includeMods?: boolean
 }
 
 /**
@@ -99,7 +99,7 @@ export interface ExportInstanceMigrationOptions {
  * 不遍历实例目录下的其它内容——实例目录里有游戏本体与 Mod 内容，全部打包会得到几十 GB
  * 的无用包；而集群目录恰好就是面板导入侧要求的顶层结构。
  */
-export async function exportInstanceMigrationPack(
+async function exportInstanceMigrationPackUnlocked(
   options: ExportInstanceMigrationOptions,
 ): Promise<MigrationExportResult> {
   const { clusterRoot } = resolveClusterPaths(options.installPath)
@@ -135,11 +135,28 @@ export async function exportInstanceMigrationPack(
    * 在导入侧、`tar` 与 `scp` 里都不会被改写；房间名在报告第一行，人不会看错。
    */
   const instanceSuffix = options.instanceId.replace(/[^0-9a-zA-Z]/g, '').slice(-8) || 'instance'
-  const baseName = sanitizeArchiveBaseName(`migration-${instanceSuffix}-${report.dirName}`)
+  const baseName = sanitizeArchiveBaseName(`migration-${instanceSuffix}-${report.dirName}${options.reportOnly ? '' : `-${randomUUID().slice(0, 8)}`}`)
   const reportFileName = `${baseName}.report.txt`
   const archiveFileName = `${baseName}.tar.gz`
 
+  const records = await listInstanceMods(options.instanceId)
+  const mods: MigrationMod[] = records.map(mod => ({
+    workshopId: mod.workshopId, name: mod.name, enabled: mod.enabled, loadOrder: mod.loadOrder,
+    configurationOptions: parseStoredModConfig(mod.config) ?? {},
+    dependencyIds: readModDependencies(options.installPath, mod.workshopId),
+    version: mod.version, localUpdatedAt: mod.contentSource === 'local' ? null : mod.localUpdatedAt,
+    content: null,
+  }))
+  const inspected = await inspectMigrationContents(mods, options.includeMods === true, id => resolveInstanceMigrationModSource(options.installPath, id))
+  const contentReport = `\nMod 文件：${options.includeMods ? '包含' : '不包含'}；包含 ${inspected.summary.includedModCount} 个，预计 ${inspected.summary.estimatedContentBytes} 字节。\n`
+    + (inspected.summary.missingRequiredMods.length ? `缺少必需 Mod，无法完整导出：${inspected.summary.missingRequiredMods.join('、')}\n` : '')
+    + (inspected.summary.missingOptionalMods.length ? `禁用且缺少文件，仅迁移配置：${inspected.summary.missingOptionalMods.join('、')}\n` : '')
+  const extraWarnings = [
+    ...(inspected.summary.missingOptionalMods.length ? ['部分禁用 Mod 不含文件，恢复后需手动补齐才能启用'] : []),
+    ...(inspected.summary.missingRequiredMods.length ? ['缺少启用 Mod 或必要依赖的文件，无法完整导出'] : []),
+  ]
   if (options.reportOnly) {
+
     return {
       ok: true,
       archivePath: null,
@@ -149,8 +166,9 @@ export async function exportInstanceMigrationPack(
         archiveName: archiveFileName,
         importProbe,
         nextSteps,
-      }),
-      warnings: report.warnings,
+      }) + contentReport,
+      warnings: [...report.warnings, ...extraWarnings],
+      modContent: inspected.summary,
     }
   }
 
@@ -161,30 +179,45 @@ export async function exportInstanceMigrationPack(
 
   const archivePath = path.join(root, archiveFileName)
   try {
-    await createDirectoryArchive(clusterRoot, archivePath)
-  }
-  catch (error) {
+    const text = buildMigrationReportText(report, { archiveName: archiveFileName, importProbe, nextSteps }) + contentReport
+    await writeMigrationBundle({ clusterPath: clusterRoot, archivePath, reportText: text, inspected, includeMods: options.includeMods === true })
+    const digest = await sha256File(archivePath)
+    fs.writeFileSync(`${archivePath}.owner.json`, JSON.stringify({ instanceId: options.instanceId }))
+    fs.writeFileSync(`${archivePath}.sha256`, `${digest}  ${archiveFileName}\n`, 'utf8')
+    const reportText = buildMigrationReportText(report, {
+      archiveName: archiveFileName,
+      importProbe,
+      nextSteps,
+    }) + contentReport
+    fs.writeFileSync(path.join(root, reportFileName), reportText, 'utf8')
+
     return {
-      ok: false,
-      message: `打包失败：${error instanceof Error ? error.message : String(error)}`,
+      ok: true,
+      archivePath,
+      fileName: archiveFileName,
+      sizeBytes: fs.statSync(archivePath).size,
+      reportText,
+      warnings: [...report.warnings, ...extraWarnings],
+      modContent: inspected.summary,
     }
   }
-
-  const digest = await sha256File(archivePath)
-  fs.writeFileSync(`${archivePath}.sha256`, `${digest}  ${archiveFileName}\n`, 'utf8')
-  const reportText = buildMigrationReportText(report, {
-    archiveName: archiveFileName,
-    importProbe,
-    nextSteps,
-  })
-  fs.writeFileSync(path.join(root, reportFileName), reportText, 'utf8')
-
-  return {
-    ok: true,
-    archivePath,
-    fileName: archiveFileName,
-    sizeBytes: fs.statSync(archivePath).size,
-    reportText,
-    warnings: report.warnings,
+  catch (error) {
+    for (const file of [archivePath, `${archivePath}.owner.json`, `${archivePath}.sha256`, path.join(root, reportFileName)]) {
+      try { fs.rmSync(file, { force: true }) } catch { /* best-effort cleanup */ }
+    }
+    return { ok: false, message: `打包失败：${error instanceof Error ? error.message : String(error)}` }
   }
+}
+
+export async function exportInstanceMigrationPack(options: ExportInstanceMigrationOptions): Promise<MigrationExportResult> {
+  const action = async () => {
+    if (options.includeMods && !options.reportOnly) {
+      const instance = await getGameInstanceById(options.instanceId)
+      if (instance?.status !== 'stopped') return { ok: false as const, message: '请先停止实例再导出含 Mod 的迁移包' }
+      await assertInstanceRuntimeStopped(options.instanceId)
+    }
+    return exportInstanceMigrationPackUnlocked(options)
+  }
+  try { return options.reportOnly ? await action() : await withInstanceContentOperation(options.instanceId, action) }
+  catch (error) { return { ok: false, message: error instanceof Error ? error.message : '迁移导出失败' } }
 }

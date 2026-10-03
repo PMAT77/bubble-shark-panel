@@ -157,6 +157,8 @@ export function ensureWorldSeedModLayout(
   for (const shardFolder of shardFolders) {
     const seed = seeds[SHARD_ID_BY_FOLDER[shardFolder]]
     if (!seed || validateWorldSeed(seed)) {
+      // 先撤加载入口，再删除内容，避免留下悬空接入。
+      removeDstLegacyModLinks(installPath, [GSH_WORLD_SEED_MOD_ID])
       removeWorldSeedModDir(installPath, shardFolder)
       continue
     }

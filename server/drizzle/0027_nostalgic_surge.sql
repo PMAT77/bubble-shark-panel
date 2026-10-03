@@ -1,0 +1,1 @@
+ALTER TABLE `instance_mods` ADD `content_source` text DEFAULT 'steam' NOT NULL;

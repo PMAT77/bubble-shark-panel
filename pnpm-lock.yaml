@@ -350,6 +350,9 @@ importers:
       tailwind-merge:
         specifier: 'catalog:'
         version: 3.6.0
+      tar-stream:
+        specifier: 3.2.0
+        version: 3.2.0
       vee-validate:
         specifier: 'catalog:'
         version: 4.15.1(vue@3.5.34(typescript@5.9.3))
@@ -396,6 +399,9 @@ importers:
       '@types/path-browserify':
         specifier: 'catalog:'
         version: 1.0.3
+      '@types/tar-stream':
+        specifier: 3.1.4
+        version: 3.1.4
       '@types/yauzl':
         specifier: 'catalog:'
         version: 3.4.0
@@ -3266,6 +3272,9 @@ packages:
 
   '@types/ssh2@1.15.5':
     resolution: {integrity: sha512-N1ASjp/nXH3ovBHddRJpli4ozpk6UdDYIX4RJWFa9L1YKnzdhTlVmiGHm4DZnj/jLbqZpes4aeR30EFGQtvhQQ==}
+
+  '@types/tar-stream@3.1.4':
+    resolution: {integrity: sha512-921gW0+g29mCJX0fRvqeHzBlE/XclDaAG0Ousy1LCghsOhvaKacDeRGEVzQP9IPfKn8Vysy7FEXAIxycpc/CMg==}
 
   '@types/web-bluetooth@0.0.21':
     resolution: {integrity: sha512-oIQLCGWtcFZy2JW77j9k8nHzAOpqMHLQejDA48XXMWH6tjCQHz5RCFz1bzsmROyL6PUm+LLnUiI4BCn221inxA==}
@@ -8599,6 +8608,10 @@ snapshots:
   '@types/ssh2@1.15.5':
     dependencies:
       '@types/node': 18.19.130
+
+  '@types/tar-stream@3.1.4':
+    dependencies:
+      '@types/node': 25.8.0
 
   '@types/web-bluetooth@0.0.21': {}
 

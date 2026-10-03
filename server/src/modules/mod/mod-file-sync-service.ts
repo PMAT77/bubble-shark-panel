@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { hasContentRecoveryFailure, withInstanceContentActivity } from '../../shared/instance-content/operation'
 import { DST_APP_ID } from '../../infra/game-adapter/dst/constants'
 import { resolveInstanceInstallPath } from '../../infra/game-adapter/dst/cluster-service'
 import { writeInstanceModFiles } from '../../infra/game-adapter/dst/mod-service'
@@ -24,7 +25,7 @@ export function resetModFileSyncDbHooksForTest() {
 }
 
 /** 将 DB 中已就绪的 Mod 写回实例安装目录（Lua / setup 文件） */
-export async function syncInstanceModFilesFromDb(instanceId: string, installPath: string) {
+export async function syncInstanceModFilesFromDbUnlocked(instanceId: string, installPath: string) {
   if (!installPath || !fs.existsSync(installPath)) {
     return
   }
@@ -44,12 +45,15 @@ export async function syncInstanceModFilesFromDb(instanceId: string, installPath
     configurationOptions: parseStoredModConfig(mod.config),
   })))
 }
+export async function syncInstanceModFilesFromDb(instanceId: string, installPath: string) {
+  return withInstanceContentActivity(instanceId, () => syncInstanceModFilesFromDbUnlocked(instanceId, installPath))
+}
 
 /** 迁移或面板启动后：同步所有本地 DST 实例的 Mod 配置 */
 export async function syncAllLocalDstInstanceModFilesFromDb() {
   const instances = await listGameInstances({ nodeId: LOCAL_NODE_ID })
   for (const instance of instances) {
-    if (instance.gameCode !== DST_APP_ID) {
+    if (instance.gameCode !== DST_APP_ID || hasContentRecoveryFailure(instance.id)) {
       continue
     }
     const installPath = resolveInstanceInstallPath(instance)

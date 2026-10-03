@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NSpin, NTooltip, useMessage } from 'naive-ui'
-import { computed, ref } from 'vue'
+import { NAlert, NButton, NCard, NCheckbox, NSpin, NTooltip, useMessage } from 'naive-ui'
+import { computed, ref, watch } from 'vue'
+import type { MigrationContentSummary } from '../../../../../../shared/contracts/migration'
 import apiBackup from '@/api/modules/backup'
 import { routeToOpsBackups } from '@/navigation/game-routes'
 import { copyTextToClipboard } from '@/utils/copyToClipboard'
@@ -11,6 +12,7 @@ defineOptions({
 
 const props = defineProps<{
   instanceId: string
+  stopped: boolean
 }>()
 
 const message = useMessage()
@@ -34,6 +36,9 @@ const exporting = ref(false)
 const reportText = ref<string | null>(null)
 const warnings = ref<string[]>([])
 const fileName = ref('')
+const includeMods = ref(false)
+const modContent = ref<MigrationContentSummary | null>(null)
+watch(includeMods, () => { reportText.value = null; modContent.value = null })
 
 const hasWarnings = computed(() => warnings.value.length > 0)
 
@@ -48,10 +53,11 @@ async function loadReport() {
   }
   loadingReport.value = true
   try {
-    const { data } = await apiBackup.getMigrationReport(props.instanceId)
+    const { data } = await apiBackup.getMigrationReport(props.instanceId, includeMods.value)
     reportText.value = data.reportText
     warnings.value = data.warnings
     fileName.value = data.fileName
+    modContent.value = data.modContent ?? null
   }
   catch {
     message.error('读取迁移报告失败：实例可能尚未启动过，或存档目录不可读。')
@@ -68,15 +74,16 @@ async function exportPack() {
   exporting.value = true
   const pending = message.loading('正在打包存档，实例越大越慢，请不要关闭页面…', { duration: 0 })
   try {
-    const { data } = await apiBackup.exportMigrationPack(props.instanceId)
+    const { data, headers } = await apiBackup.exportMigrationPack(props.instanceId, includeMods.value)
     const url = URL.createObjectURL(data)
     const link = document.createElement('a')
     link.href = url
-    link.download = fileName.value || 'migration-pack.tar.gz'
+    const disposition = headers['content-disposition'] ?? ''
+    link.download = /filename="([^"]+)"/.exec(disposition)?.[1] || fileName.value || 'migration-pack.tar.gz'
     link.click()
     URL.revokeObjectURL(url)
     pending.destroy()
-    message.success('迁移包已开始下载，同目录还有校验和与迁移报告')
+    message.success('迁移包已开始下载，包内包含迁移报告；服务端保留校验和 24 小时')
     // 打包成功后顺手刷新报告，让界面上的风险项与刚导出的包一致
     await loadReport()
   }
@@ -113,7 +120,7 @@ async function copyReport() {
         </template>
         <p>
           把这个实例的存档、房间配置与 Mod 清单整理成压缩包，在新机器上创建实例后用「备份与恢复 → 导入存档」导入。<br>
-          包内不含游戏本体与 Mod 文件，导入后由目标机器自行下载；导出 24 小时后自动清理，也不会进入备份列表。
+          可选择包含 Mod 文件，供新机器离线恢复。包内不含游戏本体；缺失的 Mod 可恢复后手动下载。导出 24 小时后自动清理，不进入备份列表。
         </p>
       </NTooltip>
     </template>
@@ -122,12 +129,16 @@ async function copyReport() {
       <p class="text-sm text-muted-foreground">
         搬到另一台机器用；它不能用来回档。
       </p>
+      <NCheckbox v-model:checked="includeMods" :disabled="exporting || loadingReport">包含 Mod 文件（离线迁移，需停服）</NCheckbox>
+      <NAlert v-if="includeMods && !stopped" type="warning">请先停止实例再导出包含 Mod 的迁移包。</NAlert>
+      <p v-if="modContent" class="text-sm">可包含 {{ modContent.includedModCount }} 个 Mod，预计 {{ (modContent.estimatedContentBytes / 1024 ** 2).toFixed(2) }} MiB</p>
+      <NAlert v-if="modContent && !modContent.canExport" type="error">缺少必需 Mod：{{ modContent.missingRequiredMods.join('、') }}。请补齐内容后导出。</NAlert>
 
       <div class="flex flex-wrap items-center gap-2">
         <NButton size="small" :loading="loadingReport" @click="loadReport">
           检查迁移报告
         </NButton>
-        <NButton size="small" type="primary" :loading="exporting" @click="exportPack" v-if="hasPermission('instance.migration:export')">
+        <NButton size="small" type="primary" :loading="exporting" :disabled="includeMods && (!stopped || modContent?.canExport === false)" @click="exportPack" v-if="hasPermission('instance.migration:export')">
           导出迁移包
         </NButton>
         <NButton v-if="reportText" size="small" @click="copyReport">

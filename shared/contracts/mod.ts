@@ -5,6 +5,24 @@ export type ModInstanceStatus = 'pending_install' | 'running' | 'stopped' | 'ins
 
 export type ModInstallStatus = 'pending' | 'ready' | 'failed'
 
+export const modImportCommitSchema = z.object({
+  importId: z.string().uuid(),
+  workshopId: z.string().regex(/^[1-9]\d{0,19}$/),
+  overwrite: z.boolean().default(false),
+})
+export type ModImportCommit = z.infer<typeof modImportCommitSchema>
+export interface ModImportInspection {
+  importId: string
+  workshopId: string | null
+  idCandidates: Array<{ workshopId: string, source: 'directory' | 'filename' }>
+  name: string | null
+  version: string | null
+  fileCount: number
+  sizeBytes: number
+  warnings: string[]
+  existing: boolean
+}
+
 /**
  * Mod 版本状态（面板不显示「版本号」，只回答「是不是工坊上的最新版」）：
  * - outdated：工坊上的最新版本时间晚于本机内容 → 需要更新
@@ -23,6 +41,7 @@ export interface ModItemDto {
   enabled: boolean
   loadOrder: number
   version: string | null
+  contentSource?: 'steam' | 'local' | 'migration'
   installStatus: ModInstallStatus
   installError: string | null
   /** 本机已下载内容对应的工坊版本时间（ISO）；未知为 null */
@@ -137,7 +156,7 @@ export interface ModReorderResult {
 }
 
 /** 本机版本时间的来源：SteamCMD 清单里的 timeupdated / 内容文件的落地时间 */
-export type ModUpdateLocalVersionSource = 'workshop-manifest' | 'content-mtime'
+export type ModUpdateLocalVersionSource = 'workshop-manifest' | 'content-mtime' | 'migration-manifest'
 
 /** 单个 Mod 的版本检查结果 */
 export interface ModUpdateInfo {

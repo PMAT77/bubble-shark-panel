@@ -99,10 +99,10 @@ export default {
    * 生成并下载「迁移包」：把实例存档 + 配置 + Mod 清单整理成另一台机器可直接导入的 tar.gz。
    * 打包耗时取决于存档大小，因此与备份下载一样关闭请求超时。
    */
-  exportMigrationPack: (instanceId: string) => api.post('app/instance/migration/export', { instanceId }, {
+  exportMigrationPack: (instanceId: string, includeMods = false) => api.post('app/instance/migration/export', { instanceId, includeMods }, {
     responseType: 'blob',
     timeout: 0,
-  }) as Promise<{ data: Blob }>,
+  }) as Promise<{ data: Blob, headers: Record<string, string> }>,
   /** 先取迁移报告（不打包）：分片端口、Mod、名单与迁移前必须确认的风险项 */
-  getMigrationReport: (instanceId: string) => api.post('app/instance/migration/report', { instanceId, reportOnly: true }) as Promise<{ data: MigrationExportResult }>,
+  getMigrationReport: (instanceId: string, includeMods = false) => api.post('app/instance/migration/report', { instanceId, reportOnly: true, includeMods }) as Promise<{ data: MigrationExportResult }>,
 }

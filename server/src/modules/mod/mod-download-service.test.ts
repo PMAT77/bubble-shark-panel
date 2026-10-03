@@ -312,6 +312,7 @@ describe('mod-download-service', () => {
       workshopId: '66666',
       name: 'Updated Mod',
       installStatus: 'ready',
+      contentSource: 'local',
     })]
     setModDownloadExecutorForTest(async () => ({ ok: true }))
 
@@ -327,6 +328,7 @@ describe('mod-download-service', () => {
     const versionIso = new Date(1_800_000_000 * 1000).toISOString()
     // 本机内容对应的版本时间来自内容凭据（这里是 SteamCMD 清单），更新后必须重新入账
     assert.equal(readyCall?.localUpdatedAt, versionIso)
+    assert.equal(readyCall?.contentSource, 'steam')
     // 远端写的是工坊给出的时间，不再把本机时间复制给远端自证「已是最新」
     assert.equal(readyCall?.remoteUpdatedAt, versionIso)
     assert.ok(readyCall?.updateCheckedAt)

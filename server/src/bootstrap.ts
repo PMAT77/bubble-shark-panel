@@ -1,3 +1,4 @@
+import { recoverInstanceContentOperations } from './shared/instance-content/state'
 import type { FastifyInstance } from 'fastify'
 import process from 'node:process'
 import { createServerApp } from './app'
@@ -128,6 +129,7 @@ export async function bootstrap() {
       )
     },
   })
+  await recoverInstanceContentOperations(app)
   if (config.adminPasswordGenerated) {
     if (shouldWriteAdminCredentialsFile(adminCredentialOutcome)) {
       // 初始密码只落 0600 凭据文件，绝不写入日志（journald/日志采集管道不可信）。

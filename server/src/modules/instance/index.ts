@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { withInstanceContentActivity } from '../../shared/instance-content/operation'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import type {
   PlayerSummariesDto,
@@ -1130,6 +1131,13 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
   })
 
   async function handleInstanceStart(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> {
+    const id = (request.body as { id?: string } | undefined)?.id
+    if (!id) return handleInstanceStartUnlocked(request, options)
+    try { return await withInstanceContentActivity(id, () => handleInstanceStartUnlocked(request, options)) }
+    catch (error) { return businessError(error instanceof Error ? error.message : '启动实例失败', request) }
+  }
+
+  async function handleInstanceStartUnlocked(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> {
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)

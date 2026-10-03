@@ -71,6 +71,7 @@ export const instanceMods = sqliteTable('instance_mods', {
   enabled: integer('enabled').notNull().default(0),
   loadOrder: integer('load_order').notNull().default(0),
   version: text('version'),
+  contentSource: text('content_source').notNull().default('steam'),
   previewImage: text('preview_image'),
   installStatus: text('install_status').notNull().default('ready'),
   installError: text('install_error'),

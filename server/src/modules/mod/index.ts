@@ -1,3 +1,5 @@
+import { registerModImportRoutes } from './mod-import-routes'
+import { hasContentRecoveryFailure } from '../../shared/instance-content/operation'
 import fs from 'node:fs'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
@@ -268,6 +270,7 @@ function toDto(
     enabled: mod.enabled,
     loadOrder: mod.loadOrder,
     version: mod.version,
+    contentSource: mod.contentSource,
     installStatus: mod.installStatus,
     installError: mod.installError,
     localUpdatedAt: mod.localUpdatedAt,
@@ -451,13 +454,14 @@ function authorizeModInstance(request: FastifyRequest, permission: PermissionKey
 }
 
 export function registerModModule(app: FastifyInstance) {
+  registerModImportRoutes(app, buildLightweightModDto)
   app.addHook('onReady', async () => {
     scheduleWarmSteamWorkshopModCache()
     // 版本徽标要保持新鲜：与游戏服务端更新检查同节奏，后台定期问一次创意工坊
     scheduleModUpdateChecks(app)
     const instances = await listGameInstances({ nodeId: LOCAL_NODE_ID })
     for (const instance of instances) {
-      if (instance.gameCode !== DST_APP_ID) {
+      if (instance.gameCode !== DST_APP_ID || hasContentRecoveryFailure(instance.id)) {
         continue
       }
       const installPath = resolveInstanceInstallPath(instance)

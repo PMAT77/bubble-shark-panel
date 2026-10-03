@@ -1,16 +1,17 @@
-import type { Readable } from 'node:stream'
+import { Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import tar from 'tar-stream'
+import { ArchiveEntries, type ArchiveExtractLimits } from './archive-entries'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createGunzip } from 'node:zlib'
 
 /**
- * 备份归档基础设施：调用操作系统自带的 tar 生成/解包 tar.gz。
+ * 备份归档：系统 tar 打包，流式解析器安全解包 tar.gz。
  * - Linux（生产 Docker 镜像与 Native 宿主机）tar 为必备组件；
  * - Windows 10 1803+ 内置 bsdtar，覆盖开发与测试环境；
- * - 解包时不捕获 tar 输出（stdio: 'ignore'），成败以退出码判定，避免管道依赖；
- *   需要条目清单时改写临时文件（stdio 传 fd）而不是接管道，保持同一种执行方式。
+ * - 解包逐条校验普通文件和目录，不允许链接和特殊文件。
  */
 
 function runTar(args: string[]): Promise<void> {
@@ -40,119 +41,74 @@ export async function createDirectoryArchive(sourceDir: string, targetPath: stri
   await runTar(['-czf', targetPath, '-C', parent, base])
 }
 
-/** tar.gz 解包上限：条目数与解压后总字节数（防解压炸弹），与 zip 侧口径保持一致 */
-export interface TarExtractLimits {
-  maxEntries: number
-  maxTotalUncompressedBytes: number
-}
-
-/** 默认解压上限：10 万条目 / 4GB（DST 集群档远低于此） */
+/** tar.gz 与 ZIP 共用路径、类型和资源限制。 */
+export type TarExtractLimits = ArchiveExtractLimits
 export const DEFAULT_TAR_EXTRACT_LIMITS: TarExtractLimits = {
   maxEntries: 100_000,
   maxTotalUncompressedBytes: 4 * 1024 * 1024 * 1024,
 }
 
-function formatBytesLimit(bytes: number): string {
-  return `${Math.floor(bytes / (1024 * 1024))} MB`
+export async function createArchiveFromEntries(root: string, names: string[], targetPath: string): Promise<void> {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+  await runTar(['-czf', targetPath, '-C', root, '--', ...names])
 }
 
-/**
- * 用文件重定向而非管道收集 tar 的条目清单。
- * 不捕获 stdout 管道（与 runTar 保持一致的执行方式），条目名按行切分——
- * tar 条目名理论上可含换行，但存档目录不会出现，可接受。
- */
-function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const listPath = path.join(os.tmpdir(), `gsh-tar-entries-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
-  const fd = fs.openSync(listPath, 'w')
-  return new Promise<string[]>((resolve, reject) => {
-    const cleanup = () => {
-      try {
-        fs.closeSync(fd)
-      }
-      catch {
-        // 已关闭
-      }
-      fs.rmSync(listPath, { force: true })
-    }
-    const child = spawn('tar', ['-tzf', archivePath], { stdio: ['ignore', fd, 'ignore'], windowsHide: true })
-    child.on('error', (error) => {
-      cleanup()
-      reject(new Error(`tar 命令不可用: ${error.message}`))
-    })
-    child.on('close', (code) => {
-      try {
-        if (code !== 0) {
-          reject(new Error(`tar 读取压缩包失败，退出码 ${code ?? 'unknown'}`))
-          return
-        }
-        const raw = fs.readFileSync(listPath, 'utf8')
-        resolve(raw.split('\n').map(line => line.replace(/\r$/, '')).filter(line => line.length > 0))
-      }
-      catch (error) {
-        reject(error instanceof Error ? error : new Error(String(error)))
-      }
-      finally {
-        cleanup()
-      }
-    })
-  })
-}
-
-/** 条目路径必须落在解压根内：拒绝绝对路径与 `..` 逃逸（与 zip 侧的包含性校验等价） */
-function assertEntryPathInsideRoot(root: string, entry: string): void {
-  const normalized = entry.replace(/^\.\//, '')
-  if (normalized === '' || normalized === '.') {
-    return
-  }
-  if (path.isAbsolute(normalized) || /^[A-Za-z]:[\\/]/.test(normalized)) {
-    throw new Error(`压缩包内出现绝对路径条目: ${entry}`)
-  }
-  const resolved = path.resolve(root, normalized)
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-    throw new Error(`压缩包内出现非法路径条目: ${entry}`)
-  }
-}
-
-/**
- * 流式解压 gzip 统计解压后总字节数，超出上限立即中止。
- * 这一步不落盘，因此能在写文件之前拦住高压缩比的解压炸弹。
- */
-async function assertGzipExpansionWithinLimit(archivePath: string, maxBytes: number): Promise<void> {
-  const stream: Readable = fs.createReadStream(archivePath).pipe(createGunzip())
-  let total = 0
-  try {
-    for await (const chunk of stream) {
-      total += (chunk as Buffer).length
-      if (total > maxBytes) {
-        throw new Error(`解压后总大小超过上限（${formatBytesLimit(maxBytes)}）`)
-      }
-    }
-  }
-  finally {
-    stream.destroy()
-  }
-}
-
-/** 解包 tar.gz 到目标目录：解压前校验条目数与解压后总大小，并拒绝逃逸路径 */
-export async function extractArchive(
-  archivePath: string,
-  targetDir: string,
-  limits: TarExtractLimits = DEFAULT_TAR_EXTRACT_LIMITS,
-): Promise<void> {
+/** 先流式体检，再逐条目落盘；不把不可信路径或类型交给系统 tar。 */
+export async function extractArchive(archivePath: string, targetDir: string, limits: TarExtractLimits = DEFAULT_TAR_EXTRACT_LIMITS, validateOnly = false): Promise<void> {
   if (!fs.existsSync(archivePath)) {
     throw new Error(`备份包不存在: ${archivePath}`)
   }
-  const entries = await listArchiveEntries(archivePath)
-  if (entries.length > limits.maxEntries) {
-    throw new Error(`压缩包条目数超过上限（${limits.maxEntries}）`)
+  const scan = async (write: boolean) => {
+    const entries = new ArchiveEntries(targetDir, limits)
+    const extract = tar.extract()
+    let bytes = 0
+    let entryCount = 0
+    let rootSeen = false
+    const counter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        bytes += chunk.length
+        // tar header/padding 也计入，避免无限 padding 或扩展头消耗资源。
+        if (bytes > limits.maxTotalUncompressedBytes + limits.maxEntries * 1024 + 1024) {
+          callback(new Error('解压后总大小超过上限'))
+          return
+        }
+        callback(null, chunk)
+      },
+    })
+    extract.on('entry', (header, stream, next) => {
+      void (async () => {
+        if (++entryCount > limits.maxEntries) throw new Error('压缩包条目数超过上限')
+        if (header.type !== 'file' && header.type !== 'directory') {
+          throw new Error('压缩包不允许链接或特殊文件')
+        }
+        if (header.type === 'directory' && (header.name === './' || header.name === '.')) {
+          if (rootSeen || header.size) throw new Error('压缩包根目录条目重复或大小无效')
+          rootSeen = true
+          for await (const _chunk of stream) { /* drain before advancing */ }
+          next()
+          return
+        }
+        const directory = header.type === 'directory'
+        const target = entries.accept(header.name, directory, header.size ?? 0)
+        if (write && directory) {
+          fs.mkdirSync(target, { recursive: true, mode: 0o755 })
+        }
+        if (write && !directory) {
+          fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 })
+          await pipeline(stream, fs.createWriteStream(target, { flags: 'wx', mode: 0o644 }))
+        }
+        else {
+          for await (const _chunk of stream) { /* drain with backpressure */ }
+        }
+        next()
+      })().catch(error => extract.destroy(error))
+    })
+    await pipeline(fs.createReadStream(archivePath), createGunzip(), counter, extract)
   }
-  const root = path.resolve(targetDir)
-  for (const entry of entries) {
-    assertEntryPathInsideRoot(root, entry)
-  }
-  await assertGzipExpansionWithinLimit(archivePath, limits.maxTotalUncompressedBytes)
+  await scan(false)
+  if (validateOnly) return
   fs.mkdirSync(targetDir, { recursive: true })
-  await runTar(['-xzf', archivePath, '-C', targetDir])
+  await scan(true)
 }
 
 /**

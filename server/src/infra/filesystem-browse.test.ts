@@ -21,6 +21,8 @@ before(() => {
 })
 
 after(() => {
+  // 先清接入，再清来源，夹具不留下悬空链接。
+  fs.unlinkSync(path.join(rootDir, 'escape'))
   fs.rmSync(workDir, { recursive: true, force: true })
 })
 

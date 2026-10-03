@@ -322,8 +322,8 @@ export function parseModInfoConfigurations(installPath: string, workshopId: stri
  * 导入存档时源档 modoverrides.lua 只有 workshop ID，入库名是 `workshop-<id>` 占位，
  * 内容下载落地后由此补齐真实名称；文件不存在或解析失败返回 null，绝不抛错。
  */
-export function resolveModDisplayName(installPath: string, workshopId: string): string | null {
-  const modInfoPath = resolveDstModInfoPath(installPath, workshopId)
+export function resolveModDisplayName(installPath: string, workshopId: string, sourcePath?: string): string | null {
+  const modInfoPath = sourcePath ?? resolveDstModInfoPath(installPath, workshopId)
   if (!modInfoPath) {
     return null
   }
@@ -354,8 +354,8 @@ export function resolveModDisplayName(installPath: string, workshopId: string): 
  *
  * 兼容两种写法：`dependencies = { "workshop-123" }` 与 `dependencies = { ["workshop-123"] = true }`。
  */
-export function parseModInfoDependencies(installPath: string, workshopId: string): string[] {
-  const modInfoPath = resolveDstModInfoPath(installPath, workshopId)
+export function parseModInfoDependencies(installPath: string, workshopId: string, sourcePath?: string): string[] {
+  const modInfoPath = sourcePath ?? resolveDstModInfoPath(installPath, workshopId)
   if (!modInfoPath) {
     return []
   }
@@ -565,4 +565,20 @@ export const __modConfigTestUtils = {
   parseLuaQuotedString,
   parseLuaValue,
   skipWhitespaceAndComments,
+}
+
+/** 本地包静态元数据；不运行 Lua，复杂表达式按未知处理。 */
+export function readLocalModInfo(sourcePath: string): { name: string | null, version: string | null, dependencyIds: string[] } {
+  let version: string | null = null
+  try {
+    if (fs.statSync(sourcePath).size <= MAX_LUA_PARSE_LENGTH) {
+      const content = fs.readFileSync(sourcePath, 'utf8')
+      const table = parseLuaTableLiteral(content.replace(/^\s*return\s*/, ''))
+      const value = table?.entries.get('version')
+      version = typeof value === 'string' || typeof value === 'number' ? String(value) : null
+      if (!version) version = /^\s*version\s*=\s*["']([^"'\r\n]+)["']/m.exec(content)?.[1] ?? null
+    }
+  }
+  catch { /* optional metadata */ }
+  return { name: resolveModDisplayName('', '', sourcePath), version, dependencyIds: parseModInfoDependencies('', '', sourcePath) }
 }

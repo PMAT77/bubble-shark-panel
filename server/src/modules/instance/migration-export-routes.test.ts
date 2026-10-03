@@ -253,7 +253,9 @@ describe('migration export routes', () => {
       const listing = spawnSync('tar', ['-tzf', archivePath], { encoding: 'utf8', windowsHide: true })
       assert.equal(listing.status, 0, `列包失败：${listing.stderr}`)
       const entries = listing.stdout.split('\n').map(line => line.trim()).filter(Boolean)
-      assert.ok(entries.every(entry => entry.startsWith('Cluster_1/')), `包内顶层应当只有集群目录：${entries.slice(0, 5).join(', ')}`)
+      assert.ok(entries.every(entry => entry.startsWith('Cluster_1/') || entry.startsWith('.gsh-migration/')), `包内顶层应当为集群与迁移元数据：${entries.slice(0, 5).join(', ')}`)
+      assert.ok(entries.includes('.gsh-migration/manifest.json'))
+      assert.ok(entries.includes('.gsh-migration/report.txt'))
       assert.ok(entries.includes('Cluster_1/cluster.ini'), '包内必须含 cluster.ini')
       assert.ok(entries.includes('Cluster_1/Master/server.ini'))
       assert.ok(entries.every(entry => !/appmanifest_|version\.txt|dontstarve_dedicated_server/.test(entry)))
@@ -285,6 +287,23 @@ describe('migration export routes', () => {
       })
       assert.equal(download.statusCode, 200)
       assert.ok(download.rawPayload.length > 0)
+
+      const foreign = await app.inject({
+        method: 'POST', url: '/app/instance/migration/download', headers: { token },
+        payload: { instanceId: FRESH_INSTANCE_ID, fileName },
+      })
+      assert.equal(foreign.statusCode, 403)
+      assert.match(parseBody<unknown>(foreign.body).error, /不属于该实例/)
+
+      const archivePath = path.join(exportRoot, fileName)
+      const expired = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      fs.utimesSync(archivePath, expired, expired)
+      const stale = await app.inject({
+        method: 'POST', url: '/app/instance/migration/download', headers: { token },
+        payload: { instanceId: READY_INSTANCE_ID, fileName },
+      })
+      assert.equal(stale.statusCode, 403)
+      assert.match(parseBody<unknown>(stale.body).error, /已过期/)
     })
 
     it('文件名带路径穿越时拒绝', async () => {

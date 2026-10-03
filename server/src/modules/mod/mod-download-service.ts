@@ -1,3 +1,4 @@
+import { assertInstanceContentAvailable, beginInstanceContentActivity } from '../../shared/instance-content/operation'
 import type {
   ModDownloadQueueDto,
   ModDownloadQueueStatus,
@@ -15,12 +16,12 @@ import {
   readModDependencyMap,
   writeModDependencyMap,
 } from '../../infra/game-adapter/dst/mod-service'
-import { resolveModDisplayName } from '../../infra/game-adapter/dst/mod-config'
+import { resolveModDisplayName, readLocalModInfo } from '../../infra/game-adapter/dst/mod-config'
+import { resolveDstSteamWorkshopModDir } from '../../infra/game-adapter/dst/constants'
+import path from 'node:path'
 import { ensureDstUgcModLayout } from '../../infra/game-adapter/dst/ugc-mod-install'
 import { resolveLocalModContentVersion } from '../../infra/game-adapter/dst/mod-content-version'
-import type { LocalModContentVersion } from '../../infra/game-adapter/dst/mod-content-version'
 import { readWorkshopInstalledItems } from '../../infra/game-adapter/dst/workshop-manifest'
-import type { WorkshopInstalledItem } from '../../infra/game-adapter/dst/workshop-manifest'
 import { fetchWorkshopModMetadata } from '../../infra/game-adapter/dst/steam-workshop'
 import { syncInstanceModFilesFromDb } from './mod-file-sync-service'
 import { isPlaceholderModName, MISSING_MOD_CONTENT_ERROR } from './mod-readiness-service'
@@ -280,24 +281,6 @@ function resolvePersistedModName(installPath: string, workshopId: string, reques
     return trimmed
   }
   return resolveModDisplayName(installPath, workshopId) || trimmed || `Workshop Mod ${workshopId}`
-}
-
-/**
- * 本机已下载内容对应的版本：SteamCMD 清单优先，其次内容文件的落地时间。
- *
- * 两者都取不到就是「不知道」，**不**回落到当前时刻：记录时刻必然晚于当时的工坊版本，
- * 拿它去比等于恒定得出「已是最新」，真正存在的旧版本会被漏报。
- */
-function resolveInstalledContentVersion(
-  installPath: string,
-  workshopId: string,
-  installedItems?: Map<string, WorkshopInstalledItem>,
-): LocalModContentVersion {
-  return resolveLocalModContentVersion(
-    installPath,
-    workshopId,
-    installedItems ? { installedItems } : undefined,
-  )
 }
 
 async function fetchWorkshopUpdatedAtMap(workshopIds: string[]): Promise<Map<string, string>> {
@@ -711,7 +694,7 @@ async function runBatch(
 
     if (succeeded.length > 0) {
       // 落位已在上面对整批内容就位的项统一完成，这里只登记状态与写回 lua
-      await markBatchReady(state, succeeded, byId, payloadById)
+      await markBatchReady(state, succeeded, byId, payloadById, new Set(toDownload.filter(() => batchDownloadOk)))
       await syncInstanceModFilesFromDb(state.instanceId, state.installPath)
     }
 
@@ -745,6 +728,7 @@ async function markBatchReady(
   workshopIds: string[],
   byId: Map<string, DbInstanceMod>,
   payloadById: Map<string, ModInstallPayload>,
+  downloadedIds: Set<string>,
 ): Promise<void> {
   if (workshopIds.length === 0) {
     return
@@ -756,7 +740,8 @@ async function markBatchReady(
   let dependencyMapDirty = false
   for (const workshopId of workshopIds) {
     const mod = byId.get(workshopId)
-    const localVersion = resolveInstalledContentVersion(state.installPath, workshopId, installedItems)
+    const contentSource = downloadedIds.has(workshopId) ? 'steam' : (mod?.contentSource ?? 'steam')
+    const localVersion = resolveLocalModContentVersion(state.installPath, workshopId, { installedItems, contentSource, knownUpdatedAt: mod?.localUpdatedAt })
     const workshopUpdatedAt = workshopUpdatedAtMap.get(workshopId) ?? null
     try {
       await upsertInstanceModFn({
@@ -766,8 +751,9 @@ async function markBatchReady(
         previewImage: mod?.previewImage ?? null,
         enabled: mod?.enabled ?? false,
         loadOrder: mod?.loadOrder ?? 0,
-        version: mod?.version ?? null,
+        version: contentSource === 'steam' && downloadedIds.has(workshopId) ? readLocalModInfo(path.join(resolveDstSteamWorkshopModDir(state.installPath, workshopId), 'modinfo.lua')).version : (mod?.version ?? null),
         installStatus: 'ready',
+        contentSource,
         installError: null,
         localUpdatedAt: localVersion.updatedAt,
         loadedCopyStale: localVersion.loadedCopyStale,
@@ -800,6 +786,7 @@ async function markBatchReady(
 // ---------------------------------------------------------------------------
 
 async function runQueueLoop(state: InstanceQueueState): Promise<void> {
+  const release = beginInstanceContentActivity(state.instanceId)
   try {
     await prepareQueue(state)
     while (true) {
@@ -841,6 +828,7 @@ async function runQueueLoop(state: InstanceQueueState): Promise<void> {
     state.lastError = error instanceof Error ? error.message : String(error)
   }
   finally {
+    release()
     state.active = []
     if (state.status === 'running') {
       state.status = 'idle'
@@ -943,6 +931,7 @@ export async function startModDownloadQueue(input: {
   retryFailed?: boolean
 }): Promise<ModDownloadQueueDto> {
   const instanceId = input.instanceId.trim()
+  assertInstanceContentAvailable(instanceId)
   const installPath = input.installPath
   const existing = queueStates.get(instanceId)
   if (existing && existing.runPromise) {
@@ -1118,7 +1107,8 @@ export async function enqueueModDownload(input: ModDownloadJobInput): Promise<Mo
   const filesReady = downloadIds.every(id => isDstWorkshopModPresent(input.installPath, id))
 
   if (!input.force && existingMod?.installStatus === 'ready' && filesReady) {
-    return resolveReadyWithoutQueue(input.instanceId, workshopId)
+    const outcomes = await ensureDstUgcModLayout(input.installPath, downloadIds)
+    if (outcomes.every(outcome => outcome.status !== 'failed')) return resolveReadyWithoutQueue(input.instanceId, workshopId)
   }
 
   // 同一实例内同一个 workshopId 只排一次：它可能已经在队列里等着、或正在当前批次下载

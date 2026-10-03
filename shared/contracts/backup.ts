@@ -98,6 +98,7 @@ export const saveImportCandidateSchema = z.object({
   /** 目录条目超出扫描上限，sizeBytes 仅为部分统计 */
   sizeIncomplete: z.boolean(),
   warnings: z.array(z.string()),
+  migration: z.object({ includeMods: z.boolean(), includedModCount: z.number(), missingModIds: z.array(z.string()) }).optional(),
 })
 export type SaveImportCandidate = z.infer<typeof saveImportCandidateSchema>
 
@@ -134,7 +135,7 @@ export const saveImportResultSchema = z.object({
   importedShards: z.array(importShardIdSchema),
   /** 反向写入面板 Mod 列表的条目数 */
   modCount: z.number().int().nonnegative(),
-  /** 实例安装目录中未找到 workshop 内容的 Mod（首次启动由游戏自行拉取） */
+  /** 实例安装目录中未找到 workshop 内容的 Mod（用户在下载队列显式补齐） */
   missingWorkshopContent: z.array(z.string()),
   tokenSource: saveImportTokenSourceSchema,
   /** 导入前自动创建的安全备份 id（实例原本无存档时缺省） */
@@ -153,6 +154,7 @@ export const migrationExportRequestSchema = z.object({
   instanceId: z.string().trim().min(1).max(128),
   /** true 时只返回体检报告与文件名，不打包（界面先展示风险项，用户确认后再下载） */
   reportOnly: z.boolean().optional(),
+  includeMods: z.boolean().default(false),
 })
 export type MigrationExportRequest = z.infer<typeof migrationExportRequestSchema>
 
@@ -166,6 +168,7 @@ export const migrationExportResultSchema = z.object({
   warnings: z.array(z.string()),
   /** 本次是否真的产出了压缩包（reportOnly 时为 false） */
   packaged: z.boolean(),
+  modContent: z.object({ includedModCount: z.number(), estimatedContentBytes: z.number(), missingRequiredMods: z.array(z.string()), missingOptionalMods: z.array(z.string()), canExport: z.boolean() }).optional(),
 })
 export type MigrationExportResult = z.infer<typeof migrationExportResultSchema>
 

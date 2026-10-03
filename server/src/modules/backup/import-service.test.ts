@@ -410,7 +410,7 @@ describe('save import execution', () => {
         sourceClusterPath: sourcePath,
       })
       assert.equal(result.ok, false)
-      assert.match(result.message ?? '', /正在执行存档导入或恢复/)
+      assert.match(result.message ?? '', /正在执行文件操作、启动或下载/)
     })
     // 锁释放后可正常导入
     const retry = await importSaveToInstance({

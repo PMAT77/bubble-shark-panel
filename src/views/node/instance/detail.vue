@@ -342,6 +342,7 @@ onBeforeUnmount(() => {
         <InstanceMigrationCard
           v-if="instance && instanceSupportsDstRoom(instance)"
           :instance-id="instance.id"
+          :stopped="instance.status === 'stopped'"
         />
         <template #no-auth>
           <NCard

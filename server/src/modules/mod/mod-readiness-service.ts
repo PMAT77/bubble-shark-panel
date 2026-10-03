@@ -2,6 +2,7 @@ import { resolveModDisplayName } from '../../infra/game-adapter/dst/mod-config'
 import { isDstWorkshopModPresent } from '../../infra/game-adapter/dst/mod-download'
 import { ensureDstUgcModLayout } from '../../infra/game-adapter/dst/ugc-mod-install'
 import { listInstanceMods, updateInstanceModByWorkshopId } from '../../shared/db/index'
+import { withInstanceContentActivity } from '../../shared/instance-content/operation'
 
 /**
  * 「已就绪」必须等价于「游戏能加载」。
@@ -78,7 +79,7 @@ async function patchMod(
   }
 }
 
-export async function reconcileInstanceModReadiness(input: ModReadinessInput): Promise<ModReadinessResult> {
+async function reconcileInstanceModReadinessUnlocked(input: ModReadinessInput): Promise<ModReadinessResult> {
   const result: ModReadinessResult = { demotedToPending: [], markedFailed: [], renamed: [] }
   const { instanceId, installPath } = input
   if (!instanceId.trim() || !installPath.trim()) {
@@ -132,4 +133,7 @@ export async function reconcileInstanceModReadiness(input: ModReadinessInput): P
     }
   }
   return result
+}
+export async function reconcileInstanceModReadiness(input: ModReadinessInput): Promise<ModReadinessResult> {
+  return withInstanceContentActivity(input.instanceId, () => reconcileInstanceModReadinessUnlocked(input))
 }

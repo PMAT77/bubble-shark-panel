@@ -119,7 +119,7 @@ describe('backup service', () => {
       hotSaveDelayMs: 0,
     })
     assert.equal(refused.ok, false)
-    assert.match(refused.message ?? '', /存档导入或恢复/)
+    assert.match(refused.message ?? '', /文件操作、启动或下载/)
     assert.equal(refused.backup, undefined)
 
     release()

@@ -1,6 +1,9 @@
+import { readMigrationBundle } from '../../infra/game-adapter/dst/migration-bundle'
+import { importMigrationBundle } from './migration-import-service'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
+import type { SaveImportCandidate } from '../../../../shared/contracts/backup'
 import {
   DST_APP_ID,
   DST_CLUSTER_NAME,
@@ -52,7 +55,7 @@ import type { DbGameInstance } from '../../shared/db/index'
 import { createInstanceBackupUnlocked } from './backup-service'
 import { InstanceArchiveBusyError, withInstanceArchiveOperationLock } from './archive-lock'
 import { isModDownloadAutoStartEnabled, startModDownloadQueue } from '../mod/mod-download-service'
-import { syncInstanceModFilesFromDb } from '../mod/mod-file-sync-service'
+import { syncInstanceModFilesFromDbUnlocked } from '../mod/mod-file-sync-service'
 import { MISSING_MOD_CONTENT_ERROR } from '../mod/mod-readiness-service'
 
 /** 目录大小扫描上限：超出后停止累计（session 小文件可达数十万，防 probe/导入卡死） */
@@ -234,18 +237,7 @@ function readSourceModEntries(clusterPath: string) {
   return readEntries('Caves')
 }
 
-function buildCandidateDetail(candidate: ClusterCandidate): { detail: {
-  dirName: string
-  clusterPath: string
-  clusterName: string | null
-  shards: Array<'master' | 'caves'>
-  worldGenerated: boolean
-  modCount: number
-  hasTokenFile: boolean
-  sizeBytes: number
-  sizeIncomplete: boolean
-  warnings: string[]
-} } {
+function buildCandidateDetail(candidate: ClusterCandidate): { detail: SaveImportCandidate } {
   const warnings: string[] = []
   const masterDir = resolveShardDir(candidate.clusterPath, 'Master')
   const cavesDir = resolveShardDir(candidate.clusterPath, 'Caves')
@@ -290,6 +282,7 @@ function buildCandidateDetail(candidate: ClusterCandidate): { detail: {
       ],
       worldGenerated: isSaveDirectoryGenerated(masterDir) || isSaveDirectoryGenerated(cavesDir),
       modCount: readSourceModEntries(candidate.clusterPath).length,
+      migration: undefined as SaveImportCandidate['migration'],
       hasTokenFile: fs.existsSync(path.join(candidate.clusterPath, 'cluster_token.txt')),
       sizeBytes: sizeScan.bytes,
       sizeIncomplete: sizeScan.incomplete,
@@ -383,7 +376,7 @@ export function validateSourceTargetDisjoint(sourcePath: string, installPath: st
  * 导入的文件属主是面板进程用户，与安装链路 chown 到 SteamCMD 容器用户的约定对齐，
  * 防游戏镜像未来收紧权限或自定义 GSH_STEAMCMD_RUN_USER 后出现只读写入失败。
  */
-function alignClusterOwnership(clusterRoot: string): void {
+export function alignClusterOwnership(clusterRoot: string): void {
   if (getServerContainerConfig().runtimeMode !== 'docker') {
     return
   }
@@ -427,7 +420,7 @@ function alignClusterOwnership(clusterRoot: string): void {
 }
 
 /** 读取实例当前磁盘 server.ini 的端口体系作为导入重写目标；无磁盘配置时从 DB gamePort 推导 */
-function resolveTargetShardPorts(instance: DbGameInstance, installPath: string): {
+export function resolveTargetShardPorts(instance: DbGameInstance, installPath: string): {
   master: ReturnType<typeof defaultMasterServerIniFields>
   caves: ReturnType<typeof defaultCavesServerIniFields>
 } {
@@ -445,7 +438,7 @@ function resolveTargetShardPorts(instance: DbGameInstance, installPath: string):
 }
 
 /** 用目标端口体系重写 staging 中的 shard server.ini（保留 shardName，修正 is_master） */
-function rewriteStagedServerIni(
+export function rewriteStagedServerIni(
   stagedCluster: string,
   shard: 'Master' | 'Caves',
   target: ReturnType<typeof defaultMasterServerIniFields>,
@@ -588,6 +581,12 @@ async function importSaveToInstanceLocked(options: ImportSaveToInstanceOptions):
     return { ok: false, message: '源存档缺少 Master/Caves 分片目录，无法导入' }
   }
 
+  const bundle = await readMigrationBundle(sourcePath)
+  if (bundle) {
+    if (instance.status !== 'stopped') return { ok: false, message: '请先停止实例再恢复迁移包' }
+    return importMigrationBundle({ ...options, sourceClusterPath: sourcePath }, instance, installPath, bundle)
+  }
+
   const warnings: string[] = []
   if (!stagedMasterDir) {
     warnings.push('源存档没有 Master 分片，导入后主世界无法启动')
@@ -700,7 +699,7 @@ async function importSaveToInstanceLocked(options: ImportSaveToInstanceOptions):
       try {
         // 只把真正就绪的 Mod 写进 modoverrides.lua：否则 DST 每次启动都会自行补下载，
         // legacy 包在容器网络下常超时失败，玩家进游戏只看到一部分 Mod。
-        await syncInstanceModFilesFromDb(instanceId, installPath)
+        await syncInstanceModFilesFromDbUnlocked(instanceId, installPath)
         // 缺失内容默认不在导入过程里开跑：几十个 Mod 一起下会长时间占住 SteamCMD 串行锁，
         // 由用户在 Mod 页显式点「开始下载」，队列再逐批处理（GSH_MOD_DOWNLOAD_AUTO_START=1 恢复自动）
         if (isModDownloadAutoStartEnabled()) {

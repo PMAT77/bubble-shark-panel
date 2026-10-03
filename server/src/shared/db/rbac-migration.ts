@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import {
+  ALL_PERMISSIONS,
   GUEST_ROLE_PERMISSIONS,
   LEGACY_FRAMEWORK_PERMISSIONS,
   NODE_INSTANCE_MANAGE_PERMISSION,
@@ -43,9 +44,10 @@ const RBAC_MIGRATION_KEY = 'migration.rbac_initialized'
 
 /** 内置游客角色的稳定 key */
 export const GUEST_ROLE_KEY = 'guest'
-/** 迁移建立的系统管理员角色名与 key（非内置：用户可改、可删，但有防锁死约束兜底） */
+/** 内置系统管理员角色的稳定标识与名称 */
 const SYSTEM_ADMIN_ROLE_KEY = 'system-admin'
 const SYSTEM_ADMIN_ROLE_NAME = '系统管理员'
+const SYSTEM_ADMIN_ROLE_DESCRIPTION = '拥有全部权限点的内置角色，不能被修改或删除'
 
 /**
  * 旧 `pages.node.instance:manage` 展开成的新权限点。
@@ -192,35 +194,68 @@ export async function syncGuestRolePermissions(): Promise<{
   permissions: readonly string[]
   membersSynced: number
 }> {
+  return syncBuiltinRole({
+    key: GUEST_ROLE_KEY,
+    name: '游客',
+    description: '只读预览用的固化角色：固定持有「除成员管理、角色管理外」的全部只读权限点，不能被修改权限点或删除',
+    kind: 'guest',
+    permissions: GUEST_ROLE_PERMISSIONS,
+  })
+}
+
+/** 每次启动修正存量管理员角色，并为其成员同步当前全部权限点。 */
+export async function syncSystemAdminRolePermissions() {
+  return syncBuiltinRole({
+    key: SYSTEM_ADMIN_ROLE_KEY,
+    name: SYSTEM_ADMIN_ROLE_NAME,
+    description: SYSTEM_ADMIN_ROLE_DESCRIPTION,
+    kind: 'user',
+    permissions: ALL_PERMISSIONS,
+  })
+}
+
+async function syncBuiltinRole(input: {
+  key: string
+  name: string
+  description: string
+  kind: 'user' | 'guest'
+  permissions: readonly string[]
+}) {
   const { drizzleDb } = ensureDb()
   const now = nowIso()
   const existing = await drizzleDb
     .select({ id: roles.id })
     .from(roles)
-    .where(eq(roles.key, GUEST_ROLE_KEY))
+    .where(eq(roles.key, input.key))
     .limit(1)
 
+  const fields = {
+    key: input.key,
+    name: input.name,
+    description: input.description,
+    kind: input.kind,
+    isBuiltin: 1,
+    updatedAt: now,
+  }
   let roleId = existing[0]?.id
   let created = false
   if (!roleId) {
     roleId = randomUUID()
     await drizzleDb.insert(roles).values({
       id: roleId,
-      key: GUEST_ROLE_KEY,
-      name: '游客',
-      description: '只读预览用的固化角色：固定持有「除成员管理、角色管理外」的全部只读权限点，不能被修改权限点或删除',
-      kind: 'guest',
-      isBuiltin: 1,
+      ...fields,
       createdAt: now,
-      updatedAt: now,
     })
     created = true
+  }
+  else {
+    await drizzleDb.update(roles).set(fields).where(eq(roles.id, roleId))
   }
 
   // 先清后写：幂等，且保证删掉的权限点（例如将来从集合里移除某项）真的收回
   await drizzleDb.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId))
   await drizzleDb.insert(rolePermissions).values(
-    GUEST_ROLE_PERMISSIONS.map(permission => ({ roleId, permission, createdAt: now })),
+    input.permissions.map(permission => ({ roleId, permission, createdAt: now })),
   )
 
   const members = await drizzleDb
@@ -230,11 +265,11 @@ export async function syncGuestRolePermissions(): Promise<{
   for (const member of members) {
     await drizzleDb.delete(userPermissions).where(eq(userPermissions.userId, member.userId))
     await drizzleDb.insert(userPermissions).values(
-      GUEST_ROLE_PERMISSIONS.map(permission => ({ userId: member.userId, permission, createdAt: now })),
+      input.permissions.map(permission => ({ userId: member.userId, permission, createdAt: now })),
     )
   }
 
-  return { created, permissions: GUEST_ROLE_PERMISSIONS, membersSynced: members.length }
+  return { created, permissions: input.permissions, membersSynced: members.length }
 }
 
 async function findRoleIdByKey(key: string): Promise<string | undefined> {
@@ -250,6 +285,7 @@ async function findRoleIdByKey(key: string): Promise<string | undefined> {
 /** 建角色并写入权限点，返回 roleId */
 async function createRoleWithPermissions(input: {
   key?: string
+  isBuiltin?: boolean
   name: string
   description: string
   permissions: readonly string[]
@@ -263,7 +299,7 @@ async function createRoleWithPermissions(input: {
     name: input.name,
     description: input.description,
     kind: 'user',
-    isBuiltin: 0,
+    isBuiltin: input.isBuiltin ? 1 : 0,
     createdAt: now,
     updatedAt: now,
   })
@@ -282,7 +318,7 @@ async function createRoleWithPermissions(input: {
  * 所以中途失败不会产生重复角色。
  */
 export async function migrateRbacFromLegacy(options: {
-  /** 全部细粒度权限点，由调用方从 `ALL_PERMISSIONS` 传入，避免这里再 import 一遍共享常量 */
+  /** 全部细粒度权限点，由调用方从 `ALL_PERMISSIONS` 传入 */
   allPermissions: readonly string[]
 }): Promise<RbacMigrationOutcome> {
   const outcome: RbacMigrationOutcome = {
@@ -384,7 +420,8 @@ export async function migrateRbacFromLegacy(options: {
         adminRoleId = await createRoleWithPermissions({
           key: SYSTEM_ADMIN_ROLE_KEY,
           name: SYSTEM_ADMIN_ROLE_NAME,
-          description: '拥有全部权限点。由升级迁移建立，可按需调整权限点或改用更细的角色',
+          description: SYSTEM_ADMIN_ROLE_DESCRIPTION,
+          isBuiltin: true,
           permissions: options.allPermissions,
         })
         outcome.rolesCreated += 1

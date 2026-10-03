@@ -261,6 +261,9 @@ async function applyMigrations(migrationsFolder: string) {
   if (instanceModsTableExists) {
     ensureColumn(sqliteDb, 'instance_mods', 'config', 'text')
   }
+  // 恢复必须先于任何 Mod readiness / 文件同步（包括历史迁移的一次性同步）。
+  const { recoverInstanceContentOperations } = await import('../instance-content/state')
+  await recoverInstanceContentOperations()
   await runPostMigration0008ModFileSync()
 }
 
@@ -278,14 +281,14 @@ async function runRbacMigration(): Promise<RbacMigrationOutcome> {
 }
 
 /**
- * 同步内置游客角色的权限点（幂等）。
+ * 同步内置角色及其成员的权限点（幂等）。
  *
- * 与 RBAC 迁移分开：迁移只跑一次（有标记），而游客的权限集是代码定义的，
- * 改了 `GUEST_ROLE_PERMISSIONS` 之后存量部署必须也能跟上，所以每次启动都同步一遍。
+ * 与 RBAC 迁移分开：迁移只跑一次，而内置角色由代码定义，每次启动同步存量部署。
  */
-async function runGuestRolePermissionSync() {
-  const { syncGuestRolePermissions } = await import('./rbac-migration')
-  return syncGuestRolePermissions()
+async function runBuiltinRolePermissionSync() {
+  const { syncGuestRolePermissions, syncSystemAdminRolePermissions } = await import('./rbac-migration')
+  await syncGuestRolePermissions()
+  await syncSystemAdminRolePermissions()
 }
 
 async function runPostMigration0008ModFileSync() {
@@ -593,8 +596,8 @@ export async function initDatabase(
   if (rbacOutcome.ran) {
     options.onRbacMigrationOutcome?.(rbacOutcome)
   }
-  // 必须排在迁移之后：游客角色由迁移建立，这里再把它的权限集同步成当前代码定义的那一份
-  await runGuestRolePermissionSync()
+  // 必须排在迁移之后：修正内置角色标记，并同步当前代码定义的权限集
+  await runBuiltinRolePermissionSync()
   /**
    * 游客（只读预览）账号预置，必须排在游客角色同步之后——角色是上一步才确定存在的。
    *

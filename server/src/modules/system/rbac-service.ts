@@ -47,7 +47,7 @@ import { isConfiguredGuestAccountName } from '../../shared/db/guest-account'
  *
  * 1. 不能停用自己、不能把自己的角色换成没有角色管理权限的角色、不能删自己；
  * 2. 不能让「最后一个能管理角色或面板设置的启用账号」消失（停用或降权都算）；
- * 3. 内置游客角色不可改权限点、不可删（它是公开只读预览的唯一安全阀）。
+ * 3. 内置系统管理员与游客角色不可修改、不可删除。
  *
  * 少了第 2 条，管理员点两下就能把面板变成没人能改设置的状态，只能改数据库救回来。
  */
@@ -168,7 +168,7 @@ export async function updateRole(payload: RoleUpdatePayload): Promise<ServiceRes
     return { ok: false, message: '角色不存在' }
   }
   if (role.isBuiltin) {
-    return { ok: false, message: `「${role.name}」是内置角色，不能修改它的权限点` }
+    return { ok: false, message: `「${role.name}」是内置角色，不能修改` }
   }
   const permissionError = validatePermissions(payload.permissions)
   if (permissionError) {

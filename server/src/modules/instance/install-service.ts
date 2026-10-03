@@ -1,3 +1,4 @@
+import { beginInstanceContentActivity } from '../../shared/instance-content/operation'
 import type { FastifyInstance } from 'fastify'
 import process from 'node:process'
 import type { DbInstallLogStatus } from '../../shared/db/index'
@@ -625,6 +626,8 @@ export function startInstallJob(
     app.log.warn({ instanceId: input.instanceId, memoryError }, '宿主机内存不足，拒绝启动安装任务')
     return 'blocked'
   }
+  let release: () => void
+  try { release = beginInstanceContentActivity(input.instanceId) } catch { return 'busy' }
   cancelledInstallInstanceIds.delete(input.instanceId)
   // 新任务从零开始：清掉上一次取消遗留的 runner 级取消标记，保证重试不受历史取消影响。
   clearSteamcmdJobCancelFlag(input.instanceId)
@@ -634,6 +637,7 @@ export function startInstallJob(
   logWriter.clear()
   void runInstallJobInBackground(app, input, logWriter)
     .finally(() => {
+      release()
       installingInstanceIds.delete(input.instanceId)
     })
   return 'started'

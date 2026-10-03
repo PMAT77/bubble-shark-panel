@@ -81,6 +81,7 @@ function buildWorldSeedModRow(): string {
 function writeModOverridesByShard(
   installPath: string,
   buildContent: (shardFolder: DstShardFolder) => string,
+  backup = true,
 ) {
   const { clusterRoot } = resolveClusterPaths(installPath)
   const masterDir = path.join(clusterRoot, 'Master')
@@ -88,25 +89,25 @@ function writeModOverridesByShard(
   fs.mkdirSync(masterDir, { recursive: true })
   fs.mkdirSync(cavesDir, { recursive: true })
   const masterModOverridesPath = path.join(masterDir, MOD_OVERRIDES_FILE_NAME)
-  backupFile(masterModOverridesPath)
+  if (backup) backupFile(masterModOverridesPath)
   writeFileAtomic(masterModOverridesPath, buildContent('Master'))
   const cavesModOverridesPath = path.join(cavesDir, MOD_OVERRIDES_FILE_NAME)
-  backupFile(cavesModOverridesPath)
+  if (backup) backupFile(cavesModOverridesPath)
   writeFileAtomic(cavesModOverridesPath, buildContent('Caves'))
 }
 
-function writeDedicatedServerModSetup(installPath: string, content: string) {
+function writeDedicatedServerModSetup(installPath: string, content: string, backup = true) {
   const modsDir = path.join(installPath, 'mods')
   fs.mkdirSync(modsDir, { recursive: true })
   const legacyPath = path.join(modsDir, MOD_SETUP_FILE_NAME)
-  backupFile(legacyPath)
+  if (backup) backupFile(legacyPath)
   writeFileAtomic(legacyPath, content)
 }
 
-function writeClusterModSetup(installPath: string, content: string) {
+function writeClusterModSetup(installPath: string, content: string, backup = true) {
   const { clusterRoot } = resolveClusterPaths(installPath)
   const clusterSetupPath = path.join(clusterRoot, MOD_SETUP_FILE_NAME)
-  backupFile(clusterSetupPath)
+  if (backup) backupFile(clusterSetupPath)
   writeFileAtomic(clusterSetupPath, content)
 }
 
@@ -137,9 +138,9 @@ export function readModDependencyMap(installPath: string): DstModDependencyMap {
   }
 }
 
-export function writeModDependencyMap(installPath: string, dependencyMap: DstModDependencyMap) {
+export function writeModDependencyMap(installPath: string, dependencyMap: DstModDependencyMap, backup = true) {
   const modMetaPath = resolveModMetaPath(installPath)
-  backupFile(modMetaPath)
+  if (backup) backupFile(modMetaPath)
   writeFileAtomic(modMetaPath, `${JSON.stringify(dependencyMap, null, 2)}\n`)
 }
 
@@ -160,13 +161,13 @@ export function readModDependencies(
   return [...new Set([...fromMeta, ...fromModInfo])]
 }
 
-export function writeInstanceModFiles(installPath: string, mods: DstModEntry[]) {
+export function writeInstanceModFiles(installPath: string, mods: DstModEntry[], options: { backup?: boolean } = {}) {
   ensureClusterDirectory(installPath)
   const modSetupContent = buildModSetupContent(mods)
   // DST 会从安装根目录 mods/dedicated_server_mods_setup.lua 读取订阅列表。
-  writeDedicatedServerModSetup(installPath, modSetupContent)
+  writeDedicatedServerModSetup(installPath, modSetupContent, options.backup)
   // 兼容已有目录结构，继续同步到 Cluster 根目录，便于历史数据排查。
-  writeClusterModSetup(installPath, modSetupContent)
+  writeClusterModSetup(installPath, modSetupContent, options.backup)
   // 世界种子（面板内置 Mod）：先落位文件、再按分片注入启用条目，两件事必须一起做，
   // 否则会出现"启用了但文件不在"或"文件在但没启用"的不一致状态。
   const seedFolders = ensureWorldSeedModLayout(
@@ -178,5 +179,5 @@ export function writeInstanceModFiles(installPath: string, mods: DstModEntry[]) 
     buildModOverridesContent(
       mods,
       seedFolders.includes(shardFolder) ? [buildWorldSeedModRow()] : [],
-    ))
+    ), options.backup)
 }

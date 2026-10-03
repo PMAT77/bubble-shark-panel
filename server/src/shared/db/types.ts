@@ -190,6 +190,7 @@ export interface DbInstanceMod {
   enabled: boolean
   loadOrder: number
   version: string | null
+  contentSource?: 'steam' | 'local' | 'migration'
   installStatus: 'pending' | 'ready' | 'failed'
   installError: string | null
   /** 本机已下载内容对应的工坊版本时间（ISO）；未知为 null */

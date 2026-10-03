@@ -16,12 +16,12 @@ const secretSchema = z.string().min(1).max(256)
 /** 一个角色（含它的权限点与成员数） */
 export const roleListItemSchema = z.object({
   id: idSchema,
-  /** 内置角色的稳定标识（当前只有 `guest`）；用户自建的为 null */
+  /** 内置角色的稳定标识（`guest`、`system-admin`）；用户自建的为 null */
   key: z.string().nullable(),
   name: z.string(),
   description: z.string(),
   kind: z.enum(['user', 'guest']),
-  /** 内置角色不可改权限点、不可删除 */
+  /** 内置角色不可修改、不可删除 */
   isBuiltin: z.boolean(),
   permissions: z.array(permissionKeySchema),
   memberCount: z.number().int().nonnegative(),
@@ -31,7 +31,7 @@ export type RoleListItem = z.infer<typeof roleListItemSchema>
 /**
  * 角色的最小投影：只够"选一个角色"用。
  *
- * 「成员管理」要能分配角色，但它只需要角色的名字（`isBuiltin` 用于标出内置的只读角色），
+ * 「成员管理」要能分配角色，但它只需要角色的名字（`isBuiltin` 用于标出内置角色），
  * 不需要权限点清单与成员数——那是「角色管理」页的内容。此前成员页调的是
  * `GET /app/system/roles`（要求 `role:read`），于是"能管成员"被迫等于"能看角色与权限矩阵"；
  * 现在走 `GET /app/system/role-options`，`role:read` 或 `member:read` 任一即可。
@@ -39,7 +39,7 @@ export type RoleListItem = z.infer<typeof roleListItemSchema>
 export const roleOptionItemSchema = z.object({
   id: idSchema,
   name: z.string(),
-  /** 内置角色不可改权限点、不可删除（成员页据此标出「只读」） */
+  /** 内置角色不可修改、不可删除，成员页据此标出「内置」 */
   isBuiltin: z.boolean(),
 })
 export type RoleOptionItem = z.infer<typeof roleOptionItemSchema>

@@ -14,20 +14,19 @@ import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
  * 2. **实例授权是独立的一层**，不挂在角色上。角色的语义是「能做什么」，实例授权是「能在哪些实例上做」，
  *    两者相交生效。把实例绑到角色上会让「同一个角色在不同实例上生效范围不同」变成笛卡尔积。
  *
- * 3. **游客角色（`kind: 'guest'`）由代码固化**：权限点恒为空，服务端拒绝为它加权限点、拒绝删除。
- *    它是将来公开只读预览的唯一安全阀，所以宁可写死在代码里也不用约定。
+ * 3. **内置角色由代码固化**：系统管理员持有全部权限点，游客仅持有固定只读权限点，均不可修改或删除。
  */
 
 /** 角色：一组权限点 */
 export const roles = sqliteTable('roles', {
   id: text('id').primaryKey(),
-  /** 内置角色的稳定标识（当前只有 `guest`）；用户自建的角色为 null */
+  /** 内置角色的稳定标识（`guest`、`system-admin`）；用户自建的角色为 null */
   key: text('key'),
   name: text('name').notNull(),
   description: text('description').notNull().default(''),
-  /** `user` = 普通角色；`guest` = 固化的只读游客（权限点恒为空） */
+  /** `user` = 包括内置管理员的成员角色；`guest` = 固化的只读游客 */
   kind: text('kind').notNull().default('user'),
-  /** 1 = 内置，不可改权限点、不可删除 */
+  /** 1 = 内置，不可修改、不可删除 */
   isBuiltin: integer('is_builtin').notNull().default(0),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),

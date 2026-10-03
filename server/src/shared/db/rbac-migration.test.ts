@@ -153,6 +153,8 @@ describe('RBAC 迁移：全新库', () => {
   it('管理员拿到系统管理员角色，且生效权限点与角色权限点一致', async () => {
     const { drizzleDb } = ensureDb()
     const adminRoleRows = await drizzleDb.select().from(roles).where(eq(roles.key, 'system-admin'))
+    assert.equal(adminRoleRows[0]?.isBuiltin, 1)
+    assert.equal(adminRoleRows[0]?.kind, 'user', '管理员成员仍保留写操作能力')
     const adminRole = adminRoleRows[0]
     assert.ok(adminRole, '迁移应建立系统管理员角色')
 
@@ -255,6 +257,55 @@ describe('RBAC 迁移：存量实例与幂等', () => {
     await initDatabase(dbFilePath, migrationsFolder, { seedDevelopmentUsers: true })
     const afterRun = await drizzleDb.select().from(instanceGrants)
     assert.equal(afterRun.length, before.length, '实例授权不该重复插入')
+  })
+
+  it('已迁移的管理员角色在重启后恢复为内置全权限角色，自建角色保持原样', async () => {
+    const { drizzleDb } = ensureDb()
+    const adminRole = (await drizzleDb.select().from(roles).where(eq(roles.key, 'system-admin')))[0]!
+    const membersBefore = await drizzleDb.select().from(userRoles)
+    const grantsBefore = await drizzleDb.select().from(instanceGrants)
+    const admin = (await drizzleDb.select().from(users).where(eq(users.account, 'superadmin')))[0]!
+    const now = nowIso()
+    const customRole = {
+      id: randomUUID(), key: null, name: '自建运维角色', description: '保留自定义配置',
+      kind: 'user', isBuiltin: 0, createdAt: now, updatedAt: now,
+    }
+    await drizzleDb.insert(roles).values(customRole)
+    await drizzleDb.insert(rolePermissions).values({ roleId: customRole.id, permission: 'room:read', createdAt: now })
+
+    // 模拟已执行过旧迁移，且管理员权限曾被编辑或尚未包含新增权限点的部署。
+    await drizzleDb.update(roles).set({ isBuiltin: 0, name: '旧管理员名称', description: '可调整权限' }).where(eq(roles.id, adminRole.id))
+    await drizzleDb.delete(rolePermissions).where(eq(rolePermissions.roleId, adminRole.id))
+    await drizzleDb.insert(rolePermissions).values({ roleId: adminRole.id, permission: 'settings:read', createdAt: now })
+    await drizzleDb.delete(userPermissions).where(eq(userPermissions.userId, admin.id))
+    await drizzleDb.insert(userPermissions).values({ userId: admin.id, permission: 'settings:read', createdAt: now })
+
+    for (let restart = 0; restart < 2; restart += 1) {
+      closeDatabase()
+      let migrationRan = false
+      await initDatabase(dbFilePath, migrationsFolder, {
+        seedDevelopmentUsers: true,
+        onRbacMigrationOutcome: () => { migrationRan = true },
+      })
+      assert.equal(migrationRan, false, '内置角色修正不依赖重跑旧迁移')
+      const d = ensureDb().drizzleDb
+      const repaired = await d.select().from(roles).where(eq(roles.key, 'system-admin'))
+      assert.equal(repaired.length, 1)
+      assert.equal(repaired[0]!.id, adminRole.id)
+      assert.equal(repaired[0]!.isBuiltin, 1)
+      assert.equal(repaired[0]!.kind, 'user')
+      assert.equal(repaired[0]!.name, '系统管理员')
+      assert.match(repaired[0]!.description, /不能被修改或删除/)
+      const permissions = await d.select().from(rolePermissions).where(eq(rolePermissions.roleId, adminRole.id))
+      const effective = await d.select().from(userPermissions).where(eq(userPermissions.userId, admin.id))
+      assert.deepEqual(permissions.map(row => row.permission).sort(), [...ALL_PERMISSIONS].sort())
+      assert.deepEqual(effective.map(row => row.permission).sort(), [...ALL_PERMISSIONS].sort())
+      assert.deepEqual(await d.select().from(userRoles), membersBefore)
+      assert.deepEqual(await d.select().from(instanceGrants), grantsBefore)
+      assert.deepEqual((await d.select().from(roles).where(eq(roles.id, customRole.id)))[0], customRole)
+      const customPermissions = await d.select().from(rolePermissions).where(eq(rolePermissions.roleId, customRole.id))
+      assert.deepEqual(customPermissions.map(row => row.permission), ['room:read'])
+    }
   })
 })
 

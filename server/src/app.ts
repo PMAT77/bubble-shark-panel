@@ -1,3 +1,4 @@
+import { registerInstanceContentRouteGuards } from './shared/instance-content/routes'
 import type { FastifyInstance } from 'fastify'
 import type { ServerConfig } from './shared/config'
 import path from 'node:path'
@@ -131,6 +132,7 @@ export async function createServerApp(config: Pick<ServerConfig, 'mode' | 'logLe
   })
 
   // 注册业务模块路由（仅 config 模块仍为占位，未实现因而未注册；files 等其余模块均已实现）
+  registerInstanceContentRouteGuards(app)
   registerAuthModule(app)
   registerSystemModule(app)
   registerNodeModule(app)

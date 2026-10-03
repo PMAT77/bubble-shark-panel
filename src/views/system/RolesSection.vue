@@ -85,6 +85,9 @@ function openCreate() {
 }
 
 function openEdit(role: RoleListItem) {
+  if (role.isBuiltin) {
+    return
+  }
   editingRoleId.value = role.id
   editingRole.value = role
   form.name = role.name
@@ -189,7 +192,7 @@ const columns = [
         h(NButton, {
           size: 'small',
           secondary: true,
-          // 内置游客角色不可改：它是公开只读预览的唯一安全阀，改动它等于拆掉那道闸
+          // 内置角色的名称、备注与权限点由代码固化
           disabled: row.isBuiltin,
           onClick: () => openEdit(row),
         }, { default: () => '编辑' }),

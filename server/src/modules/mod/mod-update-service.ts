@@ -7,6 +7,7 @@ import type {
 import type { DbInstanceMod } from '../../shared/db/index'
 import type { WorkshopModMetadata } from '../../infra/game-adapter/dst/steam-workshop'
 import fs from 'node:fs'
+import { withInstanceContentActivity } from '../../shared/instance-content/operation'
 import { DST_APP_ID } from '../../infra/game-adapter/dst/constants'
 import { resolveInstanceInstallPath } from '../../infra/game-adapter/dst/cluster-service'
 import { fetchWorkshopModMetadata } from '../../infra/game-adapter/dst/steam-workshop'
@@ -215,7 +216,7 @@ function summarize(items: ModUpdateInfo[]): ModUpdateCheckResult['summary'] {
  * 检查实例全部已订阅 Mod 的版本，并把结果、工坊标题与缩略图写回数据库。
  * Steam 取不到时保留原有状态（不写库），避免把「不知道」污染成「已是最新」。
  */
-export async function checkInstanceModUpdates(input: ModUpdateCheckInput): Promise<ModUpdateCheckOutcome> {
+async function checkInstanceModUpdatesUnlocked(input: ModUpdateCheckInput): Promise<ModUpdateCheckOutcome> {
   const instanceId = input.instanceId.trim()
   if (!instanceId) {
     return buildEmptyResult(instanceId)
@@ -275,7 +276,7 @@ export async function checkInstanceModUpdates(input: ModUpdateCheckInput): Promi
     // 本机版本只认内容凭据：SteamCMD 清单优先，其次内容文件的落地时间。
     // 两者都取不到就是没有依据，绝不拿库里「记录这份内容的时间」顶上——
     // 记录时刻必然晚于当时的工坊版本，比较结果会恒定是「已是最新」。
-    const localVersion = resolveLocalModContentVersion(input.installPath, mod.workshopId, { installedItems })
+    const localVersion = resolveLocalModContentVersion(input.installPath, mod.workshopId, { installedItems, contentSource: mod.contentSource, knownUpdatedAt: mod.localUpdatedAt })
     const localUpdatedAt = localVersion.updatedAt
     const remoteUpdatedAt = metadata.updatedAt ?? null
     // 游戏实际加载的那份比已下载内容旧：内容本身没问题，但游戏读到的仍是旧版本
@@ -336,6 +337,10 @@ export async function checkInstanceModUpdates(input: ModUpdateCheckInput): Promi
     renamed,
     metadataResolved,
   }
+}
+
+export async function checkInstanceModUpdates(input: ModUpdateCheckInput): Promise<ModUpdateCheckOutcome> {
+  return withInstanceContentActivity(input.instanceId, () => checkInstanceModUpdatesUnlocked(input))
 }
 
 /** 后台定时检查：与游戏服务端更新检查同节奏，让列表里的版本徽标平时就是新鲜的 */

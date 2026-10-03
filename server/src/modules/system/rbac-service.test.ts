@@ -6,7 +6,8 @@ import { after, before, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { closeDatabase, findPermissionsByUserId, initDatabase } from '../../shared/db/index'
 import { ensureDb } from '../../shared/db/connection'
-import { instanceGrants, roles, userRoles, users } from '../../shared/db/schema/index'
+import { instanceGrants, roles, userPermissions, userRoles, users } from '../../shared/db/schema/index'
+import { ALL_PERMISSIONS } from '../../../../shared/constants/permissions'
 import { eq } from 'drizzle-orm'
 import { loadServerConfig } from '../../shared/config'
 import {
@@ -249,23 +250,41 @@ describe('成员与角色服务', () => {
     )
   })
 
-  it('内置游客角色不可改权限点、不可删除', async () => {
-    const d = db()
-    const guest = (await d.select().from(roles).where(eq(roles.key, 'guest')))[0]
-    assert.ok(guest, '游客角色应当由迁移建立')
+  for (const key of ['guest', 'system-admin']) {
+    it(`内置角色 ${key} 不可修改名称、备注、权限点或删除`, async () => {
+      const d = db()
+      const role = (await d.select().from(roles).where(eq(roles.key, key)))[0]
+      assert.ok(role, '内置角色应当在初始化时建立')
+      const listed = (await listRoleItems()).find(item => item.id === role.id)!
+      assert.equal(listed.isBuiltin, true, '前端据此禁用编辑和删除')
+      const effectiveBefore = await findPermissionsByUserId(adminUserId)
 
-    const updated = await updateRole({ roleId: guest.id, name: '游客', permissions: ['room:read'] })
-    assert.equal(updated.ok, false)
-    if (!updated.ok) {
-      assert.match(updated.message, /内置角色/)
-    }
+      for (const change of [
+        { name: '修改名称', description: role.description, permissions: listed.permissions },
+        { name: role.name, description: '修改备注', permissions: listed.permissions },
+        { name: role.name, description: role.description, permissions: ['room:read'] },
+      ]) {
+        const updated = await updateRole({ roleId: role.id, ...change })
+        assert.equal(updated.ok, false)
+        if (!updated.ok) {
+          assert.match(updated.message, /内置角色/)
+        }
+      }
 
-    const removed = await deleteRole(guest.id)
-    assert.equal(removed.ok, false)
-    if (!removed.ok) {
-      assert.match(removed.message, /内置角色/)
-    }
-  })
+      const removed = await deleteRole(role.id)
+      assert.equal(removed.ok, false)
+      if (!removed.ok) {
+        assert.match(removed.message, /内置角色/)
+      }
+      assert.deepEqual((await d.select().from(roles).where(eq(roles.id, role.id)))[0], role)
+      assert.deepEqual((await listRoleItems()).find(item => item.id === role.id), listed)
+      assert.deepEqual(await findPermissionsByUserId(adminUserId), effectiveBefore)
+      if (key === 'system-admin') {
+        assert.equal(role.kind, 'user', '内置只读约束只针对角色定义')
+        assert.deepEqual([...effectiveBefore].sort(), [...ALL_PERMISSIONS].sort())
+      }
+    })
+  }
 
   it('有成员在用的角色不能删', async () => {
     const role = await createRole({ name: '还有人用的角色', permissions: ['room:read'] })
@@ -380,13 +399,6 @@ describe('成员与角色服务', () => {
   })
 
   it('不能把最后一个具备角色管理能力的账号降权', async () => {
-    /**
-     * 构造一个「只有它能管角色」的账号：新建一个带 role:write 的角色并只分给它，
-     * 同时确认此刻确实只有它持有该权限点（管理员那份也在，所以这里应当被允许——
-     * 于是再把它自己那份也收掉来逼近边界）。
-     *
-     * 真正要钉住的判定是：收权后没有人具备 role:write 时，操作必须被拒。
-     */
     const role = await createRole({ name: '唯一管理员候选', permissions: ['role:write', 'member:write'] })
     assert.equal(role.ok, true)
     if (!role.ok) {
@@ -410,13 +422,28 @@ describe('成员与角色服务', () => {
     })
     assert.equal(allowed.ok, true, '还有人能管角色时，收权不该被拦')
 
-    // 把管理员也降成没有 role:write 的角色后，最后一次收权必须被拒
-    const adminRoleId = (await db().select().from(userRoles).where(eq(userRoles.userId, adminUserId)))[0]!.roleId
-    const strip = await updateRole({ roleId: adminRoleId, name: '系统管理员', permissions: ['settings:read'] })
-    assert.equal(strip.ok, false, '不能把最后一个具备角色管理能力的账号收权')
-    if (!strip.ok) {
-      assert.match(strip.message, /不能取消/)
+    const restored = await updateRole({
+      roleId: role.data.roleId, name: '唯一管理员候选', permissions: ['role:write', 'member:write'],
+    })
+    assert.equal(restored.ok, true)
+    const d = db()
+    const writers = await d.select().from(userPermissions).where(eq(userPermissions.permission, 'role:write'))
+    try {
+      // 直接设置一次性数据库夹具，使自建角色的成员成为唯一可管理角色的账号。
+      // 内置管理员角色本身不可编辑，不能再通过 updateRole 构造此边界。
+      await d.delete(userPermissions).where(eq(userPermissions.permission, 'role:write'))
+      await d.insert(userPermissions).values(writers.filter(row => row.userId === member.data.userId))
+      const strip = await updateRole({ roleId: role.data.roleId, name: '唯一管理员候选', permissions: ['member:write'] })
+      assert.equal(strip.ok, false, '不能把最后一个具备角色管理能力的账号收权')
+      if (!strip.ok) {
+        assert.match(strip.message, /不能取消/)
+      }
     }
+    finally {
+      await d.delete(userPermissions).where(eq(userPermissions.permission, 'role:write'))
+      await d.insert(userPermissions).values(writers)
+    }
+    assert.equal((await updateRole({ roleId: role.data.roleId, name: '唯一管理员候选', permissions: ['member:write'] })).ok, true)
   })
 
   it('不能删除最后一个具备面板设置能力的账号', async () => {

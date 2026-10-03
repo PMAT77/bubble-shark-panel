@@ -147,6 +147,7 @@ function confirmImport() {
   }
   const content = '将把实例「' + props.instanceName + '」的世界存档整体替换为所选房间存档（'
     + candidate.dirName + '）。已有存档会先自动备份为「导入前」，可在备份列表恢复。'
+    + (candidate.migration ? '迁移包中的 Mod 列表与文件也会替换目标内容；缺文件项保留为待下载，不自动联网。' : '')
     + '导入前请先停止实例，并确认游戏已安装。'
   dialog.warning({
     title: '确认导入存档',
@@ -276,6 +277,11 @@ watch(() => props.show, (visible) => {
                 <span class="importer-label">令牌</span>
                 <span>{{ selectedCandidate.hasTokenFile ? '源档自带' : '源档未带' }}</span>
               </div>
+              <NAlert v-if="selectedCandidate.migration" type="info" :show-icon="false">
+                迁移包：包含 {{ selectedCandidate.migration.includedModCount }} 个 Mod 的文件。
+                <template v-if="selectedCandidate.migration.missingModIds.length">仅配置、恢复后待下载：{{ selectedCandidate.migration.missingModIds.join('、') }}。</template>
+                恢复过程不访问创意工坊。
+              </NAlert>
               <div v-if="selectedCandidate.warnings.length > 0" class="importer-warns">
                 <div v-for="warning in selectedCandidate.warnings" :key="warning" class="importer-warn">
                   ⚠ {{ warning }}

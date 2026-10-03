@@ -1,3 +1,4 @@
+import { assertMigrationBundleLayout, readMigrationBundle } from '../../infra/game-adapter/dst/migration-bundle'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import type {
@@ -298,6 +299,24 @@ export function registerBackupModule(app: FastifyInstance) {
       removeUploadDirectory(received.uploadId)
       reply.status(400).send(businessError(probed.message ?? '未在压缩包中找到存档', request, ErrorCode.BACKUP_IMPORT_SOURCE_INVALID))
       return
+    }
+    try {
+      assertMigrationBundleLayout(extractDir, probed.result.candidates.map(candidate => candidate.clusterPath))
+      for (const candidate of probed.result.candidates) {
+        const bundle = await readMigrationBundle(candidate.clusterPath)
+        if (bundle) {
+          candidate.modCount = bundle.manifest.mods.length
+          candidate.migration = {
+            includeMods: bundle.manifest.includeMods,
+            includedModCount: bundle.manifest.mods.filter(mod => mod.content).length,
+            missingModIds: bundle.manifest.mods.filter(mod => !mod.content).map(mod => mod.workshopId),
+          }
+        }
+      }
+    }
+    catch (error) {
+      removeUploadDirectory(received.uploadId)
+      return reply.status(400).send(businessError(error instanceof Error ? error.message : '迁移包校验失败', request, ErrorCode.BACKUP_IMPORT_UPLOAD_INVALID))
     }
     return reply.send(success({
       uploadId: received.uploadId,

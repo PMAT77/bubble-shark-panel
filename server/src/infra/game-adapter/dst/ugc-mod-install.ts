@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { ContentTransaction } from '../../backup/content-transaction'
+import { prepareDstModContent } from './mod-content-install'
 import { extractZipArchive } from '../../backup/zip-extract'
 import { DST_CLUSTER_NAME, DST_WORKSHOP_APP_ID, resolveDstSteamWorkshopModDir } from './constants'
 import { isCavesShardConfigured } from './shard-layout'
@@ -55,7 +57,8 @@ export function resolveDstUgcShardFolders(installPath: string): DstShardFolder[]
 }
 
 function hasModInfoFile(dir: string): boolean {
-  return fs.existsSync(path.join(dir, MOD_INFO_FILE_NAME))
+  try { const stat = fs.lstatSync(path.join(dir, MOD_INFO_FILE_NAME)); return stat.isFile() && stat.size > 0 }
+  catch { return false }
 }
 
 /** DST 可加载的判定：目标目录存在 modinfo.lua */
@@ -153,35 +156,6 @@ export function resolveDstWorkshopModSource(installPath: string, workshopId: str
   return null
 }
 
-function describeSource(source: ModSource): string {
-  return source.kind === 'legacy' ? source.archivePath : source.dir
-}
-
-/** 先写临时目录再原子改名，保证 DST 不会读到半成品目录 */
-async function installModIntoDirectory(source: ModSource, targetDir: string): Promise<void> {
-  const tempDir = `${targetDir}.tmp-${process.pid}-${Date.now().toString(36)}`
-  fs.rmSync(tempDir, { recursive: true, force: true })
-  try {
-    if (source.kind === 'legacy') {
-      // legacy 包（*_legacy.bin）实测为标准 zip；解压失败即视为损坏包
-      await extractZipArchive(source.archivePath, tempDir)
-    }
-    else {
-      fs.mkdirSync(path.dirname(tempDir), { recursive: true })
-      fs.cpSync(source.dir, tempDir, { recursive: true })
-    }
-    if (!hasModInfoFile(tempDir)) {
-      throw new Error(`Mod 内容缺少 ${MOD_INFO_FILE_NAME}（来源：${describeSource(source)}）`)
-    }
-    fs.rmSync(targetDir, { recursive: true, force: true })
-    fs.renameSync(tempDir, targetDir)
-  }
-  catch (error) {
-    fs.rmSync(tempDir, { recursive: true, force: true })
-    throw error
-  }
-}
-
 /**
  * 将已下载的创意工坊 Mod 落位到 DST 的 ugc_mods 目录（幂等）。
  * 单个 Mod 失败只影响该 Mod，不抛出异常。
@@ -234,10 +208,28 @@ export async function ensureDstUgcModLayout(
       continue
     }
     try {
-      for (const shardFolder of pendingShards) {
-        await installModIntoDirectory(source, resolveDstUgcModDir(installPath, shardFolder, workshopId))
+      const transaction = new ContentTransaction(installPath, null)
+      try {
+        let sourceDir = source.dir
+        if (source.kind === 'legacy') {
+          sourceDir = path.join(transaction.root, 'unpacked')
+          await extractZipArchive(source.archivePath, sourceDir)
+        }
+        await prepareDstModContent(transaction, installPath, workshopId, sourceDir, { shardFolders, copySource: source.kind !== 'legacy' })
+        if (source.kind === 'legacy') {
+          const canonical = path.join(transaction.root, 'canonical')
+          await fs.promises.cp(source.dir, canonical, { recursive: true })
+          await fs.promises.cp(sourceDir, canonical, { recursive: true })
+          await transaction.prepareDirectory(canonical, resolveDstSteamWorkshopModDir(installPath, workshopId))
+        }
+        transaction.apply()
+        transaction.commit()
+        outcomes.push({ workshopId, status: 'installed' })
       }
-      outcomes.push({ workshopId, status: 'installed' })
+      catch (error) {
+        transaction.rollback(() => {})
+        throw error
+      }
     }
     catch (error) {
       outcomes.push({
@@ -352,7 +344,7 @@ export function ensureDstLegacyModLink(
   }
   catch {
     copyDirectoryAtomically(sourceDir, targetDir)
-    writeLegacyCopyRecord(targetDir, sourceDir, sourceMtimeMs)
+    writeDstLegacyCopyRecord(targetDir, sourceDir, sourceMtimeMs)
   }
   return 'installed'
 }
@@ -399,7 +391,7 @@ function readLegacyCopyRecord(targetDir: string): LegacyCopyRecord | null {
   }
 }
 
-function writeLegacyCopyRecord(targetDir: string, sourceDir: string, sourceMtimeMs: number): void {
+export function writeDstLegacyCopyRecord(targetDir: string, sourceDir: string, sourceMtimeMs: number): void {
   const record: LegacyCopyRecord = { source: path.resolve(sourceDir), sourceMtimeMs }
   fs.writeFileSync(path.join(targetDir, LEGACY_COPY_MARKER), `${JSON.stringify(record)}\n`, 'utf8')
 }

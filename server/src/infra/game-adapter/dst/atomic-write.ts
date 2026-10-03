@@ -15,6 +15,9 @@ export function backupFile(filePath: string): string | undefined {
 export function writeFileAtomic(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`
-  fs.writeFileSync(tempPath, content, 'utf8')
-  fs.renameSync(tempPath, filePath)
+  try {
+    fs.writeFileSync(tempPath, content, 'utf8')
+    fs.renameSync(tempPath, filePath)
+  }
+  finally { fs.rmSync(tempPath, { force: true }) }
 }

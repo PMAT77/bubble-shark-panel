@@ -62,7 +62,7 @@ async function loadAll() {
     members.value = memberRes.data ?? []
     roles.value = roleRes.data ?? []
     roleOptions.value = roles.value.map(role => ({
-      label: role.isBuiltin ? `${role.name}（只读）` : role.name,
+      label: role.isBuiltin ? `${role.name}（内置）` : role.name,
       value: role.id,
     }))
     const list = (instanceRes as { data?: Array<{ id: string, name: string }> }).data ?? []

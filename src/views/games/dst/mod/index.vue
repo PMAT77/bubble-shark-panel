@@ -22,6 +22,7 @@ import type { ModDownloadQueueDto } from '@/api/modules/mod'
 import { isInstallableGameInstance } from '@/composables/useGameInstance'
 import { useInstanceModState } from '@/composables/useInstanceModState'
 import ModConfigModal from '@/views/games/dst/mod/components/ModConfigModal.vue'
+import LocalModImportModal from '@/views/games/dst/mod/components/LocalModImportModal.vue'
 import { resolveModUpdateCheckNotice } from '@/views/games/dst/mod/modUpdateCheckPresentation'
 import { countOutdatedMods, resolveUpdateIneffectiveNotice, selectUpdatableMods } from '@/views/games/dst/mod/modUpdateTargets'
 import { routeToDstModDetail, routeToDstWorldSettings, routeToNodeInstance } from '@/navigation/game-routes'
@@ -82,6 +83,8 @@ const batchUpdating = ref(false)
 /** 加载顺序调整中：期间禁用全部上移/下移按钮，避免并发提交 */
 const reorderingMods = ref(false)
 const configModalShow = ref(false)
+const localImportShow = ref(false)
+const modInstanceStatus = ref('')
 const configTarget = ref<{ workshopId: string, name: string } | null>(null)
 const instances = ref<InstanceSummaryItem[]>([])
 const selectedInstanceId = ref('')
@@ -1012,6 +1015,7 @@ async function loadInstalledMods() {
     // 补缩略图：导入存档带进来的 Mod 本地没有图，服务端按创意工坊 ID 补齐后落库，只补缺的那些
     const response = await apiMod.getModList(selectedInstanceId.value, { enrich: 'previews' })
     installedMods.value = response.data.mods
+    modInstanceStatus.value = response.data.instanceStatus
     riskTipBanner.value = response.data.riskTip?.trim() || null
     void restoreInstallJobs({
       modList: response.data,
@@ -1964,6 +1968,9 @@ onMounted(async () => {
                 <NButton :disabled="!selectedInstanceId" @click="subscribeManualWorkshop" v-if="hasPermission('mod:install')">
                   直接订阅
                 </NButton>
+                <NButton v-if="hasPermission('mod:install')" :disabled="!selectedInstanceId" @click="localImportShow = true">
+                  从本地导入
+                </NButton>
                 <NButton type="primary" :disabled="!selectedInstanceId" @click="loadSteamMods(true)">
                   刷新列表
                 </NButton>
@@ -2326,6 +2333,13 @@ onMounted(async () => {
         :workshop-id="configTarget?.workshopId ?? ''"
         :mod-name="configTarget?.name ?? ''"
         @saved="onModConfigSaved"
+      />
+      <LocalModImportModal
+        v-model:show="localImportShow"
+        :instance-id="selectedInstanceId"
+        :stopped="modInstanceStatus === 'stopped'"
+        :existing-ids="installedMods.map(mod => mod.workshopId)"
+        @imported="loadInstalledMods"
       />
     </FaPageMain>
   </div>

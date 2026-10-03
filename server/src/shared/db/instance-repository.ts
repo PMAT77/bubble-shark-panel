@@ -229,6 +229,7 @@ function mapDbInstanceMod(row: {
   enabled: number
   loadOrder: number
   version: string | null
+  contentSource: string
   installStatus: string
   installError: string | null
   localUpdatedAt: string | null
@@ -249,6 +250,7 @@ function mapDbInstanceMod(row: {
     enabled: Number(row.enabled) === 1,
     loadOrder: Number(row.loadOrder),
     installStatus,
+    contentSource: row.contentSource === 'local' || row.contentSource === 'migration' ? row.contentSource : 'steam',
     installError: row.installError?.trim() || null,
     loadedCopyStale: Number(row.loadedCopyStale) === 1,
     retryCount: Math.max(0, Math.trunc(Number(row.retryCount) || 0)),
@@ -273,6 +275,7 @@ export async function listInstanceMods(instanceId: string): Promise<DbInstanceMo
       enabled: instanceMods.enabled,
       loadOrder: instanceMods.loadOrder,
       version: instanceMods.version,
+      contentSource: instanceMods.contentSource,
       installStatus: instanceMods.installStatus,
       installError: instanceMods.installError,
       localUpdatedAt: instanceMods.localUpdatedAt,
@@ -303,6 +306,7 @@ export async function getInstanceModByWorkshopId(instanceId: string, workshopId:
       enabled: instanceMods.enabled,
       loadOrder: instanceMods.loadOrder,
       version: instanceMods.version,
+      contentSource: instanceMods.contentSource,
       installStatus: instanceMods.installStatus,
       installError: instanceMods.installError,
       localUpdatedAt: instanceMods.localUpdatedAt,
@@ -333,6 +337,7 @@ export async function upsertInstanceMod(input: {
   enabled: boolean
   loadOrder: number
   version?: string | null
+  contentSource?: 'steam' | 'local' | 'migration'
   installStatus?: 'pending' | 'ready' | 'failed'
   installError?: string | null
   localUpdatedAt?: string | null
@@ -387,6 +392,7 @@ export async function upsertInstanceMod(input: {
       enabled: input.enabled ? 1 : 0,
       loadOrder: Math.max(0, Math.trunc(input.loadOrder)),
       version: input.version?.trim() || null,
+      ...(input.contentSource ? { contentSource: input.contentSource } : {}),
       installStatus,
       installError: installError ?? null,
       localUpdatedAt: localUpdatedAt ?? null,
@@ -407,6 +413,7 @@ export async function upsertInstanceMod(input: {
         enabled: input.enabled ? 1 : 0,
         loadOrder: Math.max(0, Math.trunc(input.loadOrder)),
         version: input.version?.trim() || null,
+      ...(input.contentSource ? { contentSource: input.contentSource } : {}),
         installStatus,
         ...(typeof installError !== 'undefined' ? { installError } : {}),
         ...(typeof localUpdatedAt !== 'undefined' ? { localUpdatedAt } : {}),
@@ -435,6 +442,7 @@ export async function updateInstanceModByWorkshopId(
     enabled?: boolean
     loadOrder?: number
     version?: string | null
+    contentSource?: 'steam' | 'local' | 'migration'
     installStatus?: 'pending' | 'ready' | 'failed'
     installError?: string | null
     localUpdatedAt?: string | null
@@ -453,6 +461,7 @@ export async function updateInstanceModByWorkshopId(
     enabled?: number
     loadOrder?: number
     version?: string | null
+    contentSource?: 'steam' | 'local' | 'migration'
     installStatus?: 'pending' | 'ready' | 'failed'
     installError?: string | null
     localUpdatedAt?: string | null
@@ -477,6 +486,9 @@ export async function updateInstanceModByWorkshopId(
   }
   if (typeof patch.loadOrder !== 'undefined') {
     payload.loadOrder = Math.max(0, Math.trunc(patch.loadOrder))
+  }
+  if (patch.contentSource) {
+    payload.contentSource = patch.contentSource
   }
   if (typeof patch.version !== 'undefined') {
     payload.version = patch.version?.trim() || null
@@ -775,4 +787,29 @@ export async function insertMaintenancePushLog(input: InsertMaintenancePushLogIn
     pushedAt: row.pushedAt,
   })
   return row
+}
+/** 内容事务的短数据库提交/回滚：整份 Mod 列表与端口一次提交，不跨 await。 */
+export function replaceInstanceModRecords(instanceId: string, mods: DbInstanceMod[], gamePort?: number | null): void {
+  const { sqliteDb, drizzleDb } = ensureDb()
+  const run = (query: { toSQL(): { sql: string, params: unknown[] } }) => {
+    const statement = query.toSQL()
+    sqliteDb.prepare(statement.sql).run(...statement.params as Array<string | number | null>)
+  }
+  sqliteDb.exec('SAVEPOINT gsh_content_mods')
+  try {
+    run(drizzleDb.delete(instanceMods).where(eq(instanceMods.instanceId, instanceId)))
+    for (const mod of mods) {
+      run(drizzleDb.insert(instanceMods).values({
+        ...mod, id: `${instanceId}:${mod.workshopId}`, instanceId,
+        enabled: mod.enabled ? 1 : 0, loadedCopyStale: mod.loadedCopyStale ? 1 : 0,
+        contentSource: mod.contentSource ?? 'steam',
+      }))
+    }
+    if (typeof gamePort !== 'undefined') run(drizzleDb.update(gameInstances).set({ gamePort }).where(eq(gameInstances.id, instanceId)))
+    sqliteDb.exec('RELEASE gsh_content_mods')
+  }
+  catch (error) {
+    sqliteDb.exec('ROLLBACK TO gsh_content_mods; RELEASE gsh_content_mods')
+    throw error
+  }
 }

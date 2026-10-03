@@ -19,11 +19,10 @@
 <!-- 你跑了哪些命令、手动验证了什么 -->
 
 ```bash
-pnpm run lint
-pnpm test:unit
+pnpm run release:check
 ```
 
-- [ ] 已在本地通过上述检查
+- [ ] 已在本地通过上述检查，跳过项已在测试说明中列明
 - [ ] 用户可见变更已写入 CHANGELOG.md `[Unreleased]`
 
 ## 截图 / 日志（如适用）

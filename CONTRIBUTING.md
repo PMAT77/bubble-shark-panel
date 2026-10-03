@@ -34,19 +34,16 @@ git checkout -b feat/your-topic
 # 或 fix/your-topic
 ```
 
-### 2. 本地检查（与 CI 一致）
+### 2. 本地检查
 
 ```bash
 pnpm install
-pnpm run lint
-pnpm test:unit
+pnpm run release:check
 ```
 
-涉及前端构建时额外执行：
+本地、普通 CI 与 tag CI 共用质量门禁，包含前后端构建。后端迭代可单独运行 `pnpm test:server`。
 
-```bash
-pnpm run build
-```
+改动数据库 schema 后运行 `pnpm run db:generate`，将生成的迁移一并提交；CI 另行检查迁移漂移。安装器检查在本地缺少 bash 时显示跳过，在 CI 中必须执行。
 
 ### 3. 变更范围
 
@@ -61,7 +58,7 @@ Conventional Commits，中文 subject 示例：
 ```text
 fix(auth): 强制改密流程补全路由注册
 docs(release): 添加版本发布说明
-ci: PR 门禁执行 lint 与 test:unit
+chore(ci): 统一本地与发布质量门禁
 ```
 
 ### 5. CHANGELOG

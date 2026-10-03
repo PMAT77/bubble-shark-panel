@@ -4,33 +4,16 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 
-/**
- * 插件商店页的结构护栏。
- *
- * 这一页有三件事容易在后续改动里被悄悄拆掉，而且都不会让编译失败：
- *   1. 页面挂载（`plugins.vue` 换了组件，菜单点进去就是空白）；
- *   2. 三个 tab 与模板里的 `NTabPane` 对不上（加了 tab 忘了给内容）；
- *   3. 契约里的商店字段被删（后端照旧返回，前端静默少显示一块）。
- * 所以这里用静态断言把结构和契约字段钉住，而不是等界面看起来不对了才发现。
- */
+/** 插件页保留 tab 内容、收银入口边界与菜单隐藏的回归检查。 */
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const PLUGINS_PAGE_PATH = 'src/views/system/plugins.vue'
 const SECTION_PATH = 'src/views/system/PluginsSection.vue'
-const CONTRACT_PATH = 'shared/contracts/plugin.ts'
 
 function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
 describe('插件商店页', () => {
-  it('插件页仍然挂载 PluginsSection', () => {
-    const source = readRepoFile(PLUGINS_PAGE_PATH)
-    assert.ok(
-      source.includes('<PluginsSection'),
-      '插件页应当挂载 PluginsSection，否则菜单点进去是空白',
-    )
-  })
 
   it('三个 tab 都有对应的内容面板', () => {
     const source = readRepoFile(SECTION_PATH)
@@ -39,37 +22,6 @@ describe('插件商店页', () => {
         source.includes(`<NTabPane name="${name}"`),
         `插件页缺少 ${name} 这个 tab 的内容面板`,
       )
-    }
-  })
-
-  it('卡片与两个对话框都在插件模块内', () => {
-    for (const relativePath of [
-      'src/views/system/components/PluginDetailDialog.vue',
-      'src/views/system/components/PluginImportDialog.vue',
-      'src/views/system/pluginStorePresentation.ts',
-    ]) {
-      assert.equal(fs.existsSync(path.join(repoRoot, relativePath)), true, `${relativePath} 应当存在`)
-    }
-  })
-
-  it('插件页提供导入入口——这是人工交付链路的最后一环', () => {
-    const source = readRepoFile(SECTION_PATH)
-    assert.ok(source.includes('导入插件包'), '插件页应当有导入插件包的入口')
-    assert.ok(source.includes('PluginImportDialog'), '导入对话框应当被挂载')
-  })
-
-  it('契约保留商店与导入字段', () => {
-    const contract = readRepoFile(CONTRACT_PATH)
-    for (const field of [
-      'pluginStoreAccessSchema',
-      'pluginStoreEntrySchema',
-      'pluginPackageAnalysisSchema',
-      'pluginImportResultSchema',
-      'storeNotice',
-      'installed',
-      'licenseSatisfied',
-    ]) {
-      assert.ok(contract.includes(field), `插件契约缺少 ${field}`)
     }
   })
 

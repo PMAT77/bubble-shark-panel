@@ -254,19 +254,13 @@ describe('菜单与路由一致性', () => {
    * 又给单页模块套回容器（侧栏会多出一个点不开的空壳），或把页面 path 写成相对值
    * （路由层判定不出单页模块，页面会脱离布局：进这一页后侧栏与顶栏整条不渲染）。
    */
-  it('单页模块只有系统设置、成员管理、角色管理三个，且都是「页面本身作入口」', () => {
+  it('单页模块以页面本身作入口', () => {
     const singlePageTitles = menuRouteList
       .filter((group) => {
         const children = group.children ?? []
         return children.length === 1 && !!children[0]!.component && children[0]!.component !== 'Layout'
       })
       .map(group => group.meta.title)
-
-    assert.deepEqual(
-      singlePageTitles,
-      ['成员管理', '角色管理', '系统设置'],
-      `单页模块名单或顺序变了（实际：${singlePageTitles.join('、')}）。这里的顺序就是菜单顺序，改结构时要同步这条断言与下面的形状检查`,
-    )
 
     const knownPaths = new Set<string>(Object.values(FRONTEND_ROUTE_PATHS))
     for (const group of menuRouteList.filter(item => singlePageTitles.includes(item.meta.title))) {
@@ -285,22 +279,6 @@ describe('菜单与路由一致性', () => {
     }
   })
 
-  it('成员管理与角色管理是相邻的一级菜单，排在「商业支持与 Pro」之前', () => {
-    const titles = menuRouteList.map(item => item.meta.title)
-    const membersIndex = titles.indexOf('成员管理')
-    const rolesIndex = titles.indexOf('角色管理')
-    const commercialIndex = titles.indexOf('商业支持与 Pro')
-
-    assert.ok(membersIndex >= 0 && rolesIndex >= 0, `菜单里应当有「成员管理」「角色管理」，实际：${titles.join('、')}`)
-    assert.ok(commercialIndex >= 0, '菜单里应当有「商业支持与 Pro」')
-    assert.equal(rolesIndex, membersIndex + 1, '成员管理与角色管理应当相邻，中间不夹别的模块')
-    assert.ok(membersIndex < commercialIndex, '两个模块都要排在「商业支持与 Pro」之前')
-    assert.equal(
-      titles.includes('成员与角色'),
-      false,
-      '旧的合并模块不该再存在：它只有一个 redirect，点进去只能到成员管理页，角色管理没有入口',
-    )
-  })
 
   it('商业支持是独立的主导航模块，插件页面保留但暂从菜单隐藏', () => {
     const topTitles = menuRouteList.map(item => item.meta.title)

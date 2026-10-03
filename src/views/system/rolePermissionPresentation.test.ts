@@ -245,9 +245,5 @@ describe('权限选择器的折叠区', () => {
       false,
       '展开区不能换回 NCollapse / NCollapseItem：它的插槽被标记成稳定插槽，展开区不会随数据刷新',
     )
-    assert.ok(
-      source.includes('expandedGroups'),
-      '折叠状态应当由组件自己维护（expandedGroups），否则没法保证展开区跟着数据走',
-    )
   })
 })

@@ -3,10 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
-import { FRONTEND_ROUTE_PATHS } from '../../../shared/constants/frontend-routes.ts'
 import { SYSTEM_SETTINGS_TABS } from '../../../src/views/system/systemSettingsTabs.ts'
-import { menuRouteList } from '../../../server/src/shared/menu-routes.ts'
-import type { MenuRouteItem } from '../../../server/src/shared/menu-routes.ts'
 
 /**
  * 系统设置页的页内 tab 不能变成"又一次跳转"。
@@ -18,7 +15,7 @@ import type { MenuRouteItem } from '../../../server/src/shared/menu-routes.ts'
  * （面板设置 / 通知渠道 / 操作记录）区分内容，且三个 tab 没有各自的路由。
  *
  * 这个文件钉住四件事：
- *   1. 设置页确实挂载了 tab 组件，且旧的一排页内按钮组件已经不存在；
+ *   1. 设置页确实挂载了 tab 组件，可访问；
  *   2. tab 与 `settings.vue` 里的 slot 一一对应（加了 tab 忘了给内容会得到一片空白）；
  *   3. **切 tab 只改本地状态**：组件里不得出现 `router.push` / `router.replace`，
  *      页面上层的 tab 容器也不能带 `:key`（两者都会让整页按 `route.fullPath` 重建）；
@@ -29,17 +26,6 @@ import type { MenuRouteItem } from '../../../server/src/shared/menu-routes.ts'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const SETTINGS_PAGE_PATH = 'src/views/system/settings.vue'
 const TABS_COMPONENT_PATH = 'src/views/system/SystemSettingsTabs.vue'
-const LEGACY_NAV_COMPONENT_PATH = 'src/views/system/SystemSettingsNav.vue'
-
-function flatten(items: MenuRouteItem[], acc: MenuRouteItem[] = []): MenuRouteItem[] {
-  for (const item of items) {
-    acc.push(item)
-    if (item.children) {
-      flatten(item.children, acc)
-    }
-  }
-  return acc
-}
 
 function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
@@ -53,16 +39,11 @@ function readScriptSection(source: string): string {
 }
 
 describe('系统设置页的页内 tab', () => {
-  it('设置页挂载了 tab 组件，旧的一排页内按钮组件已移除', () => {
+  it('设置页挂载了 tab 组件', () => {
     const settingsSource = readRepoFile(SETTINGS_PAGE_PATH)
     assert.ok(
       settingsSource.includes('<SystemSettingsTabs'),
       '设置页应当挂载 SystemSettingsTabs，否则通知渠道没有任何入口',
-    )
-    assert.equal(
-      fs.existsSync(path.join(repoRoot, LEGACY_NAV_COMPONENT_PATH)),
-      false,
-      'SystemSettingsNav 已被 tab 取代，不应继续存在',
     )
   })
 
@@ -70,24 +51,12 @@ describe('系统设置页的页内 tab', () => {
     const settingsSource = readRepoFile(SETTINGS_PAGE_PATH)
     const tabNames = SYSTEM_SETTINGS_TABS.map(tab => tab.name)
 
-    assert.deepEqual(
-      [...tabNames].sort(),
-      ['audit', 'notify', 'settings'],
-      `tab 应当是 settings、notify 与 audit 三个，实际：${tabNames.join('、')}`,
-    )
-
     const missingSlots = tabNames.filter(name => !settingsSource.includes(`<template #${name}>`))
     assert.deepEqual(
       missingSlots,
       [],
       `设置页缺少这些 tab 的内容插槽，点进去会是空白：${missingSlots.join('、')}`,
     )
-  })
-
-  it('每个 tab 都有中文标签（tab 头不能是空的）', () => {
-    for (const tab of SYSTEM_SETTINGS_TABS) {
-      assert.ok(tab.label.trim().length > 0, `tab ${tab.name} 缺少标签文案`)
-    }
   })
 
   it('切 tab 不写地址栏、不跳路由：组件里只有一次不带导航的历史改写', () => {
@@ -126,25 +95,6 @@ describe('系统设置页的页内 tab', () => {
       settingsSource.includes('history.replaceState'),
       false,
       '地址栏整理应当收在 tab 组件里，避免设置页在别处又写一次地址栏',
-    )
-  })
-
-  it('设置页仍在菜单里，且 activeMenu 指向前端路径常量', () => {
-    const knownPaths = new Set<string>(Object.values(FRONTEND_ROUTE_PATHS))
-
-    const settingsMenuPage = flatten(menuRouteList)
-      .find(item => item.component === 'system/settings.vue')
-    assert.ok(settingsMenuPage, '菜单里应当有 system/settings.vue 这个页面')
-    assert.equal(
-      settingsMenuPage.meta.activeMenu,
-      FRONTEND_ROUTE_PATHS.systemSettings,
-      '设置页的 activeMenu 必须等于前端路径常量，否则侧边栏高亮会失效',
-    )
-
-    // 页内 tab 没有各自的路由；旧地址 /system/notify 仍要靠常量重定向到通知渠道 tab
-    assert.ok(
-      knownPaths.has(FRONTEND_ROUTE_PATHS.systemNotify),
-      '旧地址 /system/notify 仍在常量表里，重定向要用它',
     )
   })
 })

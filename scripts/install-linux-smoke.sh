@@ -666,15 +666,17 @@ STUB_MEM_MB='3915'
 ensure_small_host_swap
 [[ "${AUTO_SWAP_STATE}" == 'created' ]]
 [[ -e "${SWAP_FILE}" ]]
-if ! grep -Fq "${SWAP_FILE} none swap sw 0 0" "${SWAP_FSTAB}"; then
+if ! grep -Fxq "${SWAP_FILE} none swap sw 0 0" "${SWAP_FSTAB}"; then
   printf 'swapfile entry missing from fstab: %s\n' "$(cat "${SWAP_FSTAB}")" >&2
   exit 1
 fi
 # fstab 末尾若没有换行，新条目会被拼到上一行，第 6 个字段随之非法（历史上真炸过一次）
-grep -Fq '/dev/vda1 / ext4 defaults 0 1' "${SWAP_FSTAB}" || {
+grep -Fxq '/dev/vda1 / ext4 defaults 0 1' "${SWAP_FSTAB}" || {
   printf 'fstab head line was corrupted\n' >&2
   exit 1
 }
+[[ "$(wc -l < "${SWAP_FSTAB}")" -eq 2 ]]
+[[ "$(tail -c 1 "${SWAP_FSTAB}" | od -An -tu1 | tr -d '[:space:]')" == '10' ]]
 grep -Fq 'vm.swappiness = 20' "${SWAP_SYSCTL_DIR}/99-game-server-hub.conf"
 
 # 3) 内存档位够用：不创建 swapfile

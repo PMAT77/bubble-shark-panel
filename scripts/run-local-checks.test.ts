@@ -64,4 +64,7 @@ if (process.env.GSH_CHECK_FIXTURE_SKIP === ${JSON.stringify(entry)}) console.log
   assert.equal(skipped.status, 0, skipped.stderr)
   assert.match(skipped.stdout, /installer → SKIP/)
   assert.equal(run(['installer'], { GSH_SKIP_INSTALLER_SMOKE: '1', CI: 'true' }).status, 1)
+  const noBash = { PATH: root, GSH_BASH: '', ProgramFiles: '', 'ProgramFiles(x86)': '', LOCALAPPDATA: '' }
+  assert.match(run(['installer'], noBash).stdout, /installer → SKIP/)
+  assert.equal(run(['installer'], { ...noBash, CI: 'true' }).status, 1)
 })

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { PermissionKey } from '../../../../../shared/constants/permissions'
-import type { DataTableColumns, FormInst, FormRules } from 'naive-ui'
+import type { DataTableColumns, DataTableRowKey, FormInst, FormRules } from 'naive-ui'
 import type { CreateInstancePayload, InstallableGameItem, InstanceItem, InstanceStatus, InstanceStatusCounts, InstanceUpdateCheckJobPayload } from '@/api/modules/instance'
 import type { NodeListItem } from '@/api/modules/node'
 import type { NotificationReactive } from 'naive-ui'
 import type { DropdownOption } from 'naive-ui'
 import type { DirectoryItem } from '@/api/modules/system'
-import { NButton, NDropdown, NProgress, NStatistic, NTag, NTooltip, useNotification } from 'naive-ui'
+import { NButton, NButtonGroup, NCheckbox, NDropdown, NProgress, NStatistic, NTag, NTooltip, useNotification } from 'naive-ui'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
 import { statusBadgeClass } from '@/constants/statusDictionary'
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRefs, watch } from 'vue'
@@ -40,7 +40,7 @@ import {
   shouldShowPostCreateInstallGuide,
 } from '../instanceInstallGuide'
 import {
-  canRepairInstance,
+  canForceUpdateInstance,
   canUpdateInstance,
   getUpdateInstanceButtonTitle,
   useInstanceLifecycleActions,
@@ -75,6 +75,37 @@ const UPDATE_CHECK_POLL_MS = 2000
 const UPDATE_CHECK_POLL_MAX_ATTEMPTS = 45
 const createLoading = ref(false)
 const instances = ref<InstanceItem[]>([])
+const checkedInstanceIds = ref<DataTableRowKey[]>([])
+const selectedInstances = computed(() => instances.value.filter(row => checkedInstanceIds.value.includes(row.id)))
+const forceUpdateDisabledReason = computed(() => {
+  if (forceUpdateLoading.value) return '正在提交强制更新'
+  if (updateCheckLoading.value) return '正在检查更新'
+  if (!selectedInstances.value.length) return '请先勾选实例'
+  if (selectedInstances.value.some(row => !canForceUpdateInstance(row))) return '请先停止所选实例'
+  if (selectedInstances.value.some(row => isInstanceActionRunning(row.id))) return '所选实例正在执行操作'
+  return ''
+})
+const updateMenuOptions = computed<DropdownOption[]>(() => [{
+  key: 'force-update',
+  label: !selectedInstances.value.length
+    ? '强制更新所选实例'
+    : forceUpdateDisabledReason.value
+      ? `强制更新所选实例（${forceUpdateDisabledReason.value}）`
+      : `强制更新所选实例（${selectedInstances.value.length}）`,
+  disabled: Boolean(forceUpdateDisabledReason.value) || !steamcmdInstalled.value,
+}])
+
+function selectUpdateMenu(key: string) {
+  if (key === 'force-update' && !forceUpdateDisabledReason.value && steamcmdInstalled.value) {
+    confirmForceUpdateInstances([...selectedInstances.value])
+  }
+}
+
+function toggleInstanceSelection(id: string, checked: boolean) {
+  checkedInstanceIds.value = checked
+    ? [...new Set([...checkedInstanceIds.value, id])]
+    : checkedInstanceIds.value.filter(key => key !== id)
+}
 
 /** 实例生命周期操作：列表页与详情页共用同一套确认/引导/端口冲突处理逻辑 */
 const {
@@ -82,6 +113,8 @@ const {
   isInstanceActionRunning,
   confirmStartInstance,
   confirmUpdateInstance,
+  confirmForceUpdateInstances,
+  forceUpdateLoading,
   confirmDangerousInstanceAction,
 } = useInstanceLifecycleActions({
   refresh: fetchInstances,
@@ -243,6 +276,7 @@ function applyStatusFilter(filter: 'all' | InstanceStatus) {
 
 const instanceColumns = computed<DataTableColumns<InstanceItem>>(() => {
   return [
+    ...(hasPermission('instance:update') ? [{ type: 'selection' as const }] : []),
     {
       title: '实例名称',
       key: 'name',
@@ -255,7 +289,7 @@ const instanceColumns = computed<DataTableColumns<InstanceItem>>(() => {
         }, row.name)]
         if (row.updateAvailable) {
           children.push(
-            h(NTag, { type: 'warning', size: 'small', round: true }, { default: () => '有新版本' }),
+            h(NTag, { type: 'warning', size: 'small', round: true }, { default: () => '需要更新' }),
           )
         }
         return h('div', { class: 'flex flex-wrap items-center gap-2' }, children)
@@ -377,7 +411,6 @@ const INSTANCE_ACTION_PERMISSIONS: Record<InstanceRowAction['key'], PermissionKe
   detail: 'instance:read',
   console: 'instance.console:read',
   update: 'instance:update',
-  repair: 'instance:update',
   start: 'instance:lifecycle',
   stop: 'instance:lifecycle',
   restart: 'instance:lifecycle',
@@ -411,21 +444,12 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
     },
     {
       key: 'update',
-      label: installFailed ? '修复安装' : '更新服务端',
+      label: installFailed ? '修复安装' : '更新',
       menuOnly: true,
       loading: isActionLoading(row.id, 'update'),
       disabled: instanceActionRunning || !canUpdateInstance(row),
       title: getUpdateInstanceButtonTitle(row),
       onClick: () => confirmUpdateInstance(row),
-    },
-    {
-      key: 'repair',
-      label: '校验并更新游戏文件',
-      menuOnly: true,
-      loading: isActionLoading(row.id, 'update'),
-      disabled: instanceActionRunning || !canRepairInstance(row),
-      title: canRepairInstance(row) ? '校验并更新游戏文件' : '请先停止实例',
-      onClick: () => confirmUpdateInstance(row, true),
     },
     {
       key: 'start',
@@ -1031,8 +1055,8 @@ function syncInstanceUpdateNotification(pending: InstanceItem[]) {
   dismissInstanceUpdateNotification()
   instanceUpdateNotifySignature.value = signature
   instanceUpdateNotificationRef.value = notification.warning({
-    title: '发现游戏服务端新版本',
-    content: `${names} 在 Steam 上有新版本。请先停止实例，使用「更新服务端」拉取最新文件后再启动。`,
+    title: '游戏服务端需要更新',
+    content: `${names} 的版本或游戏文件需要更新。请先停止实例，使用「更多 → 更新」更新后再启动。`,
     duration: 0,
     closable: true,
     onClose: () => {
@@ -1103,6 +1127,7 @@ async function fetchInstances(options?: { silent?: boolean }) {
     // 接口异常时 data 可能不是数组：这里兜一次，否则下游 .filter/.some 会抛错，
     // 而页面组件渲染抛错会让整个内容区停止更新（只能刷新恢复）
     instances.value = Array.isArray(res.data) ? res.data : []
+    checkedInstanceIds.value = checkedInstanceIds.value.filter(id => instances.value.some(row => row.id === id))
     syncInstallTerminalNotifications(instances.value)
     syncRuntimeObservabilityPolling()
   }
@@ -1127,7 +1152,7 @@ async function checkAllInstanceUpdates() {
     return
   }
   updateCheckLoading.value = true
-  faToast.info('正在检查更新，约需半分钟', {
+  faToast.info('正在检查更新…', {
     duration: 6000,
   })
   try {
@@ -1273,20 +1298,34 @@ onBeforeUnmount(() => {
         <template #actions>
           <!-- 检查更新只是查询，但后端这条接口也要 instance:update（结果只对"能更新的人"有意义） -->
           <AppAuth value="instance:update">
-            <NButton
-              class="flex-1 min-w-0 md:flex-none"
-              type="warning"
-              strong
-              secondary
-              :loading="updateCheckLoading"
-            :disabled="!steamcmdInstalled || instances.length === 0"
-            @click="checkAllInstanceUpdates"
-          >
-            <template #icon>
-              <FaIcon name="i-ri:refresh-line" />
-            </template>
-              检查更新
-            </NButton>
+            <NButtonGroup class="flex-1 min-w-0 md:flex-none">
+              <NButton
+                class="flex-1"
+                type="warning"
+                strong
+                secondary
+                :loading="updateCheckLoading"
+                :disabled="!steamcmdInstalled || instances.length === 0 || forceUpdateLoading"
+                @click="checkAllInstanceUpdates"
+              >
+                <template #icon>
+                  <FaIcon name="i-ri:refresh-line" />
+                </template>
+                检查更新
+              </NButton>
+              <NDropdown trigger="click" :options="updateMenuOptions" @select="selectUpdateMenu">
+                <NButton
+                  type="warning"
+                  secondary
+                  aria-label="更新操作菜单"
+                  :loading="forceUpdateLoading"
+                  :disabled="!steamcmdInstalled || instances.length === 0 || updateCheckLoading || forceUpdateLoading"
+                >
+                  <template #icon><FaIcon name="i-ri:arrow-down-s-line" /></template>
+                </NButton>
+              </NDropdown>
+            </NButtonGroup>
+            <span v-if="checkedInstanceIds.length" class="self-center text-xs text-muted-foreground">已选 {{ checkedInstanceIds.length }} 个实例</span>
           </AppAuth>
           <AppAuth value="instance:create">
             <NButton class="flex-1 min-w-0 md:flex-none" type="primary" @click="openCreateModal">
@@ -1321,6 +1360,13 @@ onBeforeUnmount(() => {
           class="rounded-lg border border-border bg-card p-4 space-y-3"
         >
           <div class="flex items-start justify-between gap-3">
+            <AppAuth value="instance:update">
+              <NCheckbox
+                :checked="checkedInstanceIds.includes(instance.id)"
+                :aria-label="`选择实例 ${instance.name}`"
+                @update:checked="checked => toggleInstanceSelection(instance.id, checked)"
+              />
+            </AppAuth>
             <div class="min-w-0">
               <h2 class="truncate font-medium">
                 {{ instance.name }}
@@ -1386,6 +1432,7 @@ onBeforeUnmount(() => {
       </div>
       <div v-else class="min-h-80 overflow-x-auto">
         <NDataTable
+          v-model:checked-row-keys="checkedInstanceIds"
           :bordered="false"
           :single-line="false"
           size="small"

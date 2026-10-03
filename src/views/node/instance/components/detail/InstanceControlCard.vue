@@ -18,7 +18,6 @@ import {
   shouldShowInstallDetail,
 } from '../../instanceDisplay'
 import {
-  canRepairInstance,
   canUpdateInstance,
   getUpdateInstanceButtonTitle,
   useInstanceLifecycleActions,
@@ -250,7 +249,7 @@ function goConsole() {
           {{ state.label }}
         </span>
         <span v-if="instance.updateAvailable" class="text-xs text-amber-600 dark:text-amber-400">
-          服务端有新版本
+          服务端需要更新
         </span>
         <span v-else-if="instance.updateCheckedAt && (!instance.localBuildId || !instance.remoteBuildId)" class="text-xs text-amber-600 dark:text-amber-400">
           无法判断服务端版本，请重新检查更新
@@ -356,16 +355,6 @@ function goConsole() {
           </template>
           {{ getUpdateInstanceButtonTitle(instance) }}
         </NTooltip>
-        <NButton
-          v-if="hasPermission('instance:update')"
-          size="small"
-          secondary
-          :loading="isActionLoading(instance.id, 'update')"
-          :disabled="actionRunning || !canRepairInstance(instance)"
-          @click="confirmUpdateInstance(instance, true)"
-        >
-          校验并更新游戏文件
-        </NButton>
         <NButton size="small" secondary :disabled="isInstalling" @click="goConsole" v-if="hasPermission('instance.console:read')">
           控制台
         </NButton>

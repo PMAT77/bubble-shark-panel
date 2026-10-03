@@ -186,7 +186,7 @@ export function canOpenInstallLog(instance: InstanceItem) {
 export function getInstallLogSourceLabel(source: InstanceInstallLogSource | undefined) {
   switch (source) {
     case 'install_log':
-      return '完整 SteamCMD 输出'
+      return 'SteamCMD'
     case 'status_summary':
       return '最近状态摘要（非完整日志）'
     case 'empty':

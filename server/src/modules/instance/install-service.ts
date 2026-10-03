@@ -39,7 +39,7 @@ import { ensureDstLayout } from '../../infra/game-adapter/dst/cluster-config'
 import { cleanupIncompleteSteamcmdInstallDir, prepareInstallPathForSteamcmd } from './install-path'
 import { ensureGameRuntimeImageReady } from '../../infra/game-adapter/runtime-image'
 import { refreshInstanceUpdateStatusAfterInstall, refreshInstanceUpdateStatusAfterSeed, resolveSteamcmdCommandForUpdateCheck } from './update-check'
-import { fetchRemoteBuildId, readLocalBuildId } from '../../shared/steam-update/build-id'
+import { checkGameUpdateAvailable } from '../../shared/steam-update/build-id'
 import { tryInstallGameDepotFromSeed, type InstallSeedDonor } from './install-seed'
 
 export interface InstanceInstallJobInput {
@@ -380,12 +380,10 @@ async function runInstallPipeline(
   const recipientReadiness = diagnoseDstInstallReadiness(input.installPath)
   const recipientAlreadyReady = recipientReadiness.ready
   if (recipientAlreadyReady && input.appId.trim() === DST_APP_ID && !input.forceSteamcmd) {
-    const localBuildId = readLocalBuildId(input.installPath, input.appId)
-    const remoteBuildId = await fetchRemoteBuildId(input.steamcmdCommand, input.appId, { force: true })
-    const skipSteam = shouldSkipSteamcmdForReadyInstall({
-      remoteBuildId,
-      localBuildId,
+    const check = await checkGameUpdateAvailable({
+      installPath: input.installPath, appId: input.appId, steamcmdCommand: input.steamcmdCommand, forceRemote: true,
     })
+    const skipSteam = !check.updateAvailable && !check.message && shouldSkipSteamcmdForReadyInstall(check)
     if (skipSteam) {
       logWriter.appendLine('检测到游戏文件已完整且版本一致，跳过 Steam 下载')
       await finalizeSuccessfulInstall(input, logWriter, 'anonymous')

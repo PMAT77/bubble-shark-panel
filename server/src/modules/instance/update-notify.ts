@@ -25,7 +25,7 @@ export function maybeEmitUpdateAvailableEvent(
     type: 'update_available',
     subjectId: previous.id,
     subjectName: name,
-    message: '实例「' + name + '」检测到 DST 新版本（本地 ' + (result.localBuildId ?? '未知') + ' → 远端 ' + (result.remoteBuildId ?? '未知') + '）',
+    message: '实例「' + name + '」的服务端版本或游戏文件需要更新（本地 ' + (result.localBuildId ?? '未知') + '，正式分支 ' + (result.remoteBuildId ?? '未知') + '）',
     severity: 'info',
     at: new Date().toISOString(),
   })

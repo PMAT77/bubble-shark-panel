@@ -43,9 +43,15 @@ let updates = 0
 
 function metadata(publicBuild = '25643504') {
   return `"343050" {\n"depots" {\n${Array.from({ length: 120 }, (_, i) => `"depot${i}" { "manifests" { "public" { "gid" "1" } } }`).join('\n')}
+"343052" { "config" { "oslist" "linux" } "manifests" { "public" { "gid" "5351080740317260085" } } }
 "branches" { "public" { "buildid" "${publicBuild}" }
 "beforemacoschanges" { "buildid" "12576213" }
 "updatebeta" { "buildid" "25540104" } } } }`
+}
+
+function localMetadata(build: string, gid = '5351080740317260085', state = '4') {
+  return `"AppState" { "appid" "343050" "StateFlags" "${state}" "buildid" "${build}"
+"InstalledDepots" { "343052" { "manifest" "${gid}" } } }\n`
 }
 
 function framed(text: string) {
@@ -64,7 +70,7 @@ async function instance(build = '25540104', grant = true) {
   fs.writeFileSync(path.join(installPath, 'bin64', 'dontstarve_dedicated_server_nullrenderer_x64'), 'binary')
   fs.writeFileSync(path.join(installPath, 'data', 'resource'), 'resource')
   fs.writeFileSync(path.join(installPath, 'version.txt'), '747465\n')
-  fs.writeFileSync(path.join(installPath, 'steamapps', 'appmanifest_343050.acf'), `"buildid" "${build}"\n`)
+  fs.writeFileSync(path.join(installPath, 'steamapps', 'appmanifest_343050.acf'), localMetadata(build))
   const created = await createGameInstance({ nodeId: 'local-node', name: '版本回归', gameCode: '343050', status: 'stopped', installPath })
   const admin = await findUserByAccount('superadmin')
   if (grant) {
@@ -184,11 +190,11 @@ describe('game update regression', () => {
     const current = await instance()
     const manifest = path.join(current.installPath!, 'steamapps', 'appmanifest_343050.acf')
     await refreshInstanceUpdateStatusAfterInstall(current.id, current.installPath!, '343050', '')
-    assert.equal(fs.readFileSync(manifest, 'utf8'), '"buildid" "25540104"\n')
+    assert.equal(fs.readFileSync(manifest, 'utf8'), localMetadata('25540104'))
     assert.equal((await getGameInstanceById(current.id))?.updateAvailable, true)
     await updateGameInstanceRuntime(current.id, { status: 'installing' })
     await reconcileStaleInstallingInstances(app)
-    assert.equal(fs.readFileSync(manifest, 'utf8'), '"buildid" "25540104"\n')
+    assert.equal(fs.readFileSync(manifest, 'utf8'), localMetadata('25540104'))
     assert.equal((await getGameInstanceById(current.id))?.updateAvailable, true)
     fs.rmSync(manifest)
     await refreshInstanceUpdateStatusAfterSeed(current.id, current.installPath!, '343050', {
@@ -225,6 +231,53 @@ describe('game update regression', () => {
     assert.equal(queries, count + 1)
     queryOutput = metadata()
     clearRemoteBuildCache()
+  })
+
+  it('equal Build IDs with old depot contents are detected and ordinary update is accepted', async () => {
+    const current = await instance('25643504')
+    const manifest = path.join(current.installPath!, 'steamapps', 'appmanifest_343050.acf')
+    fs.writeFileSync(manifest, localMetadata('25643504', '6231402285857230600'))
+    await updateGameInstanceRuntime(current.id, { localBuildId: '25643504', remoteBuildId: '25643504', updateAvailable: false })
+    const result = await checkInstancesForUpdates({ steamcmdCommand: '', instanceIds: [current.id], force: true })
+    assert.equal(result.items[0].localBuildId, result.items[0].remoteBuildId)
+    assert.equal(result.items[0].updateAvailable, true)
+    assert.match(result.items[0].message ?? '', /内容清单.*不一致/)
+    const count = updates
+    const response = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id } })
+    assert.equal(JSON.parse(response.body).error, '', response.body)
+    await waitForInstall(current.id)
+    assert.equal(updates, count + 1)
+  })
+
+  it('only complete and matching content metadata is latest; incomplete records remain unknown', async () => {
+    const current = await instance('25643504')
+    const manifest = path.join(current.installPath!, 'steamapps', 'appmanifest_343050.acf')
+    const check = async () => (await checkInstancesForUpdates({ steamcmdCommand: '', instanceIds: [current.id], force: true })).items[0]
+    const latest = await check()
+    assert.equal(latest.updateAvailable, false)
+    assert.equal(latest.localBuildId, latest.remoteBuildId)
+    assert.equal(latest.message, undefined)
+    for (const content of ['"buildid" "25643504"', localMetadata('25643504').slice(0, -3),
+      localMetadata('25643504').replace('"343050"', '"322330"'),
+      localMetadata('25643504').replace('5351080740317260085', 'unknown'),
+      `${localMetadata('25643504')} "AppState" { "buildid" "1" }`]) {
+      fs.writeFileSync(manifest, content)
+      const result = await check()
+      assert.equal(result.localBuildId, null)
+      assert.ok(result.message)
+    }
+    fs.writeFileSync(manifest, localMetadata('25643504', '5351080740317260085', '6'))
+    assert.equal((await check()).updateAvailable, true)
+    fs.writeFileSync(manifest, localMetadata('25643504'))
+    fs.rmSync(path.join(current.installPath!, 'bin64'), { recursive: true })
+    assert.equal((await check()).updateAvailable, true)
+    fs.mkdirSync(path.join(current.installPath!, 'bin64'))
+    fs.writeFileSync(path.join(current.installPath!, 'bin64', 'dontstarve_dedicated_server_nullrenderer_x64'), 'binary')
+    queryOutput = metadata().replace('"343052" {', '"343054" { "config" { "oslist" "linux" } "manifests" { "public" { "gid" "1234" } } } "343052" {')
+    assert.equal((await check()).updateAvailable, true, 'missing Linux depot cannot be latest')
+    queryOutput = metadata().replace('"gid" "5351080740317260085"', '"gid" "unknown"')
+    assert.equal((await check()).localBuildId, null, 'incomplete remote content metadata cannot be latest')
+    queryOutput = metadata()
   })
 
   it('ordinary updates refresh stale equal database builds and accepted updates execute SteamCMD', async () => {

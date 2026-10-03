@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
-import { buildInstanceUpdateCheckNotice, canRepairInstance, isInstanceUpToDate } from './instanceUpdatePresentation'
+import { buildInstanceUpdateCheckNotice, canForceUpdateInstance, isInstanceUpToDate } from './instanceUpdatePresentation'
 
 const latest = { id: 'one', name: 'one', localBuildId: '25643504', remoteBuildId: '25643504',
   updateCheckedAt: '2026-10-03T00:00:00Z', updateAvailable: false }
@@ -17,13 +17,17 @@ it('distinguishes unknown, latest, available, mixed and empty update results', (
   assert.equal(isInstanceUpToDate(unknown), false)
   assert.equal(isInstanceUpToDate({ ...latest, localBuildId: '25540104' }), false)
   assert.equal(isInstanceUpToDate(latest), true)
+  const mismatchedContent = { ...latest, updateAvailable: true }
+  assert.equal(isInstanceUpToDate(mismatchedContent), false)
+  assert.equal(buildInstanceUpdateCheckNotice([mismatchedContent]).tone, 'info')
+  assert.match(buildInstanceUpdateCheckNotice([mismatchedContent]).message, /1 个实例可更新/)
 })
 
 it('offers file recovery only when stopped or in error', () => {
   for (const status of ['stopped', 'error'] as const) {
-    assert.equal(canRepairInstance({ status }), true)
+    assert.equal(canForceUpdateInstance({ status }), true)
   }
   for (const status of ['running', 'installing', 'pending_install'] as const) {
-    assert.equal(canRepairInstance({ status }), false)
+    assert.equal(canForceUpdateInstance({ status }), false)
   }
 })

@@ -5,7 +5,7 @@ export function isInstanceUpToDate(instance: Pick<InstanceItem, 'updateCheckedAt
     && instance.localBuildId === instance.remoteBuildId && !instance.updateAvailable)
 }
 
-export function canRepairInstance(instance: Pick<InstanceItem, 'status'>) {
+export function canForceUpdateInstance(instance: Pick<InstanceItem, 'status'>) {
   return instance.status === 'stopped' || instance.status === 'error'
 }
 
@@ -18,7 +18,7 @@ export function buildInstanceUpdateCheckNotice(items: InstanceUpdateStatusItem[]
   }
   const unknown = items.filter(item => !item.localBuildId || !item.remoteBuildId).length
   const available = items.filter(item => item.localBuildId && item.remoteBuildId
-    && item.localBuildId !== item.remoteBuildId).length
+    && (item.updateAvailable || item.localBuildId !== item.remoteBuildId)).length
   if (unknown) {
     return { tone: 'warning', message: `有 ${available} 个实例可更新，${unknown} 个实例无法判断版本` }
   }

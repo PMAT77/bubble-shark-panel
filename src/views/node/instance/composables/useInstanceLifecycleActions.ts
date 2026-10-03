@@ -15,8 +15,8 @@ import {
   type InstancePortConflictAction,
 } from '@/utils/instancePortConflict'
 import { getInstanceState } from '../instanceDisplay'
-import { canRepairInstance, isInstanceUpToDate } from '../instanceUpdatePresentation'
-export { canRepairInstance, isInstanceUpToDate } from '../instanceUpdatePresentation'
+import { canForceUpdateInstance, isInstanceUpToDate } from '../instanceUpdatePresentation'
+export { canForceUpdateInstance, isInstanceUpToDate } from '../instanceUpdatePresentation'
 import {
   blocksDefaultStart,
   buildInstanceStartGuideContext,
@@ -52,6 +52,7 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
 
   /** 正在执行的实例操作（格式 action:instanceId），驱动按钮 loading 与同实例操作互斥 */
   const actionLoadingIds = ref<Set<string>>(new Set())
+  const forceUpdateLoading = ref(false)
 
   /** 操作按钮是否处于 loading（格式 action:instanceId） */
   function isActionLoading(instanceId: string, action: InstanceLifecycleAction | 'update') {
@@ -289,17 +290,12 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
     })
   }
 
-  function confirmUpdateInstance(row: InstanceItem, force = false) {
-    if (force && !canRepairInstance(row)) {
-      return
-    }
+  function confirmUpdateInstance(row: InstanceItem) {
     blurFocusedElement()
     const isRepair = getInstanceState(row).key === 'install_failed'
     dialog.warning({
-      title: force ? '确认校验并更新游戏文件' : isRepair ? '确认修复安装' : '确认更新服务端',
-      content: force
-        ? `将通过 SteamCMD 校验并更新「${row.name}」的游戏文件，可能重新下载部分内容。存档会保留，过程可在安装日志中查看。`
-        : isRepair
+      title: isRepair ? '确认修复安装' : '确认更新服务端',
+      content: isRepair
         ? `上次安装未完成。将重新拉取「${row.name}」的游戏服务端文件，已有配置会保留，过程可在「查看日志」中查看进度。`
         : `将拉取「${row.name}」的最新游戏服务端文件。更新前请确保实例已停止，过程可在「查看日志」中查看进度。`,
       positiveText: '开始更新',
@@ -309,30 +305,66 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
       },
       onPositiveClick: () => {
         // 更新请求本身是后台受理，不阻塞弹窗：先关闭确认框，安装日志弹窗按自己的节奏打开
-        void runUpdateInstance(row, force)
+        void runUpdateInstance(row)
       },
     })
   }
 
-  async function runUpdateInstance(row: InstanceItem, force = false) {
+  function confirmForceUpdateInstances(rows: InstanceItem[]) {
+    if (forceUpdateLoading.value || !rows.length
+      || rows.some(row => !canForceUpdateInstance(row) || isInstanceActionRunning(row.id))) return
+    blurFocusedElement()
+    dialog.warning({
+      title: `确认强制更新 ${rows.length} 个实例`,
+      content: `将校验并更新所选实例「${rows.map(row => row.name).join('、')}」的游戏文件，即使版本相同也会执行。可能重新下载部分内容，存档和配置会保留。`,
+      positiveText: '强制更新',
+      negativeText: '取消',
+      positiveButtonProps: { type: 'warning' },
+      onPositiveClick: () => { void runForceUpdates(rows) },
+    })
+  }
+
+  async function runForceUpdates(rows: InstanceItem[]) {
+    if (forceUpdateLoading.value) return
+    forceUpdateLoading.value = true
+    let accepted = 0
+    try {
+      for (const row of rows) {
+        if (await runUpdateInstance(row, true, true)) accepted++
+      }
+      const message = `已提交 ${accepted} 个实例的强制更新，可在各实例的安装日志中查看进度`
+      if (accepted === rows.length) faToast.success(message)
+      else faToast.warning(`${message}；${rows.length - accepted} 个实例未提交成功`)
+      await options.refresh()
+    }
+    finally {
+      forceUpdateLoading.value = false
+    }
+  }
+
+  async function runUpdateInstance(row: InstanceItem, force = false, batch = false): Promise<boolean> {
     if (isInstanceActionRunning(row.id)) {
-      return
+      return false
     }
     options.onBeforeUpdate?.()
     const operationKey = `update:${row.id}`
     actionLoadingIds.value = new Set([...actionLoadingIds.value, operationKey])
     try {
       await apiInstance.updateInstance(row.id, { force: force || row.status === 'error' || !row.localBuildId })
-      faToast.success('已开始更新服务端，请查看安装日志了解进度')
       await options.refresh()
-      await options.onUpdateAccepted?.(row)
+      if (!batch) {
+        faToast.success('已开始更新服务端，请查看安装日志了解进度')
+        await options.onUpdateAccepted?.(row)
+      }
+      return true
     }
     catch (error) {
       if (tryNotifyHostMemoryPressure(notification, error, () => router.push(routeToConsoleMonitor()))) {
-        await options.refresh()
-        return
+        if (!batch) await options.refresh()
+        return false
       }
-      await options.refresh()
+      if (!batch) await options.refresh()
+      return false
     }
     finally {
       const next = new Set(actionLoadingIds.value)
@@ -388,11 +420,13 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
 
   return {
     actionLoadingIds,
+    forceUpdateLoading,
     isActionLoading,
     isInstanceActionRunning,
     runInstanceAction,
     confirmStartInstance,
     confirmUpdateInstance,
+    confirmForceUpdateInstances,
     confirmDangerousInstanceAction,
   }
 }
@@ -429,7 +463,7 @@ export function getUpdateInstanceButtonTitle(instance: InstanceItem) {
     return '实例异常，点击重新拉取服务端文件'
   }
   if (!instance.localBuildId) {
-    return '尚未安装，点击开始安装'
+    return instance.updateCheckedAt ? '无法确认本地版本，点击更新服务端' : '尚未安装，点击开始安装'
   }
   if (isInstanceUpToDate(instance)) {
     return '已是最新版本'

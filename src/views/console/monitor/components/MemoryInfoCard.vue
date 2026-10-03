@@ -101,7 +101,6 @@ const bufferHint = computed(() => {
         <template v-else>
           未配置缓存区
         </template>
-        · 可用缓冲 {{ bufferText }} GB
       </div>
     </div>
   </div>

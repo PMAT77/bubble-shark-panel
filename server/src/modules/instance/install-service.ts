@@ -2,7 +2,6 @@ import type { FastifyInstance } from 'fastify'
 import process from 'node:process'
 import type { DbInstallLogStatus } from '../../shared/db/index'
 import {
-  getGameInstanceById,
   listGameInstances,
   updateGameInstanceRuntime,
 } from '../../shared/db/index'
@@ -40,7 +39,7 @@ import { ensureDstLayout } from '../../infra/game-adapter/dst/cluster-config'
 import { cleanupIncompleteSteamcmdInstallDir, prepareInstallPathForSteamcmd } from './install-path'
 import { ensureGameRuntimeImageReady } from '../../infra/game-adapter/runtime-image'
 import { refreshInstanceUpdateStatusAfterInstall, refreshInstanceUpdateStatusAfterSeed, resolveSteamcmdCommandForUpdateCheck } from './update-check'
-import { readLocalBuildId } from '../../shared/steam-update/build-id'
+import { fetchRemoteBuildId, readLocalBuildId } from '../../shared/steam-update/build-id'
 import { tryInstallGameDepotFromSeed, type InstallSeedDonor } from './install-seed'
 
 export interface InstanceInstallJobInput {
@@ -51,6 +50,8 @@ export interface InstanceInstallJobInput {
   installPath: string
   steamcmdCommand: string
   steamcmdCredentials?: { username: string, password: string }
+  /** 已受理的更新必须实际校验文件，不能按清单跳过或改用供体复制。 */
+  forceSteamcmd?: boolean
 }
 
 const LOCAL_NODE_ID = 'local-node'
@@ -179,17 +180,11 @@ export function shouldSkipSteamcmdForReadyInstall(input: {
   updateAvailable?: boolean | null
   remoteBuildId?: string | null
   localBuildId?: string | null
+  forceSteamcmd?: boolean
 }): boolean {
-  if (input.updateAvailable) {
-    return false
-  }
-  if (!input.localBuildId) {
-    return false
-  }
-  if (input.remoteBuildId && input.localBuildId !== input.remoteBuildId) {
-    return false
-  }
-  return true
+  return Boolean(!input.forceSteamcmd && !input.updateAvailable
+    && input.localBuildId && input.remoteBuildId
+    && input.localBuildId === input.remoteBuildId)
 }
 
 function sleep(ms: number): Promise<void> {
@@ -384,12 +379,11 @@ async function runInstallPipeline(
 
   const recipientReadiness = diagnoseDstInstallReadiness(input.installPath)
   const recipientAlreadyReady = recipientReadiness.ready
-  if (recipientAlreadyReady && input.appId.trim() === DST_APP_ID) {
-    const instance = await getGameInstanceById(input.instanceId)
+  if (recipientAlreadyReady && input.appId.trim() === DST_APP_ID && !input.forceSteamcmd) {
     const localBuildId = readLocalBuildId(input.installPath, input.appId)
+    const remoteBuildId = await fetchRemoteBuildId(input.steamcmdCommand, input.appId, { force: true })
     const skipSteam = shouldSkipSteamcmdForReadyInstall({
-      updateAvailable: instance?.updateAvailable,
-      remoteBuildId: instance?.remoteBuildId,
+      remoteBuildId,
       localBuildId,
     })
     if (skipSteam) {
@@ -399,7 +393,7 @@ async function runInstallPipeline(
     }
     logWriter.appendLine('游戏文件已存在，将通过 SteamCMD 更新至最新版本...')
   }
-  if (!recipientAlreadyReady && input.appId.trim() === DST_APP_ID) {
+  if (!recipientAlreadyReady && input.appId.trim() === DST_APP_ID && !input.forceSteamcmd) {
     const seedMemory = assessHostMemoryForHeavyOperation('install-seed-copy')
     if (!seedMemory.ok) {
       logWriter.appendLine(`${seedMemory.summary}\n\n${seedMemory.detail}`)

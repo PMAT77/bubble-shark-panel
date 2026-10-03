@@ -351,7 +351,7 @@ export async function runSteamcmdAppInfoInContainer(appId: string): Promise<{ ok
 
   const output = result.output
   return {
-    ok: (result.ok || /"appid"\s+"/i.test(output)) && !result.timedOut,
+    ok: result.ok,
     output: output || (result.timedOut ? 'SteamCMD app_info 查询超时' : 'SteamCMD app_info 执行失败'),
   }
 }

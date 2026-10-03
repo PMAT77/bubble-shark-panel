@@ -7,6 +7,7 @@ import { decodeDockerMultiplexLogChunk } from './docker-log'
 import { sanitizeSteamcmdLogLine, STEAMCMD_TIMEOUT_MARKER } from './steamcmd-errors'
 import { formatSteamcmdTimeoutForLog } from '../../shared/config/steamcmd'
 import { resolveSteamcmdContainerMemoryLimits } from './steamcmd-container-resources'
+import { SteamcmdOutput } from './steamcmd-output'
 
 export const STEAMCMD_LABEL_MANAGED = 'gsh.managed'
 export const STEAMCMD_LABEL_MANAGED_VALUE = 'steamcmd-install'
@@ -229,6 +230,7 @@ export interface SteamcmdJobResult {
 async function followContainerLogs(
   container: Docker.Container,
   pushLine: (line: string) => void,
+  acceptChunk: (text: string) => boolean,
 ): Promise<void> {
   const stream = await container.logs({
     follow: true,
@@ -243,6 +245,10 @@ async function followContainerLogs(
       stream.on('data', (chunk: Buffer) => {
         const decoded = decodeDockerMultiplexLogChunk(frameCarry, chunk)
         frameCarry = decoded.carry
+        if (!acceptChunk(decoded.text)) {
+          buffer = ''
+          return
+        }
         buffer += decoded.text
         const lines = buffer.split(/\r?\n/)
         buffer = lines.pop() ?? ''
@@ -270,16 +276,13 @@ async function followContainerLogs(
 
 export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJobResult> {
   const docker = resolveDocker()
-  const logLines: string[] = []
+  const collected = new SteamcmdOutput(spec.kind === 'app-info')
   const pushLine = (line: string) => {
     const text = sanitizeSteamcmdLogLine(line)
     if (!text) {
       return
     }
-    logLines.push(text)
-    if (logLines.length > 80) {
-      logLines.shift()
-    }
+    collected.push(text)
     spec.onLogLine?.(text)
   }
 
@@ -359,7 +362,7 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
     return {
       ok: false,
       exitCode: -1,
-      output: logLines.slice(-20).join('\n') || `SteamCMD 容器启动失败: ${message}`,
+      output: collected.output || `SteamCMD 容器启动失败: ${message}`,
     }
   }
 
@@ -375,7 +378,7 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
 
   try {
     const waitPromise = container.wait().then(result => result.StatusCode ?? -1)
-    const logsPromise = followContainerLogs(container, pushLine)
+    const logsPromise = followContainerLogs(container, pushLine, text => collected.acceptChunk(text))
     const [code] = await Promise.all([waitPromise, logsPromise])
     exitCode = code
   }
@@ -409,11 +412,11 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
     )
   }
 
-  const output = logLines.slice(-20).join('\n')
+  const output = collected.output
     || (timedOut ? 'SteamCMD 任务超时' : wasCancelled ? 'SteamCMD 任务已取消' : 'SteamCMD 任务执行失败')
 
   return {
-    ok: exitCode === 0 && !timedOut && !wasCancelled,
+    ok: exitCode === 0 && !timedOut && !wasCancelled && !collected.overflowed,
     exitCode,
     output,
     cancelled: wasCancelled,

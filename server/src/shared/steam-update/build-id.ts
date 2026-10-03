@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { runSteamcmdAppInfoInContainer } from '../../infra/container'
 import { resolveRuntimeStatus } from '../../infra/runtime'
+import { parsePublicBuildIdFromAppInfo } from './app-info'
 
 const REMOTE_BUILD_CACHE_MS = 30 * 60 * 1000
 
@@ -50,46 +51,6 @@ export function readLocalBuildId(installPath: string, appId: string): string | n
   }
 }
 
-/** 将 appmanifest 中的 buildid 与远端对齐（安装成功但清单未刷新时使用） */
-export function writeLocalBuildId(installPath: string, appId: string, buildId: string): boolean {
-  const manifestPath = resolveAppManifestPath(installPath, appId)
-  const normalizedBuildId = buildId.trim()
-  if (!manifestPath || !normalizedBuildId) {
-    return false
-  }
-  try {
-    const content = fs.readFileSync(manifestPath, 'utf8')
-    if (!/"buildid"/i.test(content)) {
-      return false
-    }
-    const next = content.replace(
-      /"buildid"\s+"\d+"/i,
-      `"buildid"\t\t"${normalizedBuildId}"`,
-    )
-    if (next === content) {
-      return false
-    }
-    fs.writeFileSync(manifestPath, next, 'utf8')
-    return true
-  }
-  catch {
-    return false
-  }
-}
-
-function parsePublicBuildIdFromAppInfo(output: string): string | null {
-  const publicIndex = output.indexOf('"public"')
-  if (publicIndex >= 0) {
-    const section = output.slice(publicIndex, publicIndex + 4000)
-    const match = section.match(/"buildid"\s+"(\d+)"/i)
-    if (match?.[1]) {
-      return match[1]
-    }
-  }
-  const matches = [...output.matchAll(/"buildid"\s+"(\d+)"/gi)]
-  return matches.length > 0 ? matches[matches.length - 1][1] : null
-}
-
 export async function fetchRemoteBuildId(
   _steamcmdCommand: string,
   appId: string,
@@ -113,18 +74,26 @@ export async function fetchRemoteBuildId(
 
   const task = (async () => {
     if ((await resolveRuntimeStatus()) !== 'running') {
-      return cached?.buildId ?? null
+      remoteBuildCache.delete(normalizedAppId)
+      return null
     }
     const result = await runSteamcmdAppInfoInContainer(normalizedAppId)
-    if (!result.ok && !result.output) {
-      return cached?.buildId ?? null
+    if (!result.ok) {
+      remoteBuildCache.delete(normalizedAppId)
+      return null
     }
-    const buildId = parsePublicBuildIdFromAppInfo(result.output)
+    const buildId = parsePublicBuildIdFromAppInfo(result.output, normalizedAppId)
     if (buildId) {
       remoteBuildCache.set(normalizedAppId, { buildId, checkedAt: Date.now() })
     }
-    return buildId ?? cached?.buildId ?? null
-  })().finally(() => {
+    else {
+      remoteBuildCache.delete(normalizedAppId)
+    }
+    return buildId
+  })().catch(() => {
+    remoteBuildCache.delete(normalizedAppId)
+    return null
+  }).finally(() => {
     inflightRemoteBuildFetches.delete(inflightKey)
   })
 

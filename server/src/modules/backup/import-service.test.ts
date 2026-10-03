@@ -82,6 +82,9 @@ async function buildInstalledInstance(opts?: {
   const installPath = path.join(workDir, 'instances', `inst-${seq}`)
   fs.mkdirSync(path.join(installPath, 'bin64'), { recursive: true })
   fs.writeFileSync(path.join(installPath, 'bin64', 'dontstarve_dedicated_server_nullrenderer_x64'), 'binary')
+  fs.mkdirSync(path.join(installPath, 'steamapps'), { recursive: true })
+  fs.writeFileSync(path.join(installPath, 'steamapps', 'appmanifest_343050.acf'), '"buildid" "25540104"\n')
+  fs.writeFileSync(path.join(installPath, 'version.txt'), '747465\n')
   if (opts?.withOldSave) {
     const oldSave = path.join(installPath, 'klei-storage', 'DoNotStarveTogether', 'Cluster_1', 'Master', 'save')
     fs.mkdirSync(oldSave, { recursive: true })
@@ -197,6 +200,9 @@ describe('save import execution', () => {
     })
     assert.equal(result.ok, true)
     const detail = result.result!
+    assert.equal(fs.readFileSync(path.join(instance.installPath!, 'version.txt'), 'utf8'), '747465\n')
+    assert.equal(fs.readFileSync(path.join(instance.installPath!, 'steamapps', 'appmanifest_343050.acf'), 'utf8'), '"buildid" "25540104"\n')
+    assert.equal(fs.readFileSync(path.join(instance.installPath!, 'bin64', 'dontstarve_dedicated_server_nullrenderer_x64'), 'utf8'), 'binary')
     assert.deepEqual(detail.importedShards, ['master', 'caves'])
     assert.equal(detail.tokenSource, 'none')
     assert.ok(detail.safetyBackupId)

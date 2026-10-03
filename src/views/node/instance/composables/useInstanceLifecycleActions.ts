@@ -15,6 +15,8 @@ import {
   type InstancePortConflictAction,
 } from '@/utils/instancePortConflict'
 import { getInstanceState } from '../instanceDisplay'
+import { canRepairInstance, isInstanceUpToDate } from '../instanceUpdatePresentation'
+export { canRepairInstance, isInstanceUpToDate } from '../instanceUpdatePresentation'
 import {
   blocksDefaultStart,
   buildInstanceStartGuideContext,
@@ -287,12 +289,17 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
     })
   }
 
-  function confirmUpdateInstance(row: InstanceItem) {
+  function confirmUpdateInstance(row: InstanceItem, force = false) {
+    if (force && !canRepairInstance(row)) {
+      return
+    }
     blurFocusedElement()
     const isRepair = getInstanceState(row).key === 'install_failed'
     dialog.warning({
-      title: isRepair ? '确认修复安装' : '确认更新服务端',
-      content: isRepair
+      title: force ? '确认校验并更新游戏文件' : isRepair ? '确认修复安装' : '确认更新服务端',
+      content: force
+        ? `将通过 SteamCMD 校验并更新「${row.name}」的游戏文件，可能重新下载部分内容。存档会保留，过程可在安装日志中查看。`
+        : isRepair
         ? `上次安装未完成。将重新拉取「${row.name}」的游戏服务端文件，已有配置会保留，过程可在「查看日志」中查看进度。`
         : `将拉取「${row.name}」的最新游戏服务端文件。更新前请确保实例已停止，过程可在「查看日志」中查看进度。`,
       positiveText: '开始更新',
@@ -302,12 +309,12 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
       },
       onPositiveClick: () => {
         // 更新请求本身是后台受理，不阻塞弹窗：先关闭确认框，安装日志弹窗按自己的节奏打开
-        void runUpdateInstance(row)
+        void runUpdateInstance(row, force)
       },
     })
   }
 
-  async function runUpdateInstance(row: InstanceItem) {
+  async function runUpdateInstance(row: InstanceItem, force = false) {
     if (isInstanceActionRunning(row.id)) {
       return
     }
@@ -315,7 +322,7 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
     const operationKey = `update:${row.id}`
     actionLoadingIds.value = new Set([...actionLoadingIds.value, operationKey])
     try {
-      await apiInstance.updateInstance(row.id, { force: row.status === 'error' || !row.localBuildId })
+      await apiInstance.updateInstance(row.id, { force: force || row.status === 'error' || !row.localBuildId })
       faToast.success('已开始更新服务端，请查看安装日志了解进度')
       await options.refresh()
       await options.onUpdateAccepted?.(row)
@@ -388,16 +395,6 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
     confirmUpdateInstance,
     confirmDangerousInstanceAction,
   }
-}
-
-/** 是否已检查且为最新版本 */
-export function isInstanceUpToDate(instance: InstanceItem) {
-  return Boolean(
-    instance.updateCheckedAt
-    && instance.localBuildId
-    && instance.remoteBuildId
-    && !instance.updateAvailable,
-  )
 }
 
 /** 是否允许点击「更新服务端」 */

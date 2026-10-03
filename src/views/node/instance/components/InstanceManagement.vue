@@ -40,12 +40,14 @@ import {
   shouldShowPostCreateInstallGuide,
 } from '../instanceInstallGuide'
 import {
+  canRepairInstance,
   canUpdateInstance,
   getUpdateInstanceButtonTitle,
   useInstanceLifecycleActions,
 } from '../composables/useInstanceLifecycleActions'
 import { useInstanceRuntimeObservability } from '../composables/useInstanceRuntimeObservability'
 import { formatDateTime } from '../utils'
+import { buildInstanceUpdateCheckNotice } from '../instanceUpdatePresentation'
 import InstanceInstallLogModal from './InstanceInstallLogModal.vue'
 
 defineOptions({
@@ -375,6 +377,7 @@ const INSTANCE_ACTION_PERMISSIONS: Record<InstanceRowAction['key'], PermissionKe
   detail: 'instance:read',
   console: 'instance.console:read',
   update: 'instance:update',
+  repair: 'instance:update',
   start: 'instance:lifecycle',
   stop: 'instance:lifecycle',
   restart: 'instance:lifecycle',
@@ -414,6 +417,15 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
       disabled: instanceActionRunning || !canUpdateInstance(row),
       title: getUpdateInstanceButtonTitle(row),
       onClick: () => confirmUpdateInstance(row),
+    },
+    {
+      key: 'repair',
+      label: '校验并更新游戏文件',
+      menuOnly: true,
+      loading: isActionLoading(row.id, 'update'),
+      disabled: instanceActionRunning || !canRepairInstance(row),
+      title: canRepairInstance(row) ? '校验并更新游戏文件' : '请先停止实例',
+      onClick: () => confirmUpdateInstance(row, true),
     },
     {
       key: 'start',
@@ -951,12 +963,8 @@ function notifyInstanceUpdateCheckResult(status: InstanceUpdateCheckJobPayload) 
     faToast.error(status.error)
     return
   }
-  const updateAvailableCount = status.result?.updateAvailableCount ?? 0
-  if (updateAvailableCount === 0) {
-    faToast.success('已全部是最新版本')
-    return
-  }
-  faToast.info(`有 ${updateAvailableCount} 个实例可更新`)
+  const notice = buildInstanceUpdateCheckNotice(status.result?.items ?? [])
+  faToast[notice.tone](notice.message)
 }
 
 /** 安装结束统一入口：先刷新列表，成功时再检查版本（去重） */

@@ -94,6 +94,11 @@ describe('migration export routes', () => {
     const readyInstallPath = path.join(workDir, 'instances', READY_INSTANCE_ID)
     fs.mkdirSync(readyInstallPath, { recursive: true })
     seedCluster(readyInstallPath)
+    fs.mkdirSync(path.join(readyInstallPath, 'steamapps'), { recursive: true })
+    fs.mkdirSync(path.join(readyInstallPath, 'bin64'), { recursive: true })
+    fs.writeFileSync(path.join(readyInstallPath, 'steamapps', 'appmanifest_343050.acf'), '"buildid" "25540104"')
+    fs.writeFileSync(path.join(readyInstallPath, 'bin64', 'dontstarve_dedicated_server_nullrenderer_x64'), 'binary')
+    fs.writeFileSync(path.join(readyInstallPath, 'version.txt'), '747465')
     await createGameInstance({
       id: READY_INSTANCE_ID,
       nodeId: 'local-node',
@@ -251,6 +256,7 @@ describe('migration export routes', () => {
       assert.ok(entries.every(entry => entry.startsWith('Cluster_1/')), `包内顶层应当只有集群目录：${entries.slice(0, 5).join(', ')}`)
       assert.ok(entries.includes('Cluster_1/cluster.ini'), '包内必须含 cluster.ini')
       assert.ok(entries.includes('Cluster_1/Master/server.ini'))
+      assert.ok(entries.every(entry => !/appmanifest_|version\.txt|dontstarve_dedicated_server/.test(entry)))
 
       assert.equal(fs.existsSync(`${archivePath}.sha256`), true, '应当写入同名 .sha256')
       const sha = fs.readFileSync(`${archivePath}.sha256`, 'utf8')

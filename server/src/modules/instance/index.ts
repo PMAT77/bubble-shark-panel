@@ -107,7 +107,6 @@ import { readLocalBuildId } from '../../shared/steam-update/build-id'
 import {
   enqueueInstanceUpdateCheck,
   getInstanceUpdateCheckJobStatus,
-  needsRemoteUpdatePrecheck,
   refreshInstanceUpdateStatus,
   resolveStartBlockedByPendingUpdate,
   resolveSteamcmdCommandForUpdateCheck,
@@ -906,7 +905,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     const status = enqueueInstanceUpdateCheck({
       steamcmdCommand,
       instanceIds,
-      force: false,
+      force: true,
       validateRuntime: checkContainerInstallReady,
     })
     return success(status, request)
@@ -986,19 +985,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       updateAvailable: current.updateAvailable,
     }, installPath, body.data.force)
     const localBuildId = readLocalBuildId(installPath, current.gameCode)
-    if (
-      !forceReinstall
-      && !current.updateAvailable
-      && localBuildId
-      && current.remoteBuildId
-      && localBuildId === current.remoteBuildId
-    ) {
-      return businessError(
-        `当前已是最新版本（Build ${localBuildId}），无需更新`,
-        request,
-      )
-    }
-    if (!forceReinstall && needsRemoteUpdatePrecheck(current, localBuildId)) {
+    if (!forceReinstall) {
       const checked = await refreshInstanceUpdateStatus(current, {
         steamcmdCommand,
         forceRemote: true,
@@ -1006,6 +993,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       if (
         checked.localBuildId
         && checked.remoteBuildId
+        && checked.localBuildId === checked.remoteBuildId
         && !checked.updateAvailable
       ) {
         return businessError(
@@ -1052,6 +1040,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       installPath,
       steamcmdCommand,
       steamcmdCredentials,
+      forceSteamcmd: true,
     })
     if (started === 'busy' || started === 'blocked') {
       // 状态已经写成 installing 而任务没起来：必须写回原状态，否则实例卡在「安装中」，

@@ -40,6 +40,12 @@ describe('shouldAllowInstallDespiteUpToDate', () => {
 })
 
 describe('shouldSkipSteamcmdForReadyInstall', () => {
+  it('does not skip an explicit validation or an unknown remote version', () => {
+    assert.equal(shouldSkipSteamcmdForReadyInstall({
+      localBuildId: '25540104', remoteBuildId: '25540104', forceSteamcmd: true,
+    }), false)
+    assert.equal(shouldSkipSteamcmdForReadyInstall({ localBuildId: '25540104' }), false)
+  })
   it('skips when build ids match and no update flag', () => {
     assert.equal(shouldSkipSteamcmdForReadyInstall({
       updateAvailable: false,

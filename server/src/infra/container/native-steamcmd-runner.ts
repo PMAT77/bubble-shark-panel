@@ -11,6 +11,7 @@ import {
   resolveSteamcmdAppUpdateTimeoutMs,
 } from '../../shared/config/steamcmd'
 import { DST_WORKSHOP_APP_ID } from '../game-adapter/dst/constants'
+import { SteamcmdOutput } from './steamcmd-output'
 
 const STEAMCMD_APP_INFO_TIMEOUT_MS = 90_000
 const DEFAULT_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
@@ -20,6 +21,7 @@ const cancelledNativeSteamcmdJobs = new Set<string>()
 
 interface NativeSteamcmdJobInput {
   args: string[]
+  kind?: 'app-info' | 'app-update'
   cancelKey?: string
   timeoutMs: number
   onLogLine?: (line: string) => void
@@ -62,7 +64,7 @@ function buildSteamcmdAppInfoArgs(appId: string): string[] {
   ]
 }
 
-async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promise<{
+export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promise<{
   ok: boolean
   output: string
   cancelled?: boolean
@@ -75,16 +77,13 @@ async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promise<{
       output: `SteamCMD 不存在: ${nativeSteamcmdPath}`,
     }
   }
-  const logLines: string[] = []
+  const collected = new SteamcmdOutput(input.kind === 'app-info')
   const pushLine = (raw: string) => {
     const line = sanitizeSteamcmdLogLine(raw)
     if (!line) {
       return
     }
-    logLines.push(line)
-    if (logLines.length > 80) {
-      logLines.shift()
-    }
+    collected.push(line)
     input.onLogLine?.(line)
   }
   const jobId = input.cancelKey?.trim()
@@ -105,6 +104,11 @@ async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promise<{
   let stdoutCarry = ''
   let stderrCarry = ''
   const consume = (stream: 'stdout' | 'stderr', text: string) => {
+    if (!collected.acceptChunk(text)) {
+      stdoutCarry = ''
+      stderrCarry = ''
+      return
+    }
     const previous = stream === 'stdout' ? stdoutCarry : stderrCarry
     const parts = `${previous}${text}`.split(/\r?\n/)
     const carry = parts.pop() ?? ''
@@ -155,10 +159,10 @@ async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promise<{
       `${STEAMCMD_TIMEOUT_MARKER}: SteamCMD 任务超过 ${formatSteamcmdTimeoutForLog(input.timeoutMs)} 上限，已终止进程；已下载内容保留，重试将断点续传`,
     )
   }
-  const output = logLines.slice(-20).join('\n')
+  const output = collected.output
     || (timedOut ? 'SteamCMD 任务超时' : cancelled ? 'SteamCMD 任务已取消' : 'SteamCMD 任务执行失败')
   return {
-    ok: exitCode === 0 && !timedOut && !cancelled && !spawnError,
+    ok: exitCode === 0 && !timedOut && !cancelled && !spawnError && !collected.overflowed,
     output,
     cancelled,
     timedOut,
@@ -247,10 +251,11 @@ export async function runSteamcmdWorkshopDownloadNative(input: {
 export async function runSteamcmdAppInfoNative(appId: string): Promise<{ ok: boolean, output: string }> {
   const result = await runNativeSteamcmdJob({
     args: buildSteamcmdAppInfoArgs(appId.trim()),
+    kind: 'app-info',
     timeoutMs: STEAMCMD_APP_INFO_TIMEOUT_MS,
   })
   return {
-    ok: (result.ok || /"appid"\s+"/i.test(result.output)) && !result.timedOut,
+    ok: result.ok,
     output: result.output,
   }
 }

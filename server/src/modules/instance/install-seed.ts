@@ -4,7 +4,7 @@ import { listGameInstances } from '../../shared/db/index'
 import { isInstallSeedEnabled } from '../../shared/config/install'
 import { diagnoseDstInstallReadiness } from '../../infra/game-adapter/dst/install-readiness'
 import { copyGameDepotFromDonor } from '../../infra/game-adapter/dst/depot-copy'
-import { readLocalBuildId } from '../../shared/steam-update/build-id'
+import { fetchRemoteBuildId, readLocalBuildId } from '../../shared/steam-update/build-id'
 import { isSteamcmdJobRunning } from '../../infra/container/steamcmd-job'
 import { prepareInstallPathForSteamcmd } from './install-path'
 
@@ -47,6 +47,10 @@ export async function findInstallSeedDonor(input: {
   }
   const recipientPath = normalizeInstallPath(input.recipientPath)
   const appId = input.appId.trim()
+  const remoteBuildId = await fetchRemoteBuildId('', appId, { force: true })
+  if (!remoteBuildId) {
+    return null
+  }
   const candidates: Array<{ instance: DbGameInstance, localBuildId: string | null, score: number }> = []
 
   const instances = await listGameInstances({ nodeId: LOCAL_NODE_ID })
@@ -79,7 +83,7 @@ export async function findInstallSeedDonor(input: {
       continue
     }
     const localBuildId = readLocalBuildId(normalizedDonorPath, appId)
-    if (!localBuildId) {
+    if (!localBuildId || localBuildId !== remoteBuildId) {
       continue
     }
     if (instance.updateAvailable) {
@@ -105,7 +109,7 @@ export async function findInstallSeedDonor(input: {
     instanceName: best.instance.name,
     installPath: normalizeInstallPath(best.instance.installPath!.trim()),
     localBuildId: best.localBuildId,
-    remoteBuildId: best.instance.remoteBuildId,
+    remoteBuildId,
     updateAvailable: Boolean(best.instance.updateAvailable),
   }
 }

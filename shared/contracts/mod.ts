@@ -5,14 +5,23 @@ export type ModInstanceStatus = 'pending_install' | 'running' | 'stopped' | 'ins
 
 export type ModInstallStatus = 'pending' | 'ready' | 'failed'
 
-export const modImportCommitSchema = z.object({
+export const modImportSingleCommitSchema = z.object({
   importId: z.string().uuid(),
   workshopId: z.string().regex(/^[1-9]\d{0,19}$/),
   overwrite: z.boolean().default(false),
-})
+}).strict()
+export const modImportBatchCommitSchema = z.object({
+  importId: z.string().uuid(),
+  items: z.array(z.object({ itemId: z.string().uuid(), workshopId: z.string().regex(/^[1-9]\d{0,19}$/) }).strict()).min(1),
+  overwrite: z.boolean().default(false),
+}).strict()
+export const modImportCommitSchema = z.union([modImportSingleCommitSchema, modImportBatchCommitSchema])
 export type ModImportCommit = z.infer<typeof modImportCommitSchema>
-export interface ModImportInspection {
-  importId: string
+export type ModImportSingleCommit = z.infer<typeof modImportSingleCommitSchema>
+export type ModImportBatchCommit = z.infer<typeof modImportBatchCommitSchema>
+export interface ModImportItemInspection {
+  itemId: string
+  directory: string
   workshopId: string | null
   idCandidates: Array<{ workshopId: string, source: 'directory' | 'filename' }>
   name: string | null
@@ -21,6 +30,26 @@ export interface ModImportInspection {
   sizeBytes: number
   warnings: string[]
   existing: boolean
+}
+export interface ModImportInspection extends Omit<ModImportItemInspection, 'itemId' | 'directory'> {
+  importId: string
+  items: ModImportItemInspection[]
+  reservedWorkshopIds: string[]
+}
+export interface ModImportItemResult {
+  itemId: string
+  workshopId: string
+  status: 'installed' | 'failed' | 'not_processed'
+  error: string | null
+}
+export interface ModImportBatchResult {
+  saved: boolean
+  riskTip: string | null
+  results: ModImportItemResult[]
+  mods: ModItemDto[]
+  summary: { installed: number, failed: number, remaining: number }
+  retryBlocked: boolean
+  error: string | null
 }
 
 /**
@@ -119,9 +148,24 @@ export interface ModInstallJobDto {
  */
 export type ModDownloadQueueStatus = 'idle' | 'running' | 'pausing' | 'paused'
 
+export const modDownloadQueueStartSchema = z.object({ retryFailed: z.boolean().default(true) })
+export type ModDownloadItemPhase = ModInstallJobPhase | 'queued' | 'retry_wait' | 'ready' | 'failed' | 'inactive'
+export interface ModDownloadQueueItemDto {
+  workshopId: string
+  installStatus: ModInstallStatus
+  phase: ModDownloadItemPhase
+  error: string | null
+  nextRetryAt: string | null
+}
+
 export interface ModDownloadQueueDto {
   instanceId: string
   status: ModDownloadQueueStatus
+  phase: ModInstallJobPhase | 'retry_wait' | null
+  items: ModDownloadQueueItemDto[]
+  eligibleCount: number
+  inactiveMissingCount: number
+  retryableFailedCount: number
   /** 本次队列的目标总数（未开始时 = 当前可下载候选数） */
   total: number
   /** 尚未处理（含等待退避的） */
@@ -269,6 +313,7 @@ export function resolveModLocalizedText(
 }
 
 export interface SteamModDetailDto {
+  cache?: { source: 'live' | 'cache-fresh' | 'cache-offline', fetchedAt: string }
   workshopId: string
   /** 当前 locale 下解析后的展示标题 */
   title: string
@@ -300,6 +345,27 @@ export interface SteamModDetailDto {
 }
 
 export type SteamModSort = 'trend' | 'mostrecent' | 'relevance' | 'totaluniquesubscribers'
+
+export interface ModAccessObservation {
+  status: 'success' | 'failed' | 'cancelled' | 'unknown'
+  observedAt: string | null
+  message: string | null
+  cached?: boolean
+  fetchedAt?: string | null
+}
+export interface ModAccessStatusDto {
+  market: ModAccessObservation
+  metadata: ModAccessObservation
+  files: ModAccessObservation
+  configuration: {
+    httpProxyConfigured: boolean
+    steamcmdProxyConfigured: boolean
+    relayListsOnly: boolean
+    webApiConfigured: boolean
+    runtime: 'docker' | 'native'
+    networkMode: 'bridge' | 'host'
+  }
+}
 
 /** 仅在 sort=trend（最热门）时生效 */
 export type SteamModTrendDays = 1 | 7 | 30 | 90 | 180 | 365 | -1

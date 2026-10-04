@@ -3,7 +3,6 @@ import { describe, it } from 'node:test'
 import type { ModUpdateCheckSummary } from '../../../../shared/contracts/mod.ts'
 import {
   resolveModUpdateCheckNotice,
-  STEAM_WEBAPI_BASE_HINT,
 } from './modUpdateCheckPresentation.ts'
 
 function summary(partial: Partial<ModUpdateCheckSummary>): ModUpdateCheckSummary {
@@ -76,8 +75,22 @@ describe('resolveModUpdateCheckNotice', () => {
       message: '无法连接 Steam 创意工坊',
     })
 
-    assert.match(notice.content, /工坊侧：无法连接 Steam 创意工坊/)
-    assert.ok(notice.content.includes(STEAM_WEBAPI_BASE_HINT))
+    assert.match(notice.content, /无法连接 Steam 创意工坊/)
+    assert.match(notice.content, /沿用上次结果/)
+    assert.match(notice.content, /下载遇到问题/)
+    assert.match(notice.content, /本地 ZIP 导入/)
+  })
+
+  it('does not present previously up-to-date records as a successful offline check', () => {
+    const notice = resolveModUpdateCheckNotice({
+      summary: summary({ total: 5, upToDate: 5 }),
+      upstreamOk: false,
+      message: null,
+    })
+    assert.equal(notice.tone, 'warning')
+    assert.match(notice.content, /检查时间/)
+    assert.match(notice.content, /5 个检查时最新/)
+    assert.equal(notice.content.includes('都是创意工坊上的最新版本'), false)
   })
 
   it('stays neutral when the instance has no subscribed mods', () => {

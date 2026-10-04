@@ -39,13 +39,13 @@ async function probeSteamCdn(timeoutMs = 10_000): Promise<{ ok: boolean, message
       signal: controller.signal,
     })
     if (response.ok) {
-      return { ok: true, message: `SteamCDN 可达（HTTP ${response.status}）` }
+      return { ok: true, message: `SteamCMD 安装包地址可达（面板进程探测，HTTP ${response.status}；不代表 Workshop 文件下载可用）` }
     }
-    return { ok: false, message: `SteamCDN 响应异常（HTTP ${response.status}）` }
+    return { ok: false, message: `SteamCMD 安装包地址响应异常（HTTP ${response.status}）` }
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return { ok: false, message: `SteamCDN 探测失败：${message}` }
+    return { ok: false, message: `SteamCMD 安装包地址探测失败：${message}` }
   }
   finally {
     clearTimeout(timer)
@@ -98,7 +98,7 @@ export async function runSteamcmdDiagnostics(): Promise<SteamcmdDiagnosticsResul
   const runtimeOk = runtimeStatus === 'running'
 
   const cdnProbe = isSteamcmdDiagnosticsOfflineMode()
-    ? { ok: true, message: '已跳过 SteamCDN 外网探测' }
+    ? { ok: true, message: '已跳过 SteamCMD 安装包地址探测；Workshop 文件下载尚未验证' }
     : await probeSteamCdn()
   const checks: SteamcmdDiagnosticsCheck[] = [
     {

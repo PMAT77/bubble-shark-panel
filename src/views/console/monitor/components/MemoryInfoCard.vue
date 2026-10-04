@@ -66,20 +66,6 @@ const bufferClass = computed(() => {
   }
   return 'text-muted-foreground'
 })
-
-const bufferText = computed(() => (
-  usableBufferGb.value === null ? '--' : usableBufferGb.value.toFixed(2)
-))
-
-const bufferHint = computed(() => {
-  if (bufferLevel.value === 'critical') {
-    return '，重启实例很可能被拦下'
-  }
-  if (bufferLevel.value === 'warning') {
-    return '，重启实例可能被拦下'
-  }
-  return ''
-})
 </script>
 
 <template>
@@ -141,9 +127,6 @@ const bufferHint = computed(() => {
             未配置缓存区
           </template>
         </span>
-        <span class="text-xs mt-1" :class="bufferClass">
-          可用缓冲 {{ bufferText }} GB{{ bufferHint }}
-        </span>
       </div>
     </template>
     <div v-if="memoryGuidance" class="max-w-xs text-sm leading-relaxed">
@@ -152,9 +135,6 @@ const bufferHint = computed(() => {
       </p>
       <p class="text-muted-foreground mt-1">
         {{ memoryGuidance.summaryZh }}
-      </p>
-      <p class="text-muted-foreground mt-1">
-        「可用缓冲」= 可用内存 + 缓存区余量，是启动新分片前真正能用的部分。
       </p>
     </div>
   </NPopover>

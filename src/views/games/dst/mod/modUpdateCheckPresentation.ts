@@ -25,28 +25,19 @@ export interface ModUpdateCheckNoticeInput {
   message: string | null
 }
 
-/**
- * 工坊接口不通时的自助出口。界面文案不写部署细节（环境变量、配置文件），
- * 只说清「为什么查不到」与「去哪儿找办法」，具体配置在安装指南里。
- */
-export const STEAM_WEBAPI_BASE_HINT
-  = '若长期取不到创意工坊信息，通常是服务器网络连不上 Steam 接口；可按安装指南配置一个可用的接口地址后重建面板。'
-
 /** 无法判断版本的可行出口：面板已经为这类行准备了「重新下载」按钮 */
 const REDOWNLOAD_HINT = '本机缺少这些 Mod 的版本记录，或工坊信息没取到；可对这几行点「重新下载」重新入账。'
-
-function appendUpstreamNotice(content: string, input: ModUpdateCheckNoticeInput): string {
-  if (input.upstreamOk) {
-    return content
-  }
-  const reason = input.message?.trim() || '部分 Mod 未能从创意工坊取到信息'
-  return `${content} 工坊侧：${reason} ${STEAM_WEBAPI_BASE_HINT}`
-}
 
 export function resolveModUpdateCheckNotice(input: ModUpdateCheckNoticeInput): ModUpdateCheckNotice {
   const { total, outdated, upToDate, unknown } = input.summary
   if (total === 0) {
     return { kind: 'message', tone: 'info', title: null, content: '该实例还没有已订阅的 Mod。' }
+  }
+  if (!input.upstreamOk) {
+    return {
+      kind: 'message', tone: 'warning', title: null,
+      content: `本次未能完整检查版本，未获取的条目沿用上次结果；请查看各条目的检查时间。保存的结果：${outdated} 个需要更新，${upToDate} 个检查时最新，${unknown} 个无法判断。 ${input.message?.trim() || 'Steam 元数据暂时不可达'} 可展开「下载遇到问题」查看记录，或使用本地 ZIP 导入。`,
+    }
   }
   if (outdated > 0) {
     const tail = unknown > 0 ? `另有 ${unknown} 个 Mod 无法判断版本。` : ''
@@ -54,10 +45,7 @@ export function resolveModUpdateCheckNotice(input: ModUpdateCheckNoticeInput): M
       kind: 'notification',
       tone: 'info',
       title: `发现 ${outdated} 个 Mod 有新版本`,
-      content: appendUpstreamNotice(
-        `点列表里的「更新」或工具条的「全部更新」，更新完成后重启实例生效。${tail}`,
-        input,
-      ),
+      content: `点列表里的「更新」或工具条的「全部更新」，更新完成后重启实例生效。${tail}`,
     }
   }
   if (unknown === 0) {
@@ -75,6 +63,6 @@ export function resolveModUpdateCheckNotice(input: ModUpdateCheckNoticeInput): M
     kind: 'message',
     tone: 'warning',
     title: null,
-    content: appendUpstreamNotice(`${lead}：${REDOWNLOAD_HINT}`, input),
+    content: `${lead}：${REDOWNLOAD_HINT}`,
   }
 }

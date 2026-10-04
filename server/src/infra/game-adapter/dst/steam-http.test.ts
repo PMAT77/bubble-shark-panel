@@ -166,6 +166,19 @@ async function startProxyAndOrigin(originHandler: http.RequestListener): Promise
 }
 
 describe('steamHttpRequest', () => {
+  it('applies the timeout to the response body after headers arrive', { timeout: 3000 }, async () => {
+    clearProxyEnv()
+    const origin = http.createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.write('{')
+    })
+    await new Promise<void>(resolve => origin.listen(0, '127.0.0.1', resolve))
+    try {
+      await assert.rejects(steamHttpRequest(`http://127.0.0.1:${(origin.address() as AddressInfo).port}/slow`, { timeoutMs: 50, proxy: null }),
+        (error: unknown) => isSteamWorkshopFetchError(error) && error.code === 'STEAM_TIMEOUT')
+    }
+    finally { origin.closeAllConnections(); await new Promise<void>(resolve => origin.close(() => resolve())) }
+  })
   it('without a proxy it goes through global fetch', { timeout: 10_000 }, async () => {
     const original = globalThis.fetch
     let calledWith = ''

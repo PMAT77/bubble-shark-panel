@@ -2,6 +2,7 @@ import { assertInstanceContentAvailable, beginInstanceContentActivity } from '..
 import type {
   ModDownloadQueueDto,
   ModDownloadQueueStatus,
+  ModDownloadQueueItemDto,
   ModInstallJobDto,
   ModInstallJobPhase,
   ModInstallJobStatus,
@@ -23,6 +24,7 @@ import { ensureDstUgcModLayout } from '../../infra/game-adapter/dst/ugc-mod-inst
 import { resolveLocalModContentVersion } from '../../infra/game-adapter/dst/mod-content-version'
 import { readWorkshopInstalledItems } from '../../infra/game-adapter/dst/workshop-manifest'
 import { fetchWorkshopModMetadata } from '../../infra/game-adapter/dst/steam-workshop'
+import { observeSteamAccess } from '../../infra/game-adapter/dst/steam-access-observation'
 import { syncInstanceModFilesFromDb } from './mod-file-sync-service'
 import { isPlaceholderModName, MISSING_MOD_CONTENT_ERROR } from './mod-readiness-service'
 import { cancelSteamcmdInstallContainer } from '../../infra/container/steamcmd-runner'
@@ -101,6 +103,8 @@ interface InstanceQueueState {
   waitingIds: string[]
   /** 用户显式点「开始下载」：开场先把退避耗尽的失败项重置后一起排队 */
   retryFailed: boolean
+  mods: DbInstanceMod[]
+  eligibleIds: string[]
 }
 
 const modInstallJobs = new Map<string, ModInstallJobRecord>()
@@ -112,9 +116,9 @@ const MOD_DOWNLOAD_BATCH_SIZE_ENV = 'GSH_MOD_DOWNLOAD_COALESCE_LIMIT'
 const MOD_DOWNLOAD_BATCH_SIZE_DEFAULT = 5
 const MOD_DOWNLOAD_BATCH_SIZE_MAX = 10
 
-/** 失败后的指数退避间隔：10s / 30s / 60s，用尽转 failed 等用户手动重试 */
-export const MOD_DOWNLOAD_RETRY_DELAYS_MS = [10_000, 30_000, 60_000]
-export const MOD_DOWNLOAD_MAX_ATTEMPTS = MOD_DOWNLOAD_RETRY_DELAYS_MS.length
+/** 最多尝试三次；第一次和第二次失败后分别等待 10、30 秒。 */
+export const MOD_DOWNLOAD_RETRY_DELAYS_MS = [10_000, 30_000]
+export const MOD_DOWNLOAD_MAX_ATTEMPTS = 3
 
 /** 退避间隔可被测试替换（真实退避要等几十秒，测试里用毫秒级序列验证同一套逻辑） */
 let modDownloadRetryDelaysMs: number[] = [...MOD_DOWNLOAD_RETRY_DELAYS_MS]
@@ -313,15 +317,18 @@ async function upsertPendingModRecord(input: ModDownloadJobInput) {
   await upsertInstanceModFn({
     instanceId,
     workshopId,
-    name: payload.name?.trim() || `Workshop Mod ${workshopId}`,
-    previewImage: payload.previewImage?.trim() || null,
+    name: payload.name?.trim() || existing?.name || `Workshop Mod ${workshopId}`,
+    previewImage: payload.previewImage?.trim() || existing?.previewImage || null,
     enabled: typeof payload.enabled === 'boolean'
       ? payload.enabled
       : (existing?.enabled ?? false),
     loadOrder: nextLoadOrder,
-    version: payload.version?.trim() || null,
+    version: payload.version?.trim() || existing?.version || null,
     installStatus: 'pending',
     installError: null,
+    downloadIntent: input.force ? 'update' : (existing?.downloadIntent ?? 'install'),
+    retryCount: 0,
+    nextRetryAt: null,
   })
 }
 
@@ -330,6 +337,7 @@ async function upsertPendingModRecord(input: ModDownloadJobInput) {
 // ---------------------------------------------------------------------------
 
 interface BackfillPlan {
+  eligibleIds: string[]
   /** 可以进入队列的 workshopId（依赖在前） */
   order: string[]
   /** 有 pending 但都在退避等待时的最早到期时间 */
@@ -350,13 +358,9 @@ async function buildBackfillPlan(input: {
   installPath: string
   mods: DbInstanceMod[]
   now: number
+  persistDependencies?: boolean
 }): Promise<BackfillPlan> {
   const { instanceId, installPath, mods, now } = input
-  const pending = mods.filter(mod => mod.installStatus === 'pending')
-  if (pending.length === 0) {
-    return { order: [], nextAvailableAt: null, warnings: [] }
-  }
-
   const dependencyMap = readModDependencyMap(installPath)
   const byId = new Map(mods.map(mod => [mod.workshopId, mod]))
   const warnings: string[] = []
@@ -375,8 +379,8 @@ async function buildBackfillPlan(input: {
     return resolved
   }
 
-  for (const mod of pending) {
-    if (!mod.enabled || included.has(mod.workshopId)) {
+  for (const mod of mods) {
+    if ((!mod.enabled && !mod.downloadIntent) || included.has(mod.workshopId)) {
       continue
     }
     included.add(mod.workshopId)
@@ -392,14 +396,10 @@ async function buildBackfillPlan(input: {
         continue
       }
       const dependencyMod = byId.get(dependencyId)
-      // 依赖已就绪、或已失败（等用户手动重试）：不再自动排队
-      if (dependencyMod && dependencyMod.installStatus !== 'pending') {
-        continue
-      }
       if (!dependencyMod) {
         // 依赖不在库中：补一条启用记录。不写进库的话它既不会下载，也不会进 modoverrides.lua
         appendedCount += 1
-        await upsertInstanceModFn({
+        if (input.persistDependencies) await upsertInstanceModFn({
           instanceId,
           workshopId: dependencyId,
           name: `workshop-${dependencyId}`,
@@ -421,7 +421,7 @@ async function buildBackfillPlan(input: {
   }
 
   if (included.size === 0) {
-    return { order: [], nextAvailableAt: null, warnings: uniqueWarnings(warnings) }
+    return { eligibleIds: [], order: [], nextAvailableAt: null, warnings: uniqueWarnings(warnings) }
   }
 
   const availableAt = (workshopId: string): number | null => {
@@ -453,7 +453,11 @@ async function buildBackfillPlan(input: {
   const done = new Set<string>()
   const deferred = new Set<string>()
   const visit = (workshopId: string): void => {
-    if (done.has(workshopId) || visiting.has(workshopId)) {
+    if (visiting.has(workshopId)) {
+      warnings.push('检测到 Mod 循环依赖，将分别下载各项；请检查依赖配置')
+      return
+    }
+    if (done.has(workshopId)) {
       return
     }
     visiting.add(workshopId)
@@ -473,11 +477,12 @@ async function buildBackfillPlan(input: {
       deferred.add(workshopId)
       return
     }
-    ordered.push(workshopId)
+    const mod = byId.get(workshopId)
+    if (!mod || mod.installStatus === 'pending') ordered.push(workshopId)
   }
 
   const sortedSeeds = [...seeds].sort(
-    (a, b) => a.loadOrder - b.loadOrder || a.createdAt.localeCompare(b.createdAt),
+    (a, b) => Number(Boolean(b.downloadIntent)) - Number(Boolean(a.downloadIntent)) || a.loadOrder - b.loadOrder || a.createdAt.localeCompare(b.createdAt),
   )
   for (const seed of sortedSeeds) {
     visit(seed.workshopId)
@@ -487,6 +492,7 @@ async function buildBackfillPlan(input: {
   }
 
   return {
+    eligibleIds: [...included].filter(id => byId.get(id)?.installStatus !== 'ready'),
     order: ordered,
     nextAvailableAt: earliestRetryAt === null ? null : new Date(earliestRetryAt).toISOString(),
     warnings: uniqueWarnings(warnings),
@@ -544,12 +550,16 @@ async function planBackfillBatch(
     installPath: state.installPath,
     mods,
     now: Date.now(),
+    persistDependencies: true,
   })
-  const ids = plan.order.slice(0, state.batchSize)
+  state.eligibleIds = plan.eligibleIds
+  const first = plan.order[0]
+  const force = mods.find(mod => mod.workshopId === first)?.downloadIntent === 'update'
+  const ids = plan.order.filter(id => (mods.find(mod => mod.workshopId === id)?.downloadIntent === 'update') === force).slice(0, state.batchSize)
   return {
-    items: ids.map(workshopId => ({ workshopId, force: false, source: 'backfill' as const })),
-    force: false,
-    restIds: plan.order.slice(ids.length),
+    items: ids.map(workshopId => ({ workshopId, force, source: mods.find(mod => mod.workshopId === workshopId)?.downloadIntent ? 'user' as const : 'backfill' as const })),
+    force,
+    restIds: plan.order.filter(id => !ids.includes(id)),
     nextAvailableAt: plan.nextAvailableAt,
     warnings: plan.warnings,
   }
@@ -596,9 +606,9 @@ async function runBatch(
       }
     }
 
-    let batchDownloadOk = true
     let cancelled = false
     let failureError: string | null = null
+    const verifiedDownloads = new Set<string>()
     if (toDownload.length > 0) {
       const result = await modDownloadExecutor({
         hostInstallPath: state.installPath,
@@ -617,9 +627,13 @@ async function runBatch(
           }
         },
       })
-      batchDownloadOk = result.ok
       cancelled = result.cancelled === true
       failureError = result.ok ? null : (result.error ?? 'Mod 下载失败，请稍后重试')
+      observeSteamAccess('files', { status: result.cancelled ? 'cancelled' : result.ok ? 'success' : 'failed',
+        message: result.cancelled ? '本次下载已取消' : result.ok ? '最近一次 SteamCMD 文件下载成功' : '最近一次 SteamCMD 文件下载失败，请查看失败条目并重试或本地导入' }, state.instanceId)
+      for (const id of toDownload) {
+        if (result.ok || result.items?.some(item => item.workshopId === id && item.ok)) verifiedDownloads.add(id)
+      }
     }
 
     // 内容就位的（含这次刚下完的）统一落位：DST 只从 ugc_mods 读创意工坊 Mod，
@@ -627,7 +641,7 @@ async function runBatch(
     const contentReadyIds = workshopIds.filter((workshopId) => {
       const contentPresent = isDstWorkshopModPresent(state.installPath, workshopId)
       // 强制更新时旧内容仍在盘上，文件存在不能证明这次下载成功，以 SteamCMD 结果为准
-      return force ? (contentPresent && batchDownloadOk) : contentPresent
+      return contentPresent && (!force || verifiedDownloads.has(workshopId))
     })
     // 强制更新时必须重新落位：目标目录里还是旧内容，跳过落位等于「下载目录更新了、
     // 游戏读的还是旧文件」，版本状态会一直停在「有新版本」且再也清不掉
@@ -694,16 +708,16 @@ async function runBatch(
 
     if (succeeded.length > 0) {
       // 落位已在上面对整批内容就位的项统一完成，这里只登记状态与写回 lua
-      await markBatchReady(state, succeeded, byId, payloadById, new Set(toDownload.filter(() => batchDownloadOk)))
+      await markBatchReady(state, succeeded, byId, payloadById, verifiedDownloads)
       await syncInstanceModFilesFromDb(state.instanceId, state.installPath)
     }
 
-    state.success += succeeded.length
     // 退避等待中的项不算失败：它们仍是 pending，下一批还会回来
     state.failed += terminalFailedCount
   }
   finally {
     state.active = []
+    state.mods = await listInstanceModsFn(state.instanceId)
     releaseInFlight()
     state.updatedAt = new Date().toISOString()
   }
@@ -734,17 +748,16 @@ async function markBatchReady(
     return
   }
   // 这一批一起问一次工坊，避免每个 Mod 各打一次接口；清单与依赖映射同样只读一次
-  const workshopUpdatedAtMap = await fetchWorkshopUpdatedAtMap(workshopIds)
   const installedItems = readWorkshopInstalledItems(state.installPath)
   const dependencyMap = readModDependencyMap(state.installPath)
   let dependencyMapDirty = false
+  const readyVersions = new Map<string, string>()
   for (const workshopId of workshopIds) {
     const mod = byId.get(workshopId)
     const contentSource = downloadedIds.has(workshopId) ? 'steam' : (mod?.contentSource ?? 'steam')
     const localVersion = resolveLocalModContentVersion(state.installPath, workshopId, { installedItems, contentSource, knownUpdatedAt: mod?.localUpdatedAt })
-    const workshopUpdatedAt = workshopUpdatedAtMap.get(workshopId) ?? null
     try {
-      await upsertInstanceModFn({
+      const ready = await upsertInstanceModFn({
         instanceId: state.instanceId,
         workshopId,
         name: resolvePersistedModName(state.installPath, workshopId, mod?.name),
@@ -755,19 +768,33 @@ async function markBatchReady(
         installStatus: 'ready',
         contentSource,
         installError: null,
+        downloadIntent: null,
         localUpdatedAt: localVersion.updatedAt,
         loadedCopyStale: localVersion.loadedCopyStale,
-        ...(workshopUpdatedAt
-          ? { remoteUpdatedAt: workshopUpdatedAt, updateCheckedAt: new Date().toISOString() }
-          : {}),
         retryCount: 0,
         nextRetryAt: null,
       })
+      readyVersions.set(workshopId, ready.updatedAt)
+      state.success += 1
     }
     catch {
-      // 单条写库失败不影响其余：内容已经在盘上，下次列表校准会修正
+      state.failed += 1
+      await patchMod(state.instanceId, workshopId, { installStatus: 'failed', installError: '文件已安装，但状态保存失败，请重试' })
+      finishJobRecord(state.instanceId, workshopId, 'failed', '文件已安装，但状态保存失败，请重试')
+      continue
     }
     finishJobRecord(state.instanceId, workshopId, 'success', null)
+
+    // 下载前未知的依赖只能从新内容读出；显式下载的禁用父项也要补齐文件。
+    if (mod?.downloadIntent) {
+      for (const dependencyId of readModDependencies(state.installPath, workshopId, dependencyMap)) {
+        if (dependencyId === workshopId) continue
+        const existing = await getInstanceModByWorkshopIdFn(state.instanceId, dependencyId)
+        if (existing?.installStatus === 'ready' || state.active.some(item => item.workshopId === dependencyId)) continue
+        await upsertPendingModRecord({ instanceId: state.instanceId, installPath: state.installPath,
+          payload: { workshopId: dependencyId, enabled: existing?.enabled ?? true } })
+      }
+    }
 
     const payload = payloadById.get(workshopId)
     const dependencyIds = normalizeDependencyIds(payload?.dependencyIds)
@@ -779,6 +806,18 @@ async function markBatchReady(
   if (dependencyMapDirty) {
     writeModDependencyMap(state.installPath, dependencyMap)
   }
+  // 文件就绪先反馈。远端补全失败不延长下载状态，也不覆盖新的下载/本地导入。
+  const enrichmentInstanceId = state.instanceId
+  const readMod = getInstanceModByWorkshopIdFn
+  const updateMod = updateInstanceModByWorkshopIdFn
+  void fetchWorkshopUpdatedAtMap(workshopIds).then(async (metadata) => {
+    for (const [id, remoteUpdatedAt] of metadata) {
+      const current = await readMod(enrichmentInstanceId, id)
+      if (current?.installStatus === 'ready' && current.contentSource !== 'local' && !current.downloadIntent && current.updatedAt === readyVersions.get(id)) {
+        await updateMod(enrichmentInstanceId, id, { remoteUpdatedAt, updateCheckedAt: new Date().toISOString() }).catch(() => {})
+      }
+    }
+  }).catch(() => {})
 }
 
 // ---------------------------------------------------------------------------
@@ -795,12 +834,15 @@ async function runQueueLoop(state: InstanceQueueState): Promise<void> {
         state.nextBatchAt = null
         break
       }
+      if (state.retryFailed) await prepareQueue(state)
       const mods = await listInstanceModsFn(state.instanceId)
-      recalcQueueTotal(state, mods)
+      state.mods = mods
       const headBatch = takeHeadBatch(state)
       const batch = headBatch ?? (await planBackfillBatch(state, mods))
-      state.warnings = batch.warnings
+      state.warnings = uniqueWarnings([...state.warnings, ...batch.warnings])
       state.waitingIds = batch.restIds
+      recalcQueueTotal(state, mods)
+      if (state.pauseRequested || state.cancelRequested) continue
       if (batch.items.length === 0) {
         if (batch.nextAvailableAt) {
           state.status = 'running'
@@ -847,7 +889,8 @@ async function prepareQueue(state: InstanceQueueState): Promise<void> {
   let mods = await listInstanceModsFn(state.instanceId)
   if (state.retryFailed) {
     state.retryFailed = false
-    const failedMods = mods.filter(mod => mod.installStatus === 'failed')
+    const plan = await buildBackfillPlan({ instanceId: state.instanceId, installPath: state.installPath, mods, now: Date.now() })
+    const failedMods = mods.filter(mod => mod.installStatus === 'failed' && plan.eligibleIds.includes(mod.workshopId))
     for (const mod of failedMods) {
       await patchMod(state.instanceId, mod.workshopId, {
         installStatus: 'pending',
@@ -861,6 +904,7 @@ async function prepareQueue(state: InstanceQueueState): Promise<void> {
     }
   }
   recalcQueueTotal(state, mods)
+  state.mods = mods
   state.updatedAt = new Date().toISOString()
 }
 
@@ -873,8 +917,9 @@ async function prepareQueue(state: InstanceQueueState): Promise<void> {
  */
 function recalcQueueTotal(state: InstanceQueueState, mods: DbInstanceMod[]): void {
   const waiting = new Set(state.head.map(item => item.workshopId))
+  for (const id of state.eligibleIds) if (!mods.some(mod => mod.workshopId === id)) waiting.add(id)
   for (const mod of mods) {
-    if (mod.installStatus === 'pending' && mod.enabled) {
+    if (mod.installStatus === 'pending' && (state.eligibleIds.includes(mod.workshopId) || mod.enabled || mod.downloadIntent)) {
       waiting.add(mod.workshopId)
     }
   }
@@ -894,12 +939,33 @@ function launchQueueWorker(state: InstanceQueueState) {
 
 function toQueueDto(state: InstanceQueueState): ModDownloadQueueDto {
   const activeCount = state.active.length
+  const phase = state.active.length > 0
+    ? (modInstallJobs.get(buildJobKey(state.instanceId, state.active[0].workshopId))?.phase ?? 'waiting_steamcmd')
+    : state.nextBatchAt ? 'retry_wait' as const : null
+  const queuedIds = new Set([...state.head.map(item => item.workshopId), ...state.waitingIds, ...state.eligibleIds])
+  const items: ModDownloadQueueItemDto[] = state.mods.map(mod => {
+    const active = state.active.some(item => item.workshopId === mod.workshopId)
+    const job = modInstallJobs.get(buildJobKey(state.instanceId, mod.workshopId))
+    const status = active ? 'pending' : mod.installStatus
+    return { workshopId: mod.workshopId, installStatus: status,
+      phase: active ? (job?.phase ?? 'waiting_steamcmd') : status === 'ready' ? 'ready' : status === 'failed' ? 'failed' : mod.nextRetryAt ? 'retry_wait' : queuedIds.has(mod.workshopId) ? 'queued' : 'inactive',
+      error: mod.installError, nextRetryAt: mod.nextRetryAt }
+  })
+  for (const id of queuedIds) {
+    if (items.some(item => item.workshopId === id)) continue
+    items.push({ workshopId: id, installStatus: 'pending', phase: 'queued', error: MISSING_MOD_CONTENT_ERROR, nextRetryAt: null })
+  }
   return {
     instanceId: state.instanceId,
     status: state.status,
+    phase,
+    items,
+    eligibleCount: items.filter(item => item.installStatus === 'pending' && item.phase !== 'inactive').length,
+    inactiveMissingCount: items.filter(item => item.phase === 'inactive').length,
+    retryableFailedCount: items.filter(item => item.phase === 'failed' && queuedIds.has(item.workshopId)).length,
     total: state.total,
     queued: Math.max(0, state.total - state.success - state.failed - activeCount),
-    downloading: activeCount,
+    downloading: phase === 'downloading' ? activeCount : 0,
     success: state.success,
     failed: state.failed,
     currentWorkshopIds: state.active.map(item => item.workshopId),
@@ -937,7 +1003,7 @@ export async function startModDownloadQueue(input: {
   if (existing && existing.runPromise) {
     if (input.head && input.head.length > 0) {
       const previousHeadSize = existing.head.length
-      existing.head = mergeQueueItems(existing.head, input.head)
+      existing.head = mergeQueueItems(existing.head, input.head.filter(item => !existing.active.some(active => active.workshopId === item.workshopId)))
       // 只把真正新增的计入总数；去重后的差额会在下一轮 recalcQueueTotal 里被纠正
       existing.total += existing.head.length - previousHeadSize
     }
@@ -968,6 +1034,8 @@ export async function startModDownloadQueue(input: {
     runPromise: null,
     waitingIds: [],
     retryFailed: input.retryFailed === true,
+    mods: [],
+    eligibleIds: [],
   }
   // 同步占位：worker 在下一个 await 之前就被登记为「已有一条队列」
   queueStates.set(instanceId, state)
@@ -997,7 +1065,10 @@ export function pauseModDownloadQueue(instanceId: string): ModDownloadQueueDto |
     return null
   }
   state.pauseRequested = true
-  state.status = state.active.length > 0 ? 'pausing' : 'paused'
+  if (state.active.length > 0 && state.active.every(item => modInstallJobs.get(buildJobKey(state.instanceId, item.workshopId))?.phase === 'waiting_steamcmd')) {
+    void cancelSteamcmdInstallContainer(`modq-${state.instanceId}`).catch(() => {})
+  }
+  state.status = state.runPromise ? 'pausing' : 'paused'
   state.updatedAt = new Date().toISOString()
   return toQueueDto(state)
 }
@@ -1009,7 +1080,7 @@ export async function cancelModDownloadQueue(instanceId: string): Promise<ModDow
   }
   state.cancelRequested = true
   state.pauseRequested = true
-  state.status = state.active.length > 0 ? 'pausing' : 'paused'
+  state.status = state.runPromise ? 'pausing' : 'paused'
   state.updatedAt = new Date().toISOString()
   if (state.active.length > 0) {
     await cancelSteamcmdInstallContainer(`modq-${state.instanceId}`)
@@ -1023,43 +1094,51 @@ export async function cancelModDownloadQueue(instanceId: string): Promise<ModDow
  * 面板重启后队列为空、`pending` 原样留在库里，所以这里给出的是「待下载 N 个」而不是
  * 「正在下载」——用户显式点「开始下载」才会真正跑起来。
  *
- * 计数只按「启用中的 pending」算，不在这里展开依赖闭包：那需要读 modinfo 文件，
- * 而这是个会被前端每 3 秒打一次的只读接口。真正的候选展开在 worker 选批时做。
+ * 与 worker 共用候选计算，计入显式意图和已知依赖；只读状态请求不新增依赖记录。
  */
 export async function resolveModDownloadQueueState(input: {
   instanceId: string
   installPath: string
 }): Promise<ModDownloadQueueDto> {
   const instanceId = input.instanceId.trim()
+  const mods = await listInstanceModsFn(instanceId)
+  const plan = await buildBackfillPlan({ ...input, mods, now: Date.now() })
   const state = queueStates.get(instanceId)
   if (state) {
+    state.mods = mods
+    state.eligibleIds = plan.eligibleIds
+    state.waitingIds = plan.eligibleIds.filter(id => mods.find(mod => mod.workshopId === id)?.installStatus === 'pending' && !state.active.some(item => item.workshopId === id))
+    recalcQueueTotal(state, mods)
     return toQueueDto(state)
   }
-  const mods = await listInstanceModsFn(instanceId)
-  const eligible = mods.filter(mod => mod.installStatus === 'pending' && mod.enabled)
-  const waiting = mods.filter(mod => mod.installStatus === 'pending' && mod.nextRetryAt)
-  const earliest = waiting
-    .map(mod => Date.parse(mod.nextRetryAt as string))
-    .filter(at => Number.isFinite(at))
-    .sort((a, b) => a - b)[0]
+  const eligible = mods.filter(mod => mod.installStatus === 'pending' && plan.eligibleIds.includes(mod.workshopId))
+  const missingIds = plan.eligibleIds.filter(id => !mods.some(mod => mod.workshopId === id))
   const batchSize = resolveModDownloadBatchSize()
   return {
     instanceId,
     status: 'idle',
-    total: eligible.length,
-    queued: eligible.length,
+    phase: null,
+    items: [...mods.map(mod => ({ workshopId: mod.workshopId, installStatus: mod.installStatus,
+      phase: mod.installStatus === 'ready' ? 'ready' : mod.installStatus === 'failed' ? 'failed' : plan.eligibleIds.includes(mod.workshopId) ? (mod.nextRetryAt ? 'retry_wait' : 'queued') : 'inactive',
+      error: mod.installError, nextRetryAt: mod.nextRetryAt } as ModDownloadQueueItemDto)),
+      ...missingIds.map(workshopId => ({ workshopId, installStatus: 'pending' as const, phase: 'queued' as const, error: MISSING_MOD_CONTENT_ERROR, nextRetryAt: null }))],
+    eligibleCount: eligible.length + missingIds.length,
+    inactiveMissingCount: mods.filter(mod => mod.installStatus === 'pending' && !plan.eligibleIds.includes(mod.workshopId)).length,
+    retryableFailedCount: mods.filter(mod => mod.installStatus === 'failed' && plan.eligibleIds.includes(mod.workshopId)).length,
+    total: eligible.length + missingIds.length,
+    queued: eligible.length + missingIds.length,
     downloading: 0,
     success: 0,
     failed: 0,
     currentWorkshopIds: [],
-    queueWorkshopIds: eligible.map(mod => mod.workshopId),
+    queueWorkshopIds: [...eligible.map(mod => mod.workshopId), ...missingIds],
     batchSize,
     currentBatchIndex: 0,
-    nextBatchAt: earliest === undefined ? null : new Date(earliest).toISOString(),
+    nextBatchAt: plan.nextAvailableAt,
     startedAt: null,
     updatedAt: null,
     lastError: null,
-    warnings: [],
+    warnings: plan.warnings,
   }
 }
 
@@ -1104,9 +1183,10 @@ export async function enqueueModDownload(input: ModDownloadJobInput): Promise<Mo
   const workshopId = input.payload.workshopId.trim()
   const downloadIds = collectDownloadWorkshopIds(input.payload)
   const existingMod = await getInstanceModByWorkshopIdFn(input.instanceId, workshopId)
+  const force = input.force === true || existingMod?.downloadIntent === 'update'
   const filesReady = downloadIds.every(id => isDstWorkshopModPresent(input.installPath, id))
 
-  if (!input.force && existingMod?.installStatus === 'ready' && filesReady) {
+  if (!force && existingMod?.installStatus === 'ready' && filesReady) {
     const outcomes = await ensureDstUgcModLayout(input.installPath, downloadIds)
     if (outcomes.every(outcome => outcome.status !== 'failed')) return resolveReadyWithoutQueue(input.instanceId, workshopId)
   }
@@ -1133,13 +1213,18 @@ export async function enqueueModDownload(input: ModDownloadJobInput): Promise<Mo
     })
   }
 
-  await upsertPendingModRecord(input)
+  await upsertPendingModRecord({ ...input, force })
+  for (const id of downloadIds.filter(id => id !== workshopId)) {
+    const existing = await getInstanceModByWorkshopIdFn(input.instanceId, id)
+    if (existing?.installStatus === 'ready' && !force) continue
+    await upsertPendingModRecord({ ...input, force, payload: { workshopId: id, enabled: existing?.enabled ?? true } })
+  }
   beginJobRecords(input.instanceId, [workshopId])
   const head: ModDownloadQueueItem[] = downloadIds.map(id => ({
     workshopId: id,
-    force: input.force === true,
+    force,
     source: 'user' as const,
-    payload: input.payload,
+    payload: id === workshopId ? input.payload : undefined,
   }))
   await startModDownloadQueue({
     instanceId: input.instanceId,
@@ -1169,10 +1254,16 @@ export async function enqueueModDownloads(input: {
     if (!workshopId) {
       continue
     }
+    const current = queueStates.get(input.instanceId)
+    if (current && [...current.head, ...current.active].some(item => item.workshopId === workshopId)) {
+      jobs.push(getModInstallJob(input.instanceId, workshopId))
+      continue
+    }
     const downloadIds = collectDownloadWorkshopIds(payload)
     const existingMod = await getInstanceModByWorkshopIdFn(input.instanceId, workshopId)
+    const force = input.force === true || existingMod?.downloadIntent === 'update'
     const filesReady = downloadIds.every(id => isDstWorkshopModPresent(input.installPath, id))
-    if (!input.force && existingMod?.installStatus === 'ready' && filesReady) {
+    if (!force && existingMod?.installStatus === 'ready' && filesReady) {
       jobs.push(await resolveReadyWithoutQueue(input.instanceId, workshopId))
       continue
     }
@@ -1188,14 +1279,20 @@ export async function enqueueModDownloads(input: {
       instanceId: input.instanceId,
       installPath: input.installPath,
       payload,
+      force,
     })
+    for (const id of downloadIds.filter(id => id !== workshopId)) {
+      const existing = await getInstanceModByWorkshopIdFn(input.instanceId, id)
+      if (existing?.installStatus === 'ready' && !force) continue
+      await upsertPendingModRecord({ ...input, force, payload: { workshopId: id, enabled: existing?.enabled ?? true } })
+    }
     beginJobRecords(input.instanceId, [workshopId])
     for (const id of downloadIds) {
       head.push({
         workshopId: id,
-        force: input.force === true,
+        force,
         source: 'user',
-        payload,
+        payload: id === workshopId ? payload : undefined,
       })
     }
     jobs.push(getModInstallJob(input.instanceId, workshopId))

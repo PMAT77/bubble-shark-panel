@@ -508,6 +508,7 @@ async function syncImportedModsToDb(options: {
         loadOrder: index,
         installStatus: contentPresent ? 'ready' : 'pending',
         installError: contentPresent ? null : MISSING_MOD_CONTENT_ERROR,
+        downloadIntent: null,
         config: JSON.stringify(entry.configurationOptions),
       })
     }
@@ -693,7 +694,7 @@ async function importSaveToInstanceLocked(options: ImportSaveToInstanceOptions):
       warnings.push('Mod 列表写入面板数据库失败，请到 Mod 页面手动核对，否则下次同步可能丢失导入 Mod 配置')
     }
     if (modSync.missingWorkshopContent.length > 0) {
-      warnings.push(`${modSync.missingWorkshopContent.length} 个 Mod 的创意工坊内容尚未下载：面板不自动下载，请在「世界设置 → 模组」点「开始下载」按批补齐`)
+      warnings.push(`${modSync.missingWorkshopContent.length} 个 Mod 文件尚未准备好，请在「Mod 管理 → 已订阅」处理缺失 Mod`)
     }
     if (modSync.modSyncOk) {
       try {

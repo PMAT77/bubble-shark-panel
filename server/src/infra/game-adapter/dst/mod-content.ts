@@ -4,6 +4,22 @@ import path from 'node:path'
 
 export interface ContentTree { files: string[], sizeBytes: number, fileCount: number, sha256: string }
 
+/** 每个 modinfo.lua 的父目录是一项内容；嵌套根会重复包含文件，不能猜测归属。 */
+export function findModDirectories(files: string[]): string[] {
+  const directories = files.filter(file => path.posix.basename(file) === 'modinfo.lua').map(file => path.posix.dirname(file))
+    .sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
+  if (!directories.length) throw new Error('ZIP 中未找到 Mod，请确认各 Mod 目录中包含 modinfo.lua')
+  const roots = new Set(directories)
+  for (const child of directories) {
+    let parent = child
+    while (parent !== '.') {
+      parent = path.posix.dirname(parent)
+      if (roots.has(parent)) throw new Error(`Mod 目录存在嵌套冲突：${parent} 与 ${child}，请分别打包各 Mod 目录`)
+    }
+  }
+  return directories
+}
+
 export async function sha256File(file: string): Promise<string> {
   const hash = createHash('sha256')
   for await (const chunk of fs.createReadStream(file)) hash.update(chunk)

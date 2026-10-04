@@ -1,6 +1,10 @@
 import type {
+  ModAccessStatusDto,
   ModImportCommit,
   ModImportInspection,
+  ModImportBatchResult,
+  ModImportSingleCommit,
+  ModImportBatchCommit,
   ModBatchUpdatePayload,
   ModConfigDto,
   ModConfigPayload,
@@ -62,6 +66,12 @@ export type {
 
 const MOD_INSTALL_JOB_POLL_INTERVAL_MS = 2000
 
+function commitImport(instanceId: string, input: ModImportSingleCommit): Promise<{ data: ModMutationResult }>
+function commitImport(instanceId: string, input: ModImportBatchCommit): Promise<{ data: ModImportBatchResult }>
+function commitImport(instanceId: string, input: ModImportCommit): Promise<{ data: ModMutationResult | ModImportBatchResult }> {
+  return api.post(`app/instances/${instanceId}/mods/import/commit`, input, { timeout: 0 }) as Promise<{ data: ModMutationResult | ModImportBatchResult }>
+}
+
 function createAbortError(): Error {
   const error = new Error('Mod 安装任务轮询已取消')
   error.name = 'AbortError'
@@ -103,7 +113,7 @@ export default {
     timeout: 0,
     onUploadProgress: event => progress(Math.min(100, Math.round(event.loaded / (event.total || file.size) * 100))),
   }) as Promise<{ data: ModImportInspection }>,
-  commitImport: (instanceId: string, input: ModImportCommit) => api.post(`app/instances/${instanceId}/mods/import/commit`, input, { timeout: 0 }) as Promise<{ data: ModMutationResult }>,
+  commitImport,
   discardImport: (instanceId: string, importId: string) => api.delete(`app/instances/${instanceId}/mods/import/${importId}`),
   getModList: (instanceId: string, options?: { enrich?: string }) =>
     api.get(`app/instances/${instanceId}/mods`, {
@@ -180,8 +190,10 @@ export default {
   /** 实例级下载队列状态：前端只轮询这一个接口，不再为每个 Mod 各起一个轮询 */
   getModDownloadQueue: (instanceId: string) =>
     api.get(`app/instances/${instanceId}/mods/download-queue`) as Promise<{ data: ModDownloadQueueDto }>,
-  startModDownloadQueue: (instanceId: string) =>
-    api.post(`app/instances/${instanceId}/mods/download-queue/start`, {}) as Promise<{ data: ModDownloadQueueDto }>,
+  getModAccessStatus: (instanceId: string) =>
+    api.get(`app/instances/${instanceId}/mods/access-status`) as Promise<{ data: ModAccessStatusDto }>,
+  startModDownloadQueue: (instanceId: string, options?: { retryFailed?: boolean }) =>
+    api.post(`app/instances/${instanceId}/mods/download-queue/start`, options ?? {}) as Promise<{ data: ModDownloadQueueDto }>,
   pauseModDownloadQueue: (instanceId: string) =>
     api.post(`app/instances/${instanceId}/mods/download-queue/pause`, {}) as Promise<{ data: ModDownloadQueueDto }>,
   cancelModDownloadQueue: (instanceId: string) =>

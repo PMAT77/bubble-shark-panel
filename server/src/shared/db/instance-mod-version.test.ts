@@ -19,6 +19,16 @@ const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url
 
 /** Mod 版本时间入库：迁移新增三列后，读写两侧的列名必须对得上 */
 describe('instance_mods version columns', () => {
+  it('persists explicit intent, preserves omitted values and clears it explicitly', async () => {
+    const instanceId = `intent-${randomUUID()}`
+    const input = { instanceId, workshopId: '777', name: 'Disabled update', enabled: false, loadOrder: 0, installStatus: 'pending' as const }
+    await upsertInstanceMod({ ...input, downloadIntent: 'update' })
+    assert.equal((await getInstanceModByWorkshopId(instanceId, '777'))?.downloadIntent, 'update')
+    await upsertInstanceMod(input)
+    assert.equal((await listInstanceMods(instanceId))[0]?.downloadIntent, 'update')
+    await updateInstanceModByWorkshopId(instanceId, '777', { downloadIntent: null })
+    assert.equal((await getInstanceModByWorkshopId(instanceId, '777'))?.downloadIntent, null)
+  })
   before(async () => {
     await initDatabase(dbFilePath, migrationsFolder)
   })

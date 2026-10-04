@@ -12,6 +12,7 @@ import type {
 } from '@/api/modules/mod'
 import type { InstanceSummaryItem } from '@/api/modules/instance'
 import { useDebounceFn } from '@vueuse/core'
+import { ChevronRight } from 'lucide-vue-next'
 import type { NotificationReactive } from 'naive-ui'
 import { NAlert, NButton, NCard, NDataTable, NEmpty, NImage, NInput, NPagination, NRate, NSelect, NSwitch, NTabPane, NTabs, NTag, NTooltip, useDialog, useMessage, useNotification } from 'naive-ui'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
@@ -23,9 +24,11 @@ import { isInstallableGameInstance } from '@/composables/useGameInstance'
 import { useInstanceModState } from '@/composables/useInstanceModState'
 import ModConfigModal from '@/views/games/dst/mod/components/ModConfigModal.vue'
 import LocalModImportModal from '@/views/games/dst/mod/components/LocalModImportModal.vue'
+import ModAccessStatusPanel from '@/views/games/dst/mod/components/ModAccessStatusPanel.vue'
+import { resolveModDownloadDetails } from '@/views/games/dst/mod/modDownloadPresentation'
 import { resolveModUpdateCheckNotice } from '@/views/games/dst/mod/modUpdateCheckPresentation'
 import { countOutdatedMods, resolveUpdateIneffectiveNotice, selectUpdatableMods } from '@/views/games/dst/mod/modUpdateTargets'
-import { routeToDstModDetail, routeToDstWorldSettings, routeToNodeInstance } from '@/navigation/game-routes'
+import { routeToDstModDetail, routeToNodeInstance } from '@/navigation/game-routes'
 import { MOD_INSTALL_STATUS, MOD_UPDATE_STATUS } from '@/constants/statusDictionary'
 import { getInstanceState } from '@/views/node/instance/instanceDisplay'
 
@@ -34,6 +37,7 @@ defineOptions({
 })
 
 const router = useRouter()
+const route = useRoute()
 const message = useMessage()
 const dialog = useDialog()
 const notification = useNotification()
@@ -44,7 +48,7 @@ const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 const subscribeGuideNotificationRef = ref<NotificationReactive | null>(null)
 /** 服务端下发的 Mod 风险提示横幅（加载列表/切换开关时更新） */
 const riskTipBanner = ref<string | null>(null)
-/** Steam 列表加载失败原因：与空列表区分 */
+/** Steam 列表加载失败时使用通用空状态，避免显示搜索无结果 */
 const steamLoadError = ref<string | null>(null)
 
 interface BusinessErrorLike {
@@ -84,10 +88,15 @@ const batchUpdating = ref(false)
 const reorderingMods = ref(false)
 const configModalShow = ref(false)
 const localImportShow = ref(false)
+let listRequest = 0
+let previewRequestInstance = ''
+let renderedSteamQuery = ''
 const modInstanceStatus = ref('')
 const configTarget = ref<{ workshopId: string, name: string } | null>(null)
 const instances = ref<InstanceSummaryItem[]>([])
 const selectedInstanceId = ref('')
+const queueDetailsOpen = ref(false)
+watch(selectedInstanceId, () => { queueDetailsOpen.value = false })
 const {
   downloadingMods,
   downloadQueue,
@@ -98,7 +107,7 @@ const {
   refreshQueue,
   resetState,
 } = useInstanceModState(() => selectedInstanceId.value)
-const activeTab = ref<'market' | 'subscribed'>('market')
+const activeTab = ref<'market' | 'subscribed'>(route.query.tab === 'subscribed' ? 'subscribed' : 'market')
 const steamKeyword = ref('')
 const steamSort = ref<SteamModSort>('trend')
 const steamTrendDays = ref<SteamModTrendDays>(7)
@@ -111,7 +120,6 @@ const steamSourceUrl = ref('')
 const steamMods = ref<SteamModListQueryResultItem[]>([])
 const installedMods = ref<ModItemDto[]>([])
 const steamMeta = ref<SteamModMeta | null>(null)
-const steamUpstreamHint = ref<string | null>(null)
 const steamAbortController = shallowRef<AbortController | null>(null)
 const suppressSteamSortWatchUntil = ref(0)
 
@@ -248,8 +256,8 @@ const marketEmptyDescription = computed(() => {
   if (!selectedInstanceId.value) {
     return '请先选择实例'
   }
-  if (steamLoadError.value) {
-    return steamLoadError.value
+  if (steamLoadError.value || steamMeta.value?.upstreamUnavailable) {
+    return '暂无 Mod 数据'
   }
   if (steamKeyword.value.trim()) {
     return '未找到符合条件的 Mod'
@@ -353,7 +361,7 @@ function modUpdateTooltip(mod: ModItemDto): string {
     return '创意工坊上有更新的版本，点「更新」重新下载后再重启实例'
   }
   if (mod.updateStatus === 'up_to_date') {
-    return `已是最新版本${mod.updateCheckedAt ? `（检查于 ${formatCheckedAt(mod.updateCheckedAt)}）` : ''}`
+    return `与已保存的工坊版本一致${mod.updateCheckedAt ? `（检查于 ${formatCheckedAt(mod.updateCheckedAt)}）` : '（检查时间未知）'}；可再次检查获取当前版本`
   }
   if (mod.installStatus !== 'ready') {
     return 'Mod 尚未下载完成，暂不判断版本'
@@ -398,7 +406,7 @@ function resolveMarketSubscribeStatus(row: SteamModListQueryResultItem): ModInst
 
 function marketStatusLabel(row: SteamModListQueryResultItem): string {
   const status = resolveMarketSubscribeStatus(row)
-  if (status === 'pending') return '下载中'
+  if (status === 'pending') return pendingDownloadLabel(row.workshopId)
   if (status === 'failed') return '下载失败'
   if (status === 'ready') return '已订阅'
   return '未订阅'
@@ -412,9 +420,18 @@ function marketStatusType(row: SteamModListQueryResultItem): 'default' | 'succes
   return 'default'
 }
 
+function pendingDownloadLabel(workshopId: string): string {
+  const phase = downloadQueue.value?.items.find(item => item.workshopId === workshopId)?.phase
+  return phase === 'downloading' ? '下载中' : phase === 'waiting_steamcmd' ? '等待其他任务' : phase === 'retry_wait' ? '等待重试' : phase === 'queued' ? '等待下载' : '待下载'
+}
+
+function modUpdateLabel(mod: ModItemDto): string {
+  return mod.updateStatus === 'up_to_date' ? '检查时最新' : MOD_UPDATE_STATUS[mod.updateStatus].label
+}
+
 function subscribedStatusLabel(row: ModItemDto): string {
   if (row.installStatus === 'pending' || isPendingWorkshop(row.workshopId)) {
-    return pendingStatusLabel.value
+    return pendingDownloadLabel(row.workshopId)
   }
   if (row.installStatus === 'failed') {
     return MOD_INSTALL_STATUS.failed.label
@@ -432,10 +449,7 @@ function subscribedStatusType(row: ModItemDto): 'success' | 'warning' | 'error' 
  * 说成「下载中」会让用户以为正在下。
  */
 const pendingStatusLabel = computed(() => {
-  const status = downloadQueue.value?.status
-  return status === 'running' || status === 'pausing'
-    ? MOD_INSTALL_STATUS.pending.label
-    : '待下载'
+  return '未就绪'
 })
 
 function mergeSteamRowsWithInstalled(
@@ -498,10 +512,6 @@ function applyJobResultToInstalledMods(workshopId: string, mod?: ModItemDto, err
 /** 列表里是否已经有渲染过的内容：失败/降级时用它决定「保留」还是「清空」 */
 const hasRenderedSteamRows = computed(() => steamMods.value.length > 0)
 
-function isSteamOfflineMeta(meta: SteamModMeta | null | undefined): boolean {
-  return Boolean(meta?.offline)
-}
-
 /** 离线兜底的横幅：说清「为什么是旧的」以及「怎么办」 */
 function resolveSteamOfflineHint(meta: SteamModMeta): string {
   const fetchedAt = meta.dataFetchedAt ? formatDateTime(meta.dataFetchedAt) : null
@@ -514,6 +524,10 @@ const steamMetaText = computed(() => {
   if (!steamMeta.value) {
     return ''
   }
+  if (steamMeta.value.upstreamUnavailable) return ''
+  if (steamMeta.value.dataFetchedAt) {
+    return `${steamMeta.value.offline ? '离线缓存' : steamMeta.value.cached ? '缓存' : '数据'} · 获取于 ${formatDateTime(steamMeta.value.dataFetchedAt)}`
+  }
   // 离线数据：给出的是「最后一次成功拉取」的时间，不是「多久没刷新了」，
   // 否则用户会把一份很旧的列表当成实时的
   if (steamMeta.value.offline) {
@@ -524,7 +538,7 @@ const steamMetaText = computed(() => {
   const ageText = ageMs < 60_000
     ? `${Math.max(1, Math.round(ageMs / 1000))} 秒前`
     : `${Math.max(1, Math.round(ageMs / 60_000))} 分钟前`
-  return `更新于 ${ageText}`
+  return `读取时的数据年龄：${ageText}`
 })
 
 const steamSortOptions = computed(() => [
@@ -544,8 +558,6 @@ const steamTrendDaysOptions = [
   { label: '有史以来', value: -1 },
 ]
 
-const STEAM_UPSTREAM_HINT_FALLBACK = '暂时无法加载 Steam 列表，请稍后点击刷新重试'
-
 const TECHNICAL_STEAM_ERROR_PATTERNS = [
   /^Command failed:/i,
   /powershell/i,
@@ -559,13 +571,6 @@ const TECHNICAL_STEAM_ERROR_PATTERNS = [
 function isTechnicalSteamErrorMessage(message: string): boolean {
   const normalized = message.trim()
   return !normalized || TECHNICAL_STEAM_ERROR_PATTERNS.some(pattern => pattern.test(normalized))
-}
-
-function resolveSteamUpstreamHint(message?: string | null): string {
-  if (!message || isTechnicalSteamErrorMessage(message)) {
-    return STEAM_UPSTREAM_HINT_FALLBACK
-  }
-  return message
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -603,17 +608,13 @@ function showSubscribeSuccessGuide() {
   subscribeGuideNotificationRef.value?.destroy()
   subscribeGuideNotificationRef.value = notification.success({
     title: '订阅成功',
-    content: 'Mod 已下载完成。请到「世界管理」开启该 Mod，重启实例后生效。',
+    content: hasPermission('mod:toggle') ? 'Mod 文件已准备好，可在「已订阅」列表开启，重启实例后生效。' : 'Mod 文件已准备好；开启时请联系有权限的管理员。',
     duration: 0,
     closable: true,
     onClose: () => {
       subscribeGuideNotificationRef.value = null
     },
-    /**
-     * 这个按钮跳的是「世界管理」模块（world:read）。目标模块无权时那条路由根本没注册，
-     * 按名跳转会在路由解析阶段抛 `No match`——按钮看起来就是坏的，所以干脆不渲染。
-     */
-    action: () => hasPermission('world:read')
+    action: () => hasPermission('mod:read')
       ? h(
           NButton,
           {
@@ -624,11 +625,11 @@ function showSubscribeSuccessGuide() {
               subscribeGuideNotificationRef.value?.destroy()
               subscribeGuideNotificationRef.value = null
               if (selectedInstanceId.value) {
-                router.push(routeToDstWorldSettings(selectedInstanceId.value))
+                activeTab.value = 'subscribed'
               }
             },
           },
-          { default: () => '去开启 Mod' },
+          { default: () => '查看已订阅' },
         )
       : null,
   })
@@ -647,7 +648,7 @@ function renderMarketStatus(row: SteamModListQueryResultItem) {
     return h(
       NTag,
       { size: 'small', bordered: false, type: 'warning' },
-      { default: () => '下载中' },
+      { default: () => pendingDownloadLabel(row.workshopId) },
     )
   }
   if (status === 'failed') {
@@ -811,11 +812,10 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
     key: 'updateStatus',
     width: 120,
     render: (row) => {
-      const descriptor = MOD_UPDATE_STATUS[row.updateStatus]
       const tag = h(
         NTag,
         { size: 'small', bordered: false, type: modUpdateTagType(row.updateStatus) },
-        { default: () => descriptor.label },
+        { default: () => modUpdateLabel(row) },
       )
       return h(
         NTooltip,
@@ -831,7 +831,7 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
     render: (row) => {
       const pending = row.installStatus === 'pending' || isPendingWorkshop(row.workshopId)
       const label = pending
-        ? pendingStatusLabel.value
+        ? subscribedStatusLabel(row)
         : row.installStatus === 'failed' ? MOD_INSTALL_STATUS.failed.label : MOD_INSTALL_STATUS.ready.label
       const type = pending ? 'warning' : row.installStatus === 'failed' ? 'error' : 'success'
       const tag = h(NTag, { size: 'small', bordered: false, type }, { default: () => label })
@@ -874,6 +874,10 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
     key: 'actions',
     width: 400,
     render: (row, index) => h('div', { class: 'flex items-center gap-3' }, [
+      ...(row.installStatus === 'pending' && !isPendingWorkshop(row.workshopId) && hasPermission('mod:install')
+        ? [h(NButton, { size: 'tiny', onClick: () => void retryFailedInstall(row) }, { default: () => '下载' })] : []),
+      ...(row.installStatus !== 'ready' && hasPermission('mod:install')
+        ? [h(NButton, { size: 'tiny', onClick: () => { localImportShow.value = true } }, { default: () => '本地导入' })] : []),
       ...(row.installStatus === 'ready'
         ? [
             // 「更新」只在创意工坊确实有新版本时出现，否则这个按钮点下去毫无意义
@@ -984,6 +988,8 @@ async function loadInstances() {
     const response = await apiInstance.getInstanceOptions()
     const rows = (response.data ?? []) as InstanceSummaryItem[]
     instances.value = rows.filter(isInstallableGameInstance)
+    const requested = typeof route.query.instanceId === 'string' ? route.query.instanceId : ''
+    if (instances.value.some(item => item.id === requested)) selectedInstanceId.value = requested
     if (instances.value.length === 0) {
       selectedInstanceId.value = ''
     }
@@ -1010,11 +1016,22 @@ async function loadInstalledMods() {
     resetState()
     return
   }
+  const id = selectedInstanceId.value
+  const request = ++listRequest
   loadingInstalled.value = true
   try {
     // 补缩略图：导入存档带进来的 Mod 本地没有图，服务端按创意工坊 ID 补齐后落库，只补缺的那些
-    const response = await apiMod.getModList(selectedInstanceId.value, { enrich: 'previews' })
+    const response = await apiMod.getModList(id)
+    if (request !== listRequest || id !== selectedInstanceId.value) return
     installedMods.value = response.data.mods
+    if (previewRequestInstance !== id) {
+      previewRequestInstance = id
+      void apiMod.getModList(id, { enrich: 'previews' }).then(({ data }) => {
+        if (id !== selectedInstanceId.value) return
+        const previews = new Map(data.mods.map(mod => [mod.workshopId, mod.previewImage]))
+        installedMods.value = installedMods.value.map(mod => ({ ...mod, previewImage: previews.get(mod.workshopId) ?? mod.previewImage }))
+      }).catch(() => {})
+    }
     modInstanceStatus.value = response.data.instanceStatus
     riskTipBanner.value = response.data.riskTip?.trim() || null
     void restoreInstallJobs({
@@ -1024,15 +1041,14 @@ async function loadInstalledMods() {
     })
   }
   catch (error: unknown) {
-    installedMods.value = []
-    resetState()
+    if (request !== listRequest || id !== selectedInstanceId.value) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
     message.error(getErrorMessage(error, '加载已订阅 Mod 失败'))
   }
   finally {
-    loadingInstalled.value = false
+    if (request === listRequest) loadingInstalled.value = false
   }
 }
 
@@ -1044,11 +1060,8 @@ async function handleInstallJobTerminal(job: Awaited<ReturnType<typeof apiMod.po
     if (job.mod) {
       applyJobResultToInstalledMods(job.workshopId, job.mod)
     }
-    else {
-      await loadInstalledMods()
-    }
     mergeSteamRowAfterJob(job.workshopId, 'ready')
-    showSubscribeSuccessGuide()
+    if (activeTab.value === 'market') showSubscribeSuccessGuide()
     return
   }
   if (job.status === 'failed') {
@@ -1252,13 +1265,13 @@ async function retryAllFailedMods() {
   if (!selectedInstanceId.value || retryingFailedMods.value) {
     return
   }
-  const targetCount = installedMods.value.filter(mod => mod.installStatus === 'failed').length
+  const targetCount = downloadQueue.value?.retryableFailedCount ?? 0
   if (targetCount === 0) {
     return
   }
   retryingFailedMods.value = true
   try {
-    await apiMod.startModDownloadQueue(selectedInstanceId.value)
+    await apiMod.startModDownloadQueue(selectedInstanceId.value, { retryFailed: true })
     await refreshQueue()
     message.success(`已重新排队 ${targetCount} 个失败的 Mod`)
   }
@@ -1279,50 +1292,22 @@ async function retryAllFailedMods() {
  */
 const queuePanel = computed(() => {
   const queue = downloadQueue.value
-  const pendingCount = installedMods.value.filter(mod => mod.installStatus === 'pending').length
-  const running = queue?.status === 'running' || queue?.status === 'pausing'
-  if (running && queue) {
-    // 进度按「已完成 / 本次目标」算：批次数只是过程量，运行中还会变，
-    // 拿它做分母会出现「第 2/1 批」这种读不通的读数
-    const processed = queue.success + queue.failed
-    const total = Math.max(queue.total, processed)
-    const batchLabel = `第 ${Math.max(queue.currentBatchIndex, 1)} 批（本批 ${queue.currentWorkshopIds.length} 个）`
-    if (queue.nextBatchAt) {
-      return {
-        text: `正在下载：${batchLabel} · 已完成 ${processed}/${total} · 等待重试（${formatQueueEta(queue.nextBatchAt)}）`,
-        showStart: false,
-        showPause: true,
-        showCancel: true,
-      }
-    }
-    const failedSuffix = queue.failed > 0 ? ` · 失败 ${queue.failed}` : ''
-    return {
-      text: `正在下载：${batchLabel} · 已完成 ${processed}/${total}${failedSuffix}`,
-      showStart: false,
-      showPause: true,
-      showCancel: true,
-    }
+  if (!queue) return null
+  const controls = { showStart: false, showPause: false, showCancel: false }
+  if (queue.status === 'pausing') return { ...controls, text: queue.phase === 'downloading' ? '当前下载完成后暂停' : '正在暂停下载' }
+  if (queue.status === 'running') {
+    const text = queue.phase === 'waiting_steamcmd' ? '正在等待其他安装或下载任务完成'
+      : queue.phase === 'retry_wait' ? '部分 Mod 下载失败，稍后自动重试（' + formatQueueEta(queue.nextBatchAt ?? '') + '）'
+      : '正在下载：成功 ' + queue.success + ' · 失败 ' + queue.failed + ' · 剩余 ' + queue.eligibleCount
+    return { ...controls, text, showPause: true, showCancel: true }
   }
-  // 队列没在跑就以列表状态为准：内存里的 total 是上一次队列的快照，
-  // 拿它提示「还有 N 个没下载」会和列表里的「待下载 0」自相矛盾
-  if (pendingCount === 0) {
-    return null
-  }
-  if (queue?.status === 'paused') {
-    return {
-      text: `下载已暂停，还有 ${pendingCount} 个 Mod 未下载。`,
-      showStart: true,
-      showPause: false,
-      showCancel: false,
-    }
-  }
-  return {
-    text: `有 ${pendingCount} 个 Mod 的创意工坊内容还没下载。国内网络较慢，建议按批下载，可随时暂停。`,
-    showStart: true,
-    showPause: false,
-    showCancel: false,
-  }
+  if (queue.eligibleCount > 0) return { ...controls, showStart: true, text: queue.status === 'paused'
+    ? '下载已暂停，还有 ' + queue.eligibleCount + ' 个 Mod 未准备好' : '需要下载 ' + queue.eligibleCount + ' 个 Mod' }
+  if (queue.lastError) return { ...controls, text: '下载已暂停：' + queue.lastError }
+  if (queue.success || queue.failed) return { ...controls, text: '下载已结束：成功 ' + queue.success + ' · 失败 ' + queue.failed }
+  return null
 })
+const queueDetails = computed(() => resolveModDownloadDetails(downloadQueue.value))
 
 function formatQueueEta(iso: string): string {
   const at = Date.parse(iso)
@@ -1368,7 +1353,7 @@ async function runQueueAction(action: 'start' | 'pause' | 'cancel') {
   queueActionPending.value = true
   try {
     if (action === 'start') {
-      await apiMod.startModDownloadQueue(selectedInstanceId.value)
+      await apiMod.startModDownloadQueue(selectedInstanceId.value, { retryFailed: false })
     }
     else if (action === 'pause') {
       await apiMod.pauseModDownloadQueue(selectedInstanceId.value)
@@ -1378,10 +1363,10 @@ async function runQueueAction(action: 'start' | 'pause' | 'cancel') {
     }
     await refreshQueue()
     if (action === 'start') {
-      message.success('已开始按批下载缺失的 Mod')
+      message.success('已开始下载 Mod')
     }
     else if (action === 'pause') {
-      message.info('已暂停下载（当前批次跑完后停止）')
+      message.info(downloadQueue.value?.status === 'paused' ? '下载已暂停' : '当前下载完成后暂停')
     }
     else {
       message.warning('已取消当前批次，未完成的 Mod 仍可继续下载')
@@ -1519,7 +1504,6 @@ async function loadSteamMods(
     steamTotalCount.value = null
     steamTotalPages.value = null
     steamMeta.value = null
-    steamUpstreamHint.value = null
     return
   }
   if (resetPage) {
@@ -1529,6 +1513,19 @@ async function loadSteamMods(
   const controller = new AbortController()
   steamAbortController.value = controller
   loadingSteam.value = true
+  const queryIdentity = JSON.stringify([selectedInstanceId.value, steamKeyword.value.trim(), steamPage.value, steamPageSize.value, steamSort.value, steamTrendDays.value])
+  const sameQuery = queryIdentity === renderedSteamQuery
+  const previousMeta = steamMeta.value
+  const previousSourceUrl = steamSourceUrl.value
+  if (!sameQuery) {
+    steamMods.value = []
+    steamHasMore.value = false
+    steamTotalCount.value = null
+    steamTotalPages.value = null
+    steamMeta.value = null
+    steamSourceUrl.value = ''
+    steamLoadError.value = null
+  }
   try {
     const response = await apiMod.getSteamModList(selectedInstanceId.value, {
       keyword: steamKeyword.value.trim() || undefined,
@@ -1543,26 +1540,25 @@ async function loadSteamMods(
       return
     }
     if (response.data.meta?.upstreamUnavailable) {
-      steamUpstreamHint.value = resolveSteamUpstreamHint(response.data.meta.upstreamMessage)
       // 后端给的是「连不上上游且一条缓存都没有」，此时确实没有内容可显示。
       // 但如果本地还留着上一次成功的列表，就保留它——空白页比一份明确标注的
       // 离线列表更没用（用户连自己订阅过什么都想不起来）。
-      if (!hasRenderedSteamRows.value) {
+      if (!sameQuery || !hasRenderedSteamRows.value) {
         steamMods.value = []
         steamHasMore.value = false
         steamTotalCount.value = null
         steamTotalPages.value = null
       }
-      steamSourceUrl.value = response.data.sourceUrl
+      steamSourceUrl.value = sameQuery && hasRenderedSteamRows.value ? previousSourceUrl : response.data.sourceUrl
       steamPage.value = response.data.page
       steamPageSize.value = response.data.pageSize > 0 ? response.data.pageSize : steamPageSize.value
-      steamMeta.value = response.data.meta
+      steamMeta.value = sameQuery && hasRenderedSteamRows.value && previousMeta
+        ? { ...previousMeta, cached: true, offline: true }
+        : response.data.meta
       return
     }
-    steamUpstreamHint.value = isSteamOfflineMeta(response.data.meta)
-      ? resolveSteamOfflineHint(response.data.meta)
-      : null
     steamLoadError.value = null
+    renderedSteamQuery = queryIdentity
     steamMods.value = mergeSteamRowsWithInstalled(response.data.items, installedMods.value)
     steamSourceUrl.value = response.data.sourceUrl
     steamHasMore.value = response.data.hasMore
@@ -1588,14 +1584,14 @@ async function loadSteamMods(
     }
     // 请求整个失败了（超时/网络中断）：有内容就留着，只在确实空白时清空。
     // 之前无论有没有内容都清空，用户看到的是「列表自己消失了」。
-    if (!hasRenderedSteamRows.value) {
+    if (!sameQuery || !hasRenderedSteamRows.value) {
       steamMods.value = []
       steamHasMore.value = false
       steamTotalCount.value = null
       steamTotalPages.value = null
     }
-    steamSourceUrl.value = ''
-    steamMeta.value = null
+    steamSourceUrl.value = sameQuery && hasRenderedSteamRows.value ? previousSourceUrl : ''
+    steamMeta.value = sameQuery && hasRenderedSteamRows.value && previousMeta ? { ...previousMeta, cached: true, offline: true } : null
     if (isAuthUnauthorizedError(error)) {
       return
     }
@@ -1608,7 +1604,7 @@ async function loadSteamMods(
     if (steamAbortController.value === controller) {
       steamAbortController.value = null
     }
-    loadingSteam.value = false
+    if (!steamAbortController.value || steamAbortController.value === controller) loadingSteam.value = false
   }
 }
 
@@ -1818,10 +1814,15 @@ async function subscribeManualWorkshop() {
 
 function onInstanceChange(value: string) {
   selectedInstanceId.value = value
-  activeTab.value = 'market'
+  steamAbortController.value?.abort()
+  steamMods.value = []
+  steamMeta.value = null
+  steamLoadError.value = null
+  renderedSteamQuery = ''
+  previewRequestInstance = ''
   checkedRowKeys.value = []
   resetState()
-  void Promise.all([loadSteamMods(true), loadInstalledMods()])
+  void Promise.all([activeTab.value === 'market' ? loadSteamMods(true) : Promise.resolve(), loadInstalledMods()])
 }
 
 const triggerSteamReloadDebounced = useDebounceFn(() => {
@@ -1856,15 +1857,22 @@ watch(steamKeyword, (keyword, previousKeyword) => {
 })
 
 watch(activeTab, (tab) => {
+  if (tab === 'market' && selectedInstanceId.value && !steamMods.value.length) void loadSteamMods(true)
   if (tab === 'subscribed' && selectedInstanceId.value && !loadingInstalled.value) {
     void loadInstalledMods()
   }
 })
 
+watch(() => route.query, (query) => {
+  const id = typeof query.instanceId === 'string' ? query.instanceId : ''
+  if (id && id !== selectedInstanceId.value && instances.value.some(item => item.id === id)) onInstanceChange(id)
+  if (query.tab === 'subscribed' || query.tab === 'market') activeTab.value = query.tab
+})
+
 onMounted(async () => {
   suppressSteamSortWatchUntil.value = Date.now() + 500
   await loadInstances()
-  await Promise.all([loadSteamMods(true), loadInstalledMods()])
+  await Promise.all([activeTab.value === 'market' ? loadSteamMods(true) : Promise.resolve(), loadInstalledMods()])
 })
 </script>
 
@@ -1920,20 +1928,17 @@ onMounted(async () => {
 
       <NCard
         size="small"
-        title="Steam 创意工坊"
+        :title="activeTab === 'market' ? 'Steam 创意工坊' : '已订阅 Mod'"
         class="dst-mod-workshop-card flex flex-1 flex-col"
         content-class="flex min-h-0 flex-1 flex-col"
       >
         <div class="flex min-h-0 flex-1 flex-col gap-3">
-          <div class="flex shrink-0 flex-wrap items-center gap-3">
+          <div v-if="activeTab === 'market'" class="flex shrink-0 flex-wrap items-center gap-3">
             <div
-              v-if="steamUpstreamHint"
+              v-if="steamMeta?.offline && steamMods.length > 0"
               class="flex w-full flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning"
             >
-              <span>{{ steamUpstreamHint }}</span>
-              <NButton size="small" :disabled="!selectedInstanceId || loadingSteam" @click="loadSteamMods(true)">
-                重试
-              </NButton>
+              <span>{{ resolveSteamOfflineHint(steamMeta) }}</span>
             </div>
             <AdminListToolbar
               v-model:keyword="steamKeyword"
@@ -1959,6 +1964,7 @@ onMounted(async () => {
               </template>
               <template #actions>
                 <NInput
+                  v-if="hasPermission('mod:install')"
                   v-model:value="manualWorkshopInput"
                   class="w-full md:w-56"
                   placeholder="粘贴工坊 ID 或详情页链接"
@@ -2005,24 +2011,12 @@ onMounted(async () => {
               >
                 <template #empty>
                   <div class="dst-mod-table-empty">
-                    <NEmpty size="large" :description="marketEmptyDescription">
-                      <template v-if="steamLoadError" #extra>
-                        <NButton size="small" @click="loadSteamMods(true)">
-                          重试
-                        </NButton>
-                      </template>
-                    </NEmpty>
+                    <NEmpty size="large" :description="marketEmptyDescription" />
                   </div>
                 </template>
               </NDataTable>
               <div v-else class="dst-mod-market-list space-y-3 overflow-y-auto pr-1" :aria-busy="loadingSteam">
-                <NEmpty v-if="!loadingSteam && steamMods.length === 0" size="small" :description="marketEmptyDescription">
-                  <template v-if="steamLoadError" #extra>
-                    <NButton size="small" @click="loadSteamMods(true)">
-                      重试
-                    </NButton>
-                  </template>
-                </NEmpty>
+                <NEmpty v-if="!loadingSteam && steamMods.length === 0" size="small" :description="marketEmptyDescription" />
                 <article
                   v-for="mod in steamMods"
                   :key="mod.workshopId"
@@ -2083,7 +2077,15 @@ onMounted(async () => {
               <template #tab>
                 已订阅 ({{ subscribedTabCount }})
               </template>
-              <div class="flex h-full min-h-0 flex-col">
+              <div class="flex h-full min-h-0 flex-col overflow-y-auto">
+                <div class="mb-2 flex shrink-0 flex-wrap gap-2">
+                  <NButton v-if="hasPermission('mod:install')" size="small" :disabled="!selectedInstanceId" @click="localImportShow = true">
+                    从本地导入
+                  </NButton>
+                  <NButton size="small" :disabled="!selectedInstanceId" :loading="loadingInstalled" @click="loadInstalledMods()">
+                    刷新列表
+                  </NButton>
+                </div>
                 <div v-if="!isMobileMode" class="flex shrink-0 flex-wrap items-center gap-3 pb-2">
                   <NButton
                     size="small"
@@ -2114,14 +2116,14 @@ onMounted(async () => {
                     更新选中 ({{ selectedUpdatableMods.length }})
                   </NButton>
                   <NButton
-                    v-if="(subscribedSummary.failed > 0) && hasPermission('mod:install')"
+                    v-if="((downloadQueue?.retryableFailedCount ?? 0) > 0) && hasPermission('mod:install')"
                     size="small"
                     type="warning"
                     secondary
                     :loading="retryingFailedMods"
                     @click="retryAllFailedMods"
                   >
-                    重试全部失败 ({{ subscribedSummary.failed }})
+                    重试全部失败 ({{ downloadQueue?.retryableFailedCount ?? 0 }})
                   </NButton>
                   <span class="text-xs text-muted-foreground">
                     共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · {{ pendingStatusLabel }} {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
@@ -2139,38 +2141,57 @@ onMounted(async () => {
                 </NAlert>
                 <div
                   v-if="queuePanel"
-                  class="mb-2 flex shrink-0 flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs"
+                  class="mb-2 shrink-0 rounded-md border px-3 py-2 text-xs"
                 >
-                  <span class="flex-1">{{ queuePanel.text }}</span>
-                  <NButton
-                    v-if="queuePanel.showStart && hasPermission('mod:install')"
-                    size="tiny"
-                    type="primary"
-                    :loading="queueActionPending"
-                    @click="runQueueAction('start')"
-                  >
-                    开始下载
-                  </NButton>
-                  <NButton
-                    v-if="queuePanel.showPause && hasPermission('mod:install')"
-                    size="tiny"
-                    secondary
-                    :loading="queueActionPending"
-                    @click="runQueueAction('pause')"
-                  >
-                    暂停
-                  </NButton>
-                  <NButton
-                    v-if="queuePanel.showCancel && hasPermission('mod:install')"
-                    size="tiny"
-                    type="warning"
-                    secondary
-                    :loading="queueActionPending"
-                    @click="runQueueAction('cancel')"
-                  >
-                    取消当前批次
-                  </NButton>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      class="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                      :aria-expanded="queueDetailsOpen"
+                      aria-controls="mod-download-details"
+                      :aria-label="`下载详情：${queuePanel.text}`"
+                      @click="queueDetailsOpen = !queueDetailsOpen"
+                    >
+                      <ChevronRight class="size-4 shrink-0" :class="{ 'rotate-90': queueDetailsOpen }" aria-hidden="true" />
+                      <span>{{ queuePanel.text }}</span>
+                    </button>
+                    <NButton
+                      v-if="queuePanel.showStart && hasPermission('mod:install')"
+                      size="tiny"
+                      type="primary"
+                      :loading="queueActionPending"
+                      @click="runQueueAction('start')"
+                    >
+                      {{ downloadQueue?.status === 'paused' ? '继续下载' : '开始下载' }}
+                    </NButton>
+                    <NButton
+                      v-if="queuePanel.showPause && hasPermission('mod:install')"
+                      size="tiny"
+                      secondary
+                      :loading="queueActionPending"
+                      @click="runQueueAction('pause')"
+                    >
+                      暂停
+                    </NButton>
+                    <NButton
+                      v-if="queuePanel.showCancel && hasPermission('mod:install')"
+                      size="tiny"
+                      type="warning"
+                      secondary
+                      :loading="queueActionPending"
+                      @click="runQueueAction('cancel')"
+                    >
+                      取消当前批次
+                    </NButton>
+                  </div>
+                  <div id="mod-download-details" v-show="queueDetailsOpen" class="mt-2 space-y-1 border-t pt-2 text-muted-foreground">
+                    <p v-for="detail in queueDetails" :key="detail">{{ detail }}</p>
+                  </div>
                 </div>
+                <NAlert v-if="downloadQueue?.warnings.length" class="mb-2 shrink-0" type="warning" :bordered="false" :show-icon="false">
+                  <p v-for="warning in downloadQueue.warnings" :key="warning">{{ warning }}</p>
+                </NAlert>
+                <ModAccessStatusPanel :instance-id="selectedInstanceId" :queue="downloadQueue" />
                 <NDataTable
                   v-if="!isMobileMode"
                   :key="`subscribed-${selectedInstanceId}`"
@@ -2182,7 +2203,7 @@ onMounted(async () => {
                   :pagination="false"
                   :row-key="(row: ModItemDto) => row.workshopId"
                   :checked-row-keys="checkedRowKeys"
-                  class="dst-mod-table min-h-0 flex-1"
+                  class="dst-mod-table dst-mod-subscribed-table shrink-0 flex-1"
                   flex-height
                   :scroll-x="1310"
                   @update:checked-row-keys="(keys: Array<string | number>) => checkedRowKeys = keys"
@@ -2193,7 +2214,7 @@ onMounted(async () => {
                     </div>
                   </template>
                 </NDataTable>
-                <div v-else class="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1" :aria-busy="loadingInstalled">
+                <div v-else class="dst-mod-subscribed-list shrink-0 flex-1 space-y-3 overflow-y-auto pr-1" :aria-busy="loadingInstalled">
                   <div class="flex flex-wrap gap-2">
                     <NButton
                       size="small"
@@ -2214,14 +2235,14 @@ onMounted(async () => {
                       全部更新 ({{ updatableMods.length }})
                     </NButton>
                     <NButton
-                      v-if="(subscribedSummary.failed > 0) && hasPermission('mod:install')"
+                      v-if="((downloadQueue?.retryableFailedCount ?? 0) > 0) && hasPermission('mod:install')"
                       size="small"
                       type="warning"
                       secondary
                       :loading="retryingFailedMods"
                       @click="retryAllFailedMods"
                     >
-                      重试失败 ({{ subscribedSummary.failed }})
+                      重试全部失败 ({{ downloadQueue?.retryableFailedCount ?? 0 }})
                     </NButton>
                   </div>
                   <p class="text-xs text-muted-foreground">
@@ -2253,7 +2274,7 @@ onMounted(async () => {
                         <p class="mt-1 text-xs text-muted-foreground">Workshop ID: {{ mod.workshopId }}</p>
                         <NRate v-if="mod.rating != null" class="mt-1" readonly allow-half size="small" :value="mod.rating" />
                         <p class="mt-1 text-xs text-muted-foreground">
-                          版本：{{ MOD_UPDATE_STATUS[mod.updateStatus].label }}
+                          版本：{{ modUpdateLabel(mod) }}
                         </p>
                       </div>
                       <NTag size="small" :bordered="false" :type="subscribedStatusType(mod)">
@@ -2299,6 +2320,10 @@ onMounted(async () => {
                       <NButton :disabled="!hasSelectedInstance" @click="goToModDetail(mod.workshopId)">
                         详情
                       </NButton>
+                    </div>
+                    <div v-if="mod.installStatus !== 'ready' && hasPermission('mod:install')" class="flex gap-2">
+                      <NButton v-if="mod.installStatus === 'pending' && !isPendingWorkshop(mod.workshopId)" @click="retryFailedInstall(mod)">下载</NButton>
+                      <NButton @click="localImportShow = true">本地导入</NButton>
                     </div>
                     <div v-if="installedMods.length > 1 && hasPermission('mod:toggle')" class="flex items-center justify-end gap-2">
                       <span class="text-xs text-muted-foreground">加载顺序</span>
@@ -2379,6 +2404,15 @@ onMounted(async () => {
 /* 列表默认（桌面表格模式）不参与高度分配，由表格自己 flex-height */
 .dst-mod-market-list {
   min-height: 0;
+}
+
+/* 展开的诊断允许整个面板滚动，仍为本地列表保留可操作的区域。 */
+.dst-mod-subscribed-table {
+  min-height: 220px;
+}
+
+.dst-mod-subscribed-list {
+  min-height: 320px;
 }
 
 /*

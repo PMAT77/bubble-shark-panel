@@ -54,7 +54,7 @@ export function makeModRecord(instanceId: string, workshopId: string, values: Pa
   return {
     id: `${instanceId}:${workshopId}`, instanceId, workshopId, name: `workshop-${workshopId}`,
     previewImage: null, enabled: false, loadOrder: 0, version: null, contentSource: 'steam',
-    installStatus: 'pending', installError: null, localUpdatedAt: null, remoteUpdatedAt: null,
+    installStatus: 'pending', installError: null, downloadIntent: null, localUpdatedAt: null, remoteUpdatedAt: null,
     updateCheckedAt: null, loadedCopyStale: false, config: null, retryCount: 0, nextRetryAt: null,
     createdAt: now, updatedAt: now, ...values,
   }

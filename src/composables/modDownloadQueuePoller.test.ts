@@ -11,6 +11,11 @@ function createQueueDto(overrides: Partial<ModDownloadQueueDto> = {}): ModDownlo
   return {
     instanceId: 'inst-1',
     status: 'running',
+    phase: 'downloading',
+    items: [],
+    eligibleCount: 30,
+    inactiveMissingCount: 0,
+    retryableFailedCount: 0,
     total: 30,
     queued: 25,
     downloading: 5,
@@ -67,6 +72,34 @@ function createFakeTimers(): FakeTimers {
 }
 
 describe('modDownloadQueuePoller', () => {
+  it('使用动态间隔，在空闲观察时降低频率', async () => {
+    const timers = createFakeTimers()
+    let active = false
+    const poller = createModDownloadQueuePoller({ fetchQueue: async () => createQueueDto(), onUpdate: () => {},
+      getIntervalMs: () => active ? 3000 : 15000, setTimer: timers.setTimer, clearTimer: timers.clearTimer })
+    poller.start()
+    await flush()
+    assert.equal(timers.scheduled[0]?.timeoutMs, 15000)
+    active = true
+    await timers.runNext()
+    assert.equal(timers.scheduled[0]?.timeoutMs, 3000)
+    poller.stop()
+  })
+  it('停止或重启后丢弃旧请求的结果', async () => {
+    const timers = createFakeTimers()
+    let resolve!: (queue: ModDownloadQueueDto) => void
+    const updates: ModDownloadQueueDto[] = []
+    const poller = createModDownloadQueuePoller({ fetchQueue: () => new Promise(done => resolve = done),
+      onUpdate: queue => updates.push(queue), setTimer: timers.setTimer, clearTimer: timers.clearTimer })
+    poller.start()
+    poller.stop()
+    poller.start()
+    resolve(createQueueDto())
+    await flush()
+    assert.equal(updates.length, 0)
+    assert.equal(timers.pendingCount(), 1)
+    poller.stop()
+  })
   it('整个页面只有一个轮询器，按队列接口取状态而不是每个 Mod 一次', async () => {
     const timers = createFakeTimers()
     let fetchCount = 0

@@ -1,0 +1,1 @@
+ALTER TABLE `instance_mods` ADD `download_intent` text;

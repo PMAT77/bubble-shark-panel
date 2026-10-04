@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
+import { observeSteamAccess, observeSteamMarketCache } from './steam-access-observation'
 import type {
   ModContentLocale,
   ModInstallStatus,
@@ -146,6 +147,7 @@ interface SteamModRawResult {
 }
 
 interface SteamModCacheEntry {
+  refreshFailed?: boolean
   fetchedAt: number
   expiresAt: number
   staleExpiresAt: number
@@ -156,6 +158,7 @@ interface SteamModCacheEntry {
 
 interface PersistedCachePayload {
   entries: Record<string, SteamModCacheEntry>
+  details?: Record<string, { fetchedAt: number, schemaVersion: number, data: WorkshopDetailCacheData }>
 }
 
 interface NormalizedSteamQuery {
@@ -173,6 +176,7 @@ interface NormalizedSteamQuery {
  * 一个用户的失败影响另一个用户的超时预算。
  */
 interface SourceQuery extends NormalizedSteamQuery {
+  deadline?: number
   timeoutMs: number
   /** 已有一个源失败过：后续源不重试 */
   fastFail: boolean
@@ -882,6 +886,18 @@ function markCircuitFailure(name: SteamModUpstreamSource, channel: SteamCallChan
   steamCircuitState.set(name, state)
 }
 
+function persistSteamCache(filePath: string) {
+  const now = Date.now()
+  for (const [key, entry] of steamModCache) if (entry.offlineExpiresAt <= now) steamModCache.delete(key)
+  for (const [key, entry] of workshopDetailCache) if (entry.fetchedAt + OFFLINE_CACHE_TTL_MS <= now) workshopDetailCache.delete(key)
+  const entries = Object.fromEntries(steamModCache)
+  const details = Object.fromEntries(workshopDetailCache)
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  const temporary = `${filePath}.tmp`
+  fs.writeFileSync(temporary, JSON.stringify({ entries, details } satisfies PersistedCachePayload), 'utf8')
+  fs.renameSync(temporary, filePath)
+}
+
 function scheduleCachePersist() {
   if (!DISK_CACHE_FILE) {
     return
@@ -889,16 +905,10 @@ function scheduleCachePersist() {
   if (diskPersistTimer) {
     return
   }
-  diskPersistTimer = setTimeout(async () => {
+  diskPersistTimer = setTimeout(() => {
     diskPersistTimer = null
     try {
-      const entries = Object.fromEntries(steamModCache.entries())
-      fs.mkdirSync(path.dirname(DISK_CACHE_FILE), { recursive: true })
-      await fs.promises.writeFile(
-        DISK_CACHE_FILE,
-        JSON.stringify({ entries } satisfies PersistedCachePayload),
-        'utf8',
-      )
+      persistSteamCache(DISK_CACHE_FILE)
     }
     catch {
       // 持久缓存写入失败不影响主流程
@@ -906,24 +916,27 @@ function scheduleCachePersist() {
   }, 200)
 }
 
-function loadDiskCacheOnce() {
-  if (diskCacheLoaded) {
+function loadDiskCacheOnce(filePath = DISK_CACHE_FILE, force = false) {
+  if (diskCacheLoaded && !force) {
     return
   }
   diskCacheLoaded = true
-  if (!DISK_CACHE_FILE) {
+  if (!filePath) {
     return
   }
   try {
-    if (!fs.existsSync(DISK_CACHE_FILE)) {
+    if (!fs.existsSync(filePath)) {
       return
     }
-    const raw = fs.readFileSync(DISK_CACHE_FILE, 'utf8')
+    const raw = fs.readFileSync(filePath, 'utf8')
     if (!raw.trim()) {
       return
     }
     const payload = JSON.parse(raw) as PersistedCachePayload
     const now = Date.now()
+    for (const [id, entry] of Object.entries(payload.details ?? {})) {
+      if (entry?.schemaVersion === WORKSHOP_DETAIL_CACHE_SCHEMA && entry.fetchedAt + OFFLINE_CACHE_TTL_MS > now && entry.data?.workshopId === id) workshopDetailCache.set(id, entry)
+    }
     for (const [cacheKey, entry] of Object.entries(payload.entries ?? {})) {
       // 只要还在离线窗口内就留着：过期条目还有离线兜底的价值，
       // 以前按 staleExpiresAt（30 分钟）过滤，重启后面板就彻底没有列表可显示了
@@ -959,6 +972,7 @@ function toSteamResult(
 ): SteamModListQueryResult {
   return {
     ...raw,
+    sourceUrl: sanitizeSteamSourceUrl(raw.sourceUrl),
     totalCount: raw.totalCount ?? null,
     totalPages: raw.totalPages ?? null,
     meta,
@@ -978,6 +992,18 @@ function toSteamResult(
       }
     }),
   }
+}
+
+function sanitizeSteamSourceUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    if (!['http:', 'https:'].includes(url.protocol)) return ''
+    url.username = ''; url.password = ''
+    const sensitiveKeys = Array.from(url.searchParams.keys()).filter(key => /key|token|password|secret|authorization/i.test(key))
+    for (const key of sensitiveKeys) url.searchParams.delete(key)
+    return url.toString()
+  }
+  catch { return '' }
 }
 
 function buildWorkshopDetailUrl(workshopId: string): string {
@@ -1105,6 +1131,7 @@ function mapPublishedFileDetailToDto(item: PublishedFileDetailItem): Omit<SteamM
 async function fetchWorkshopLocalizedContent(
   workshopId: string,
   preferredLocale: ModContentLocale = DEFAULT_MOD_CONTENT_LOCALE,
+  deadline = Date.now() + TOTAL_BUDGET_MS,
 ): Promise<{
   base: Omit<WorkshopDetailCacheData, 'creatorName'>
   creatorSteamId: string | null
@@ -1113,7 +1140,7 @@ async function fetchWorkshopLocalizedContent(
   const fallbackLocale: ModContentLocale = preferredLocale === 'zh-CN' ? 'en-US' : 'zh-CN'
 
   async function fetchLocale(locale: ModContentLocale) {
-    const items = await requestPublishedFileDetails([normalizedId], { locale })
+    const items = await requestPublishedFileDetails([normalizedId], { locale, deadline })
     const item = items.find(row => row.publishedfileid?.trim() === normalizedId) ?? items[0]
     return { locale, item }
   }
@@ -1123,8 +1150,11 @@ async function fetchWorkshopLocalizedContent(
   if (primaryResult.item?.result === 1) {
     localeResults.push(primaryResult)
   }
-  if (primaryResult.item?.result !== 1 || preferredLocale !== fallbackLocale) {
-    const fallbackResult = await fetchLocale(fallbackLocale)
+  if ((primaryResult.item?.result !== 1 || preferredLocale !== fallbackLocale) && deadline > Date.now()) {
+    const fallbackResult = await fetchLocale(fallbackLocale).catch((error) => {
+      if (primaryResult.item?.result !== 1) throw error
+      return { locale: fallbackLocale, item: undefined }
+    })
     if (fallbackResult.item?.result === 1 && !localeResults.some(entry => entry.locale === fallbackLocale)) {
       localeResults.push(fallbackResult)
     }
@@ -1163,7 +1193,7 @@ function parseSteamPersonaNameFromCommunityXml(xml: string): string | null {
   return name || null
 }
 
-async function fetchSteamPersonaName(steamId: string): Promise<string | null> {
+async function fetchSteamPersonaName(steamId: string, deadline = Date.now() + TOTAL_BUDGET_MS): Promise<string | null> {
   const normalizedId = steamId.trim()
   if (!normalizedId) {
     return null
@@ -1179,7 +1209,7 @@ async function fetchSteamPersonaName(steamId: string): Promise<string | null> {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         'User-Agent': 'game-server-hub-mod-fetcher/1.0',
       },
-      timeoutMs: FETCH_TIMEOUT_MS,
+      timeoutMs: remainingTimeout(deadline, FETCH_TIMEOUT_MS),
     })
     if (summaryResponse.status >= 200 && summaryResponse.status < 300) {
       const payload = await summaryResponse.json() as {
@@ -1199,7 +1229,7 @@ async function fetchSteamPersonaName(steamId: string): Promise<string | null> {
           'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
           'User-Agent': 'game-server-hub-mod-fetcher/1.0',
         },
-        timeoutMs: FETCH_TIMEOUT_MS,
+        timeoutMs: remainingTimeout(deadline, FETCH_TIMEOUT_MS),
       },
     )
     if (profileResponse.status < 200 || profileResponse.status >= 300) {
@@ -1213,9 +1243,27 @@ async function fetchSteamPersonaName(steamId: string): Promise<string | null> {
   }
 }
 
-async function requestPublishedFileDetails(
+function remainingTimeout(deadline: number, maximum: number): number {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) throw new SteamWorkshopFetchError('STEAM_TIMEOUT', 'Steam 请求等待超时')
+  return Math.min(remaining, maximum)
+}
+
+const detailsInFlight = new Map<string, Promise<PublishedFileDetailItem[]>>()
+async function requestPublishedFileDetails(workshopIds: string[], options?: { locale?: ModContentLocale, deadline?: number }): Promise<PublishedFileDetailItem[]> {
+  const ids = [...new Set(workshopIds.map(id => id.trim()).filter(Boolean))].sort()
+  const key = JSON.stringify([ids, options?.locale ?? DEFAULT_MOD_CONTENT_LOCALE])
+  const existing = detailsInFlight.get(key)
+  if (existing) return existing
+  const task = performPublishedFileDetailsRequest(ids, options)
+  detailsInFlight.set(key, task)
+  try { return await task }
+  finally { if (detailsInFlight.get(key) === task) detailsInFlight.delete(key) }
+}
+
+async function performPublishedFileDetailsRequest(
   workshopIds: string[],
-  options?: { locale?: ModContentLocale },
+  options?: { locale?: ModContentLocale, deadline?: number },
 ): Promise<PublishedFileDetailItem[]> {
   const uniqueIds = [...new Set(workshopIds.map(id => id.trim()).filter(Boolean))]
   if (uniqueIds.length === 0) {
@@ -1237,7 +1285,7 @@ async function requestPublishedFileDetails(
       method: 'POST',
       headers,
       body: body.toString(),
-      timeoutMs: FETCH_TIMEOUT_MS,
+      timeoutMs: remainingTimeout(options?.deadline ?? Date.now() + TOTAL_BUDGET_MS, FETCH_TIMEOUT_MS),
     })
     if (response.status === 429) {
       const retryAfterSeconds = Number.parseInt(response.headers.get('Retry-After') ?? '', 10)
@@ -1252,9 +1300,11 @@ async function requestPublishedFileDetails(
         publishedfiledetails?: PublishedFileDetailItem[]
       }
     }
+    observeSteamAccess('metadata', { status: 'success', message: '最近一次详情或版本元数据请求成功' })
     return payload.response?.publishedfiledetails ?? []
   }
   catch (error) {
+    observeSteamAccess('metadata', { status: 'failed', message: '最近一次详情或版本元数据请求失败，可继续管理本地 Mod' })
     throw mapUnknownToSteamError(error)
   }
 }
@@ -1267,29 +1317,41 @@ export async function fetchWorkshopFileDetail(
   if (!normalizedId) {
     throw new SteamWorkshopFetchError('STEAM_PARSE_FAILED', '创意工坊 ID 不能为空')
   }
+  loadDiskCacheOnce()
   const cached = workshopDetailCache.get(normalizedId)
   if (
     cached
     && cached.schemaVersion === WORKSHOP_DETAIL_CACHE_SCHEMA
     && Date.now() - cached.fetchedAt < WORKSHOP_DETAIL_CACHE_TTL_MS
   ) {
-    return buildWorkshopDetailFromCache(cached.data, preferredLocale)
+    return { ...buildWorkshopDetailFromCache(cached.data, preferredLocale), cache: { source: 'cache-fresh', fetchedAt: new Date(cached.fetchedAt).toISOString() } }
   }
-  const { base, creatorSteamId } = await fetchWorkshopLocalizedContent(normalizedId, preferredLocale)
+  const deadline = Date.now() + TOTAL_BUDGET_MS
+  try {
+  const { base, creatorSteamId } = await fetchWorkshopLocalizedContent(normalizedId, preferredLocale, deadline)
   let creatorName: string | null = null
   if (creatorSteamId) {
-    creatorName = await fetchSteamPersonaName(creatorSteamId)
+    creatorName = await fetchSteamPersonaName(creatorSteamId, deadline)
   }
   const cacheData: WorkshopDetailCacheData = {
     ...base,
     creatorName,
   }
+  const fetchedAt = Date.now()
   workshopDetailCache.set(normalizedId, {
-    fetchedAt: Date.now(),
+    fetchedAt,
     schemaVersion: WORKSHOP_DETAIL_CACHE_SCHEMA,
     data: cacheData,
   })
-  return buildWorkshopDetailFromCache(cacheData, preferredLocale)
+  scheduleCachePersist()
+  return { ...buildWorkshopDetailFromCache(cacheData, preferredLocale), cache: { source: 'live', fetchedAt: new Date(fetchedAt).toISOString() } }
+  }
+  catch (error) {
+    if (cached?.schemaVersion === WORKSHOP_DETAIL_CACHE_SCHEMA && cached.fetchedAt + OFFLINE_CACHE_TTL_MS > Date.now()) {
+      return { ...buildWorkshopDetailFromCache(cached.data, preferredLocale), cache: { source: 'cache-offline', fetchedAt: new Date(cached.fetchedAt).toISOString() } }
+    }
+    throw error
+  }
 }
 
 function resolveDegradedUpstreamMessage(error: SteamWorkshopFetchError): string {
@@ -1318,8 +1380,6 @@ function buildDegradedEmptySteamResult(
   steamError: SteamWorkshopFetchError,
   traceId: string,
 ): SteamModListQueryResult {
-  const cacheKey = createCacheKey(query)
-  scheduleBackgroundRefresh(cacheKey, query)
   const sourceUrl = buildBrowseUrl(
     query.keyword,
     query.page,
@@ -1424,6 +1484,7 @@ async function fetchJsonWithTimeout(
 }
 
 async function fetchSteamWorkshopHtml(sourceUrl: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<string> {
+  const deadline = Date.now() + timeoutMs
   try {
     return await fetchWorkshopHtmlByNative(sourceUrl, timeoutMs)
   }
@@ -1435,7 +1496,7 @@ async function fetchSteamWorkshopHtml(sourceUrl: string, timeoutMs = FETCH_TIMEO
       throw error
     }
     try {
-      return await fetchWorkshopHtmlByPowerShell(sourceUrl, timeoutMs)
+      return await fetchWorkshopHtmlByPowerShell(sourceUrl, remainingTimeout(deadline, timeoutMs))
     }
     catch (fallbackError) {
       throw mapUnknownToSteamError(fallbackError)
@@ -1520,7 +1581,7 @@ function mapQueryFilesItems(items: SteamQueryFilesResponseItem[]): SteamModRawIt
   return result
 }
 
-async function fetchSteamDetailsMap(workshopIds: string[]): Promise<Map<string, SteamModRawItem>> {
+async function fetchSteamDetailsMap(workshopIds: string[], deadline = Date.now() + TOTAL_BUDGET_MS): Promise<Map<string, SteamModRawItem>> {
   const apiKey = process.env.GSH_STEAM_WEBAPI_KEY?.trim() || ''
   if (!apiKey || workshopIds.length === 0) {
     return new Map()
@@ -1533,7 +1594,7 @@ async function fetchSteamDetailsMap(workshopIds: string[]): Promise<Map<string, 
   for (let index = 0; index < workshopIds.length; index++) {
     detailsUrl.searchParams.set(`publishedfileids[${index}]`, workshopIds[index])
   }
-  const payload = await fetchJsonWithTimeout(detailsUrl.toString(), undefined, OFFICIAL_TIMEOUT_MS)
+  const payload = await fetchJsonWithTimeout(detailsUrl.toString(), undefined, remainingTimeout(deadline, OFFICIAL_TIMEOUT_MS))
   const items = normalizeQueryFilesItems(payload)
   const ratingMap = mapPublishedFileDetailsToRatingMap(items)
   const fullItems = mapQueryFilesItems(items)
@@ -1561,7 +1622,7 @@ async function fetchSteamDetailsMap(workshopIds: string[]): Promise<Map<string, 
   return result
 }
 
-async function fetchWorkshopRatingsByGetDetails(workshopIds: string[]): Promise<Map<string, number | null>> {
+async function fetchWorkshopRatingsByGetDetails(workshopIds: string[], deadline = Date.now() + TOTAL_BUDGET_MS): Promise<Map<string, number | null>> {
   const uniqueIds = [...new Set(workshopIds.map(id => id.trim()).filter(Boolean))]
   const result = new Map<string, number | null>()
   if (uniqueIds.length === 0) {
@@ -1582,7 +1643,7 @@ async function fetchWorkshopRatingsByGetDetails(workshopIds: string[]): Promise<
   for (let index = 0; index < uniqueIds.length; index++) {
     detailsUrl.searchParams.set(`publishedfileids[${index}]`, uniqueIds[index])
   }
-  const payload = await fetchJsonWithTimeout(detailsUrl.toString(), undefined, OFFICIAL_TIMEOUT_MS)
+  const payload = await fetchJsonWithTimeout(detailsUrl.toString(), undefined, remainingTimeout(deadline, OFFICIAL_TIMEOUT_MS))
   const ratingMap = mapPublishedFileDetailsToRatingMap(normalizeQueryFilesItems(payload))
   for (const workshopId of uniqueIds) {
     result.set(workshopId, ratingMap.get(workshopId) ?? null)
@@ -1590,7 +1651,7 @@ async function fetchWorkshopRatingsByGetDetails(workshopIds: string[]): Promise<
   return result
 }
 
-async function enrichWorkshopItemRatings(items: SteamModRawItem[]): Promise<void> {
+async function enrichWorkshopItemRatings(items: SteamModRawItem[], deadline = Date.now() + TOTAL_BUDGET_MS): Promise<void> {
   const missingIds = items
     .filter(item => item.rating === null)
     .map(item => item.workshopId)
@@ -1599,7 +1660,7 @@ async function enrichWorkshopItemRatings(items: SteamModRawItem[]): Promise<void
     return
   }
   try {
-    const ratingMap = await fetchWorkshopRatingsByGetDetails(missingIds)
+    const ratingMap = await fetchWorkshopRatingsByGetDetails(missingIds, deadline)
     for (const item of items) {
       if (item.rating === null) {
         item.rating = ratingMap.get(item.workshopId) ?? null
@@ -1723,7 +1784,7 @@ async function queryByOfficialApi(query: SourceQuery): Promise<SteamModRawResult
     .filter(item => !item.previewImage || !item.detailUrl)
     .map(item => item.workshopId)
   if (missingDetailIds.length > 0) {
-    const detailsMap = await fetchSteamDetailsMap(missingDetailIds)
+    const detailsMap = await fetchSteamDetailsMap(missingDetailIds, query.deadline).catch(() => new Map<string, SteamModRawItem>())
     for (const item of items) {
       const detail = detailsMap.get(item.workshopId)
       if (!detail) {
@@ -1734,7 +1795,7 @@ async function queryByOfficialApi(query: SourceQuery): Promise<SteamModRawResult
       item.rating = item.rating ?? detail.rating
     }
   }
-  await enrichWorkshopItemRatings(items)
+  await enrichWorkshopItemRatings(items, query.deadline)
   return {
     keyword: query.keyword,
     page: query.page,
@@ -1797,7 +1858,7 @@ async function queryByRelayApi(query: SourceQuery): Promise<SteamModRawResult> {
     totalPages: relayUpstreamTotalPages,
     hasMoreHint: relayHasMoreHint,
   })
-  await enrichWorkshopItemRatings(items)
+  await enrichWorkshopItemRatings(items, query.deadline)
   return {
     keyword: query.keyword,
     page: query.page,
@@ -1829,7 +1890,7 @@ async function queryByHtml(query: SourceQuery): Promise<SteamModRawResult> {
     throw new SteamWorkshopFetchError('STEAM_PARSE_FAILED', 'Steam 页面结构变更，解析失败')
   }
   const pagination = resolveHtmlPaginationMeta(html, query.page, query.requestedPageSize)
-  await enrichWorkshopItemRatings(items)
+  await enrichWorkshopItemRatings(items, query.deadline)
   return {
     keyword: query.keyword,
     page: query.page,
@@ -1910,6 +1971,7 @@ async function fetchLiveWithPolicy(
     // 已有源失败过 → 后面的源快速失败且不重试
     const sourceQuery: SourceQuery = {
       ...query,
+      deadline,
       timeoutMs: failedSourceSeen
         ? Math.min(FAST_FAIL_TIMEOUT_MS, remaining)
         : Math.min(source.timeoutMs, remaining),
@@ -1917,6 +1979,8 @@ async function fetchLiveWithPolicy(
     }
     const retryTimes = failedSourceSeen ? 0 : source.retryTimes
     for (let attempt = 0; attempt <= retryTimes; attempt++) {
+      if (Date.now() >= deadline) break
+      sourceQuery.timeoutMs = Math.min(sourceQuery.timeoutMs, deadline - Date.now())
       try {
         assertCircuitBreaker(source.name)
         assertRateLimit(cacheKey)
@@ -1928,6 +1992,7 @@ async function fetchLiveWithPolicy(
         steamFetchMetrics.steam_last_success_source = source.name
         steamFetchMetrics.steam_last_success_at = Date.now()
         markCircuitSuccess(source.name)
+        observeSteamAccess('market', { status: 'success', message: '最近一次市场列表请求成功', cached: false })
         if (process.env.NODE_ENV !== 'test') {
           console.info(`[steam-workshop] fetch_success trace=${traceId} key=${cacheKey} source=${source.name} channel=${channel}`)
         }
@@ -1936,6 +2001,7 @@ async function fetchLiveWithPolicy(
       catch (error) {
         const steamError = mapUnknownToSteamError(error)
         lastError = steamError
+        observeSteamAccess('market', { status: 'failed', message: '最近一次市场列表请求失败', cached: false })
         steamFetchMetrics.steam_fetch_fail_total[steamError.code] = (steamFetchMetrics.steam_fetch_fail_total[steamError.code] ?? 0) + 1
         steamFetchMetrics.steam_fetch_fail_by_source[source.name] += 1
         markCircuitFailure(source.name, channel)
@@ -1946,7 +2012,9 @@ async function fetchLiveWithPolicy(
         const retryAfter = steamError.retryAfterMs ?? 0
         const jitter = Math.floor(Math.random() * 100)
         const backoff = FETCH_RETRY_BASE_DELAY_MS * 2 ** attempt + jitter
-        await waitFor(Math.max(backoff, retryAfter))
+        const wait = Math.max(backoff, retryAfter)
+        if (wait >= deadline - Date.now()) break
+        await waitFor(wait)
       }
     }
     failedSourceSeen = true
@@ -1961,7 +2029,7 @@ function setCacheEntry(cacheKey: string, raw: SteamModRawResult) {
     expiresAt: now + CACHE_TTL_MS,
     staleExpiresAt: now + STALE_CACHE_TTL_MS,
     offlineExpiresAt: now + OFFLINE_CACHE_TTL_MS,
-    data: raw,
+    data: { ...raw, sourceUrl: sanitizeSteamSourceUrl(raw.sourceUrl) },
   })
   scheduleCachePersist()
 }
@@ -1984,6 +2052,11 @@ async function getOrCreateLiveFetchTask(
   steamModInFlight.set(cacheKey, task)
   try {
     return await task
+  }
+  catch (error) {
+    const cached = steamModCache.get(cacheKey)
+    if (cached) cached.refreshFailed = true
+    throw error
   }
   finally {
     steamModInFlight.delete(cacheKey)
@@ -2023,21 +2096,26 @@ export async function fetchDstSteamWorkshopMods(input: {
   const now = Date.now()
   const cacheEntry = steamModCache.get(cacheKey)
   if (cacheEntry && cacheEntry.expiresAt > now) {
+    observeSteamMarketCache(true, cacheEntry.fetchedAt)
     steamFetchMetrics.steam_cache_hit_total.fresh += 1
     return toSteamResult(cacheEntry.data, subscribedModStatusByWorkshopId, pendingWorkshopIds, enrichMeta({
       cached: true,
       stale: false,
+      dataFetchedAt: new Date(cacheEntry.fetchedAt).toISOString(),
       cacheAgeMs: now - cacheEntry.fetchedAt,
       source: 'cache-fresh',
       fetchTraceId: traceId,
     }, cacheEntry.data.upstreamSource))
   }
   if (cacheEntry && cacheEntry.staleExpiresAt > now) {
+    observeSteamMarketCache(true, cacheEntry.fetchedAt)
     steamFetchMetrics.steam_cache_hit_total.stale += 1
     scheduleBackgroundRefresh(cacheKey, query)
     return toSteamResult(cacheEntry.data, subscribedModStatusByWorkshopId, pendingWorkshopIds, enrichMeta({
       cached: true,
       stale: true,
+      offline: cacheEntry.refreshFailed === true,
+      dataFetchedAt: new Date(cacheEntry.fetchedAt).toISOString(),
       cacheAgeMs: now - cacheEntry.fetchedAt,
       source: 'cache-stale',
       fetchTraceId: traceId,
@@ -2046,9 +2124,11 @@ export async function fetchDstSteamWorkshopMods(input: {
   steamFetchMetrics.steam_cache_hit_total.miss += 1
   try {
     const liveData = await getOrCreateLiveFetchTask(cacheKey, query, traceId)
+    observeSteamMarketCache(false, steamModCache.get(cacheKey)?.fetchedAt ?? Date.now())
     return toSteamResult(liveData, subscribedModStatusByWorkshopId, pendingWorkshopIds, enrichMeta({
       cached: false,
       stale: false,
+      dataFetchedAt: new Date(steamModCache.get(cacheKey)?.fetchedAt ?? Date.now()).toISOString(),
       cacheAgeMs: 0,
       source: 'live',
       fetchTraceId: traceId,
@@ -2058,10 +2138,13 @@ export async function fetchDstSteamWorkshopMods(input: {
     const stale = steamModCache.get(cacheKey)
     const failedAt = Date.now()
     if (stale && stale.staleExpiresAt > failedAt) {
+      observeSteamMarketCache(true, stale.fetchedAt)
       const steamError = mapUnknownToSteamError(error)
       return toSteamResult(stale.data, subscribedModStatusByWorkshopId, pendingWorkshopIds, enrichMeta({
         cached: true,
         stale: true,
+        offline: true,
+        dataFetchedAt: new Date(stale.fetchedAt).toISOString(),
         cacheAgeMs: failedAt - stale.fetchedAt,
         source: 'cache-stale',
         retryAfterMs: steamError.retryAfterMs,
@@ -2071,6 +2154,7 @@ export async function fetchDstSteamWorkshopMods(input: {
     // 过了 stale 窗口但还在离线窗口内：照常把列表渲染出来并标注离线，
     // 这比给用户一个空白页有用得多（丢的只是「新鲜度」，不是「能不能用」）
     if (stale && stale.offlineExpiresAt > failedAt) {
+      observeSteamMarketCache(true, stale.fetchedAt)
       const steamError = mapUnknownToSteamError(error)
       return toSteamResult(stale.data, subscribedModStatusByWorkshopId, pendingWorkshopIds, enrichMeta({
         cached: true,
@@ -2096,6 +2180,7 @@ export async function fetchDstSteamWorkshopMods(input: {
 
 /** 面板启动后后台预热默认 Mod 市场列表（sort=trend, page=1） */
 export function scheduleWarmSteamWorkshopModCache(): void {
+  if (IS_UNIT_TEST) return
   if (process.env.GSH_STEAM_WORKSHOP_WARM_CACHE === '0') {
     return
   }
@@ -2183,6 +2268,7 @@ export async function fetchWorkshopModMetadata(
   options?: { force?: boolean },
 ): Promise<{ ok: boolean, message?: string, items: Map<string, WorkshopModMetadata> }> {
   const uniqueIds = [...new Set(workshopIds.map(id => id.trim()).filter(Boolean))]
+  const deadline = Date.now() + TOTAL_BUDGET_MS
   const items = new Map<string, WorkshopModMetadata>()
   if (uniqueIds.length === 0) {
     return { ok: true, items }
@@ -2218,7 +2304,7 @@ export async function fetchWorkshopModMetadata(
   for (const batch of plannedBatches) {
     const batchIds = new Set(batch)
     try {
-      const responseItems = await requestPublishedFileDetails(batch, { locale: DEFAULT_MOD_CONTENT_LOCALE })
+      const responseItems = await requestPublishedFileDetails(batch, { locale: DEFAULT_MOD_CONTENT_LOCALE, deadline })
       const found = new Set<string>()
       for (const item of responseItems) {
         const workshopId = item.publishedfileid?.trim()
@@ -2386,6 +2472,16 @@ function resetSteamWorkshopRuntimeForTests() {
 }
 
 export const __steamWorkshopTestUtils = {
+  waitForListRefresh: async (query: Parameters<typeof normalizeQuery>[0]) => {
+    await steamModInFlight.get(createCacheKey(normalizeQuery(query)))?.catch(() => {})
+  },
+  persistCacheTo: persistSteamCache,
+  loadCacheFrom: (filePath: string) => loadDiskCacheOnce(filePath, true),
+  ageDetailCache: (workshopId: string, ageMs: number) => {
+    const entry = workshopDetailCache.get(workshopId)
+    if (entry) entry.fetchedAt = Date.now() - ageMs
+  },
+  sanitizeSteamSourceUrl,
   buildPowerShellWorkshopFetchScript,
   sanitizeSteamUserFacingMessage,
   parseWorkshopItems,

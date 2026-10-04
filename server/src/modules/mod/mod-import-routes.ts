@@ -4,9 +4,7 @@ import { modImportCommitSchema, modInstanceParamsSchema, type ModItemDto } from 
 import { authorizeInstance } from '../system/auth'
 import { resolveLocalDstInstance } from '../../shared/dst/local-dst-instance'
 import { businessError, success } from '../../shared/http/response'
-import { commitLocalMod, discardLocalMod, inspectLocalMod, modImportLimits } from './mod-import-service'
-import { readModDependencies } from '../../infra/game-adapter/dst/mod-service'
-import { getInstanceModByWorkshopId } from '../../shared/db/index'
+import { commitLocalMods, discardLocalMod, inspectLocalMod, modImportLimits } from './mod-import-service'
 
 export function registerModImportRoutes(app: FastifyInstance, buildDto: (instanceId: string, workshopId: string) => Promise<ModItemDto | null>): void {
   app.addContentTypeParser('application/x-gsh-mod-archive', (_request, payload, done) => done(null, payload))
@@ -39,12 +37,17 @@ export function registerModImportRoutes(app: FastifyInstance, buildDto: (instanc
     const resolved = await resolveLocalDstInstance(params.data.instanceId, request, { ensureClusterDirectory: false })
     if (!resolved.ok) return resolved.error
     try {
-      const mod = await commitLocalMod(body.data, params.data.instanceId, auth.context.user.id, resolved.instance.installPath)
-      const missing: string[] = []
-      for (const id of readModDependencies(resolved.instance.installPath, mod.workshopId)) {
-        if ((await getInstanceModByWorkshopId(params.data.instanceId, id))?.installStatus !== 'ready') missing.push(id)
+      const result = await commitLocalMods(body.data, params.data.instanceId, auth.context.user.id, resolved.instance.installPath)
+      if (!('items' in body.data) && !result.installedMods.length) throw new Error(result.results[0]?.error ?? 'Mod 导入失败')
+      const mods: ModItemDto[] = []
+      for (const mod of result.installedMods) {
+        const dto = await buildDto(params.data.instanceId, mod.workshopId)
+        if (dto) mods.push(dto)
       }
-      return success({ saved: true, riskTip: missing.length ? `缺少依赖 ${missing.join('、')}，请手动补齐` : null, mod: await buildDto(params.data.instanceId, mod.workshopId) }, request)
+      const riskTip = result.riskTip
+      if (!('items' in body.data)) return success({ saved: true, riskTip, mod: mods[0] ?? null }, request)
+      return success({ saved: result.summary.installed > 0, riskTip, results: result.results, mods,
+        summary: result.summary, retryBlocked: result.retryBlocked, error: result.error }, request)
     }
     catch (error) { return businessError(error instanceof Error ? error.message : 'Mod 导入失败', request) }
   })

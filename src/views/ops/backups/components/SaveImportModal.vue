@@ -4,6 +4,8 @@ import { NAlert, NButton, NInput, NModal, NProgress, NSelect, NTag, useDialog } 
 import type { SelectOption } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
 import apiBackup from '@/api/modules/backup'
+import { useRouter } from 'vue-router'
+import { routeToDstModList } from '@/navigation/game-routes'
 
 defineOptions({
   name: 'SaveImportModal',
@@ -21,6 +23,14 @@ const emit = defineEmits<{
 }>()
 
 const dialog = useDialog()
+const router = useRouter()
+const { auth: hasPermission } = useAppAuth()
+const canReadMods = computed(() => hasPermission('mod:read'))
+function openMissingMods() {
+  if (!props.instanceId || !canReadMods.value) return
+  emit('update:show', false)
+  void router.push(routeToDstModList(props.instanceId, 'subscribed'))
+}
 
 /** 与服务端上传上限默认值对齐的前置校验：超限直接本地拦截，不发起上传 */
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
@@ -306,7 +316,7 @@ watch(() => props.show, (visible) => {
 
       <template v-else>
         <NAlert type="success" :show-icon="false">
-          存档导入完成，可启动实例验证世界进度。
+          {{ importResult.missingWorkshopContent.length ? '存档已导入，部分 Mod 文件尚未准备好。' : '存档导入完成，可启动实例验证世界进度。' }}
         </NAlert>
         <div class="importer-result">
           <div class="importer-candidate-row">
@@ -330,7 +340,9 @@ watch(() => props.show, (visible) => {
             <span>端口已自动改成这个实例能用的</span>
           </div>
           <div v-if="importResult.missingWorkshopContent.length > 0" class="importer-warn">
-            ⚠ 以下 Mod 的创意工坊内容尚未下载：{{ importResult.missingWorkshopContent.join('、') }}。面板不会自动下载：请到「世界设置 → 模组」点「开始下载」，队列会按批处理。
+            缺失 Mod：{{ importResult.missingWorkshopContent.join('、') }}。
+            <NButton v-if="canReadMods" size="small" @click="openMissingMods">处理缺失 Mod</NButton>
+            <span v-else>请联系有 Mod 管理权限的管理员处理。</span>
           </div>
           <div v-for="warning in importResult.warnings" :key="warning" class="importer-warn">
             ⚠ {{ warning }}

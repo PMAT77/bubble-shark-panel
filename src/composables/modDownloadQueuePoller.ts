@@ -35,6 +35,7 @@ export interface ModDownloadQueuePollerOptions {
   onUpdate: (queue: ModDownloadQueueDto) => void
   onError?: (error: unknown) => void
   intervalMs?: number
+  getIntervalMs?: () => number
   /** 页面不可见时停轮询（不产生请求）；重新可见后由下一次 tick 恢复 */
   isVisible?: () => boolean
   setTimer?: (handler: () => void, timeoutMs: number) => unknown
@@ -59,6 +60,8 @@ export function createModDownloadQueuePoller(
 
   let timer: unknown = null
   let running = false
+  let generation = 0
+  let fetching = false
 
   const schedule = () => {
     if (!running) {
@@ -66,7 +69,7 @@ export function createModDownloadQueuePoller(
     }
     timer = setTimer(() => {
       void tick()
-    }, intervalMs)
+    }, options.getIntervalMs?.() ?? intervalMs)
   }
 
   const tick = async () => {
@@ -74,25 +77,29 @@ export function createModDownloadQueuePoller(
       return
     }
     timer = null
+    if (fetching) { schedule(); return }
     if (options.isVisible && !options.isVisible()) {
       // 页面在后台不请求，但保留定时器：回到前台后由下一次 tick 立刻补上
       schedule()
       return
     }
+    const current = generation
+    fetching = true
     try {
       const queue = await options.fetchQueue()
-      if (!running) {
+      if (!running || generation !== current) {
         return
       }
       options.onUpdate(queue)
     }
     catch (error) {
-      if (!running) {
+      if (!running || generation !== current) {
         return
       }
       options.onError?.(error)
     }
-    schedule()
+    finally { fetching = false }
+    if (generation === current) schedule()
   }
 
   return {
@@ -101,25 +108,21 @@ export function createModDownloadQueuePoller(
         return
       }
       running = true
+      generation += 1
       void tick()
     },
     stop() {
       running = false
+      generation += 1
       if (timer !== null) {
         clearTimer(timer)
         timer = null
       }
     },
     async refresh() {
-      if (!running) {
-        return
-      }
-      try {
-        options.onUpdate(await options.fetchQueue())
-      }
-      catch (error) {
-        options.onError?.(error)
-      }
+      if (!running || fetching) return
+      if (timer !== null) { clearTimer(timer); timer = null }
+      await tick()
     },
     isRunning() {
       return running

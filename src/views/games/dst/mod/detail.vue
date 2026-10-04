@@ -20,7 +20,7 @@ import AdminSettingsSection from '@/components/AdminSettingsSection.vue'
 import apiMod from '@/api/modules/mod'
 import { useInstanceModState } from '@/composables/useInstanceModState'
 import { useModContentLocale } from '@/composables/useModContentLocale'
-import { routeToDstModList, routeToDstWorldSettings } from '@/navigation/game-routes'
+import { routeToDstModList } from '@/navigation/game-routes'
 
 defineOptions({
   name: 'DstModDetail',
@@ -35,13 +35,13 @@ const route = useRoute()
 const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
-/** 「去开启 Mod」跳的是「世界管理」模块（world:read），无权时那条路由不存在 */
 const { auth: hasPermission } = useAppAuth()
 const { locale: contentLocale } = useModContentLocale()
 const unsubscribing = ref(false)
 
 const loading = ref(true)
 const detail = ref<SteamModDetailDto | null>(null)
+let detailRequest = 0
 
 const workshopId = computed(() => String(route.params.workshopId ?? '').trim())
 const instanceId = computed(() => {
@@ -54,6 +54,7 @@ const {
   restoreInstallJobs,
   installMod,
   resetState,
+  downloadQueue,
 } = useInstanceModState(() => instanceId.value)
 
 const isDownloading = computed(() => isPendingWorkshop(workshopId.value))
@@ -83,11 +84,10 @@ const installButtonText = computed(() => {
     return '订阅'
   }
   if (isSubscribedReady.value) {
-    return '去开启 Mod'
+    return '管理已订阅'
   }
-  if (isDownloading.value || detail.value.subscribeStatus === 'pending') {
-    return '订阅中'
-  }
+  if (isDownloading.value) return pendingDownloadLabel()
+  if (detail.value.subscribeStatus === 'pending') return '下载'
   if (detail.value.subscribeStatus === 'failed') {
     return '重试订阅'
   }
@@ -97,9 +97,21 @@ const installButtonText = computed(() => {
 const installButtonDisabled = computed(() =>
   !detail.value
   || !instanceId.value
-  || isDownloading.value
-  || detail.value.subscribeStatus === 'pending',
+  || isDownloading.value,
 )
+
+function pendingDownloadLabel(): string {
+  const phase = downloadQueue.value?.items.find(item => item.workshopId === workshopId.value)?.phase
+  return phase === 'downloading' ? '下载中' : phase === 'waiting_steamcmd' ? '等待其他任务' : phase === 'retry_wait' ? '等待重试' : phase === 'queued' ? '等待下载' : '待下载'
+}
+
+function syncDetailFromQueue() {
+  const item = downloadQueue.value?.items.find(item => item.workshopId === workshopId.value)
+  if (!item || !detail.value || detail.value.workshopId !== workshopId.value) return
+  if (item.installStatus === 'ready' && isDownloading.value) return
+  detail.value = { ...detail.value, subscribed: true, subscribeStatus: item.installStatus, installed: item.installStatus === 'ready' }
+}
+watch(() => [downloadQueue.value, isDownloading.value], syncDetailFromQueue)
 
 function formatDateTime(value: string | null): string {
   if (!value) {
@@ -142,24 +154,15 @@ function isAuthUnauthorizedError(error: unknown): boolean {
 }
 
 function showSubscribeSuccessGuide() {
-  message.success('订阅成功。点击「去开启 Mod」前往世界设置开启，重启实例后生效。')
+  message.success(hasPermission('mod:toggle') ? 'Mod 文件已准备好，可在已订阅列表开启，重启实例后生效。' : 'Mod 文件已准备好；开启时请联系有权限的管理员。')
 }
 
-/** 已订阅时主按钮 → 前往世界设置开启 */
+/** 回到当前实例的本地管理，不依赖世界配置权限。 */
 function goToEnableMod() {
   if (!instanceId.value) {
     return
   }
-  /**
-   * 目标是「世界管理」下的页面，而路由按权限动态注册：没有 world:read 时那条路由不存在，
-   * `router.push({ name })` 会在解析阶段直接抛 `No match`（守卫兜不住）。
-   * 这种情况下给一句可执行的说明，而不是把用户送进一个报错。
-   */
-  if (!hasPermission('world:read')) {
-    message.warning('请到「世界管理」里开启该 Mod；当前账号没有「查看世界配置」权限，无法跳转过去')
-    return
-  }
-  router.push(routeToDstWorldSettings(instanceId.value))
+  router.push(routeToDstModList(instanceId.value, 'subscribed'))
 }
 
 function confirmUnsubscribe() {
@@ -176,7 +179,7 @@ function confirmUnsubscribe() {
       try {
         await apiMod.deleteMod(instanceId.value, detail.value!.workshopId)
         message.success('已取消订阅')
-        router.push(routeToDstModList())
+        router.push(routeToDstModList(instanceId.value, 'subscribed'))
       }
       catch (error: unknown) {
         if (isAuthUnauthorizedError(error)) {
@@ -196,7 +199,7 @@ function renderSubscribeStatusLabel(): string {
     return '未订阅'
   }
   if (detail.value.subscribeStatus === 'pending' || isDownloading.value) {
-    return '下载中'
+    return pendingDownloadLabel()
   }
   if (detail.value.subscribeStatus === 'failed') {
     return '已订阅 · 下载失败'
@@ -250,6 +253,9 @@ async function handleInstallJobTerminal(job: Awaited<ReturnType<typeof apiMod.po
 }
 
 async function loadDetail() {
+  const current = ++detailRequest
+  const id = instanceId.value
+  const itemId = workshopId.value
   if (!workshopId.value) {
     detail.value = null
     loading.value = false
@@ -262,12 +268,15 @@ async function loadDetail() {
   }
   loading.value = true
   try {
-    const response = await apiMod.getSteamModDetail(instanceId.value, workshopId.value, {
+    const response = await apiMod.getSteamModDetail(id, itemId, {
       locale: contentLocale.value,
     })
+    if (current !== detailRequest || id !== instanceId.value || itemId !== workshopId.value) return
     detail.value = response.data
+    syncDetailFromQueue()
   }
   catch (error: unknown) {
+    if (current !== detailRequest || id !== instanceId.value || itemId !== workshopId.value) return
     detail.value = null
     if (isAuthUnauthorizedError(error)) {
       return
@@ -275,7 +284,7 @@ async function loadDetail() {
     message.error(getErrorMessage(error, '加载 Mod 详情失败'))
   }
   finally {
-    loading.value = false
+    if (current === detailRequest) loading.value = false
   }
 }
 
@@ -313,16 +322,8 @@ async function installModAction() {
 }
 
 function goBack() {
-  router.push(routeToDstModList())
+  router.push(routeToDstModList(instanceId.value, 'subscribed'))
 }
-
-watch(workshopId, () => {
-  if (!instanceId.value) {
-    loading.value = false
-    return
-  }
-  loading.value = true
-})
 
 onMounted(async () => {
   if (!instanceId.value) {
@@ -338,10 +339,9 @@ onMounted(async () => {
   ])
 })
 
-watch(instanceId, async (value, previousValue) => {
-  if (value === previousValue) {
-    return
-  }
+watch([instanceId, workshopId], async ([value]) => {
+  detailRequest += 1
+  detail.value = null
   resetState()
   if (value) {
     loading.value = true
@@ -442,6 +442,9 @@ watch(contentLocale, () => {
               <NDescriptionsItem label="Mod 名称">
                 {{ displayTitle }}
               </NDescriptionsItem>
+              <NDescriptionsItem v-if="detail.cache" label="详情数据">
+                {{ detail.cache.source === 'cache-offline' ? '离线缓存' : detail.cache.source === 'cache-fresh' ? '缓存' : '实时获取' }} · {{ formatDateTime(detail.cache.fetchedAt) }}
+              </NDescriptionsItem>
               <NDescriptionsItem label="创作者">
                 {{ detail.creatorName ?? '-' }}
               </NDescriptionsItem>
@@ -507,6 +510,7 @@ watch(contentLocale, () => {
 
         <div class="flex shrink-0 justify-center gap-2">
           <NButton
+            v-if="isSubscribedReady || hasPermission('mod:install')"
             type="primary"
             :disabled="installButtonDisabled"
             @click="installModAction"
@@ -514,7 +518,7 @@ watch(contentLocale, () => {
             {{ installButtonText }}
           </NButton>
           <NButton
-            v-if="isSubscribedReady"
+            v-if="isSubscribedReady && hasPermission('mod:install')"
             :loading="unsubscribing"
             @click="confirmUnsubscribe"
           >

@@ -232,6 +232,7 @@ function mapDbInstanceMod(row: {
   contentSource: string
   installStatus: string
   installError: string | null
+  downloadIntent: 'install' | 'update' | null
   localUpdatedAt: string | null
   remoteUpdatedAt: string | null
   updateCheckedAt: string | null
@@ -278,6 +279,7 @@ export async function listInstanceMods(instanceId: string): Promise<DbInstanceMo
       contentSource: instanceMods.contentSource,
       installStatus: instanceMods.installStatus,
       installError: instanceMods.installError,
+      downloadIntent: instanceMods.downloadIntent,
       localUpdatedAt: instanceMods.localUpdatedAt,
       remoteUpdatedAt: instanceMods.remoteUpdatedAt,
       updateCheckedAt: instanceMods.updateCheckedAt,
@@ -309,6 +311,7 @@ export async function getInstanceModByWorkshopId(instanceId: string, workshopId:
       contentSource: instanceMods.contentSource,
       installStatus: instanceMods.installStatus,
       installError: instanceMods.installError,
+      downloadIntent: instanceMods.downloadIntent,
       localUpdatedAt: instanceMods.localUpdatedAt,
       remoteUpdatedAt: instanceMods.remoteUpdatedAt,
       updateCheckedAt: instanceMods.updateCheckedAt,
@@ -340,6 +343,7 @@ export async function upsertInstanceMod(input: {
   contentSource?: 'steam' | 'local' | 'migration'
   installStatus?: 'pending' | 'ready' | 'failed'
   installError?: string | null
+  downloadIntent?: 'install' | 'update' | null
   localUpdatedAt?: string | null
   remoteUpdatedAt?: string | null
   updateCheckedAt?: string | null
@@ -395,6 +399,7 @@ export async function upsertInstanceMod(input: {
       ...(input.contentSource ? { contentSource: input.contentSource } : {}),
       installStatus,
       installError: installError ?? null,
+      downloadIntent: input.downloadIntent ?? null,
       localUpdatedAt: localUpdatedAt ?? null,
       remoteUpdatedAt: remoteUpdatedAt ?? null,
       updateCheckedAt: updateCheckedAt ?? null,
@@ -416,6 +421,7 @@ export async function upsertInstanceMod(input: {
       ...(input.contentSource ? { contentSource: input.contentSource } : {}),
         installStatus,
         ...(typeof installError !== 'undefined' ? { installError } : {}),
+        ...(typeof input.downloadIntent !== 'undefined' ? { downloadIntent: input.downloadIntent } : {}),
         ...(typeof localUpdatedAt !== 'undefined' ? { localUpdatedAt } : {}),
         ...(typeof remoteUpdatedAt !== 'undefined' ? { remoteUpdatedAt } : {}),
         ...(typeof updateCheckedAt !== 'undefined' ? { updateCheckedAt } : {}),
@@ -445,6 +451,7 @@ export async function updateInstanceModByWorkshopId(
     contentSource?: 'steam' | 'local' | 'migration'
     installStatus?: 'pending' | 'ready' | 'failed'
     installError?: string | null
+    downloadIntent?: 'install' | 'update' | null
     localUpdatedAt?: string | null
     remoteUpdatedAt?: string | null
     updateCheckedAt?: string | null
@@ -464,6 +471,7 @@ export async function updateInstanceModByWorkshopId(
     contentSource?: 'steam' | 'local' | 'migration'
     installStatus?: 'pending' | 'ready' | 'failed'
     installError?: string | null
+    downloadIntent?: 'install' | 'update' | null
     localUpdatedAt?: string | null
     remoteUpdatedAt?: string | null
     updateCheckedAt?: string | null
@@ -498,6 +506,9 @@ export async function updateInstanceModByWorkshopId(
   }
   if (typeof patch.installError !== 'undefined') {
     payload.installError = patch.installError?.trim() || null
+  }
+  if (typeof patch.downloadIntent !== 'undefined') {
+    payload.downloadIntent = patch.downloadIntent
   }
   if (typeof patch.localUpdatedAt !== 'undefined') {
     payload.localUpdatedAt = patch.localUpdatedAt?.trim() || null

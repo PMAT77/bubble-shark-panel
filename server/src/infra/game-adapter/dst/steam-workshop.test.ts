@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, it } from 'node:test'
@@ -676,4 +677,88 @@ describe('fetchWorkshopModMetadata', () => {
     assert.equal(result.items.size, 0)
     assert.equal(requests(), 0)
   })
+})
+
+
+describe('offline detail persistence and shared metadata requests', () => {
+  it('persists details atomically, prunes expired lists and preserves fetched time on offline fallback', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-workshop-cache-'))
+    const file = path.join(root, 'cache.json')
+    __steamWorkshopTestUtils.resetRuntimeForTests()
+    globalThis.fetch = async () => new Response(JSON.stringify({ response: { publishedfiledetails: [{ publishedfileid: '910', result: 1, title: 'Stored', description: 'Offline content' }] } }), { status: 200 })
+    try {
+      await fetchWorkshopFileDetail('910')
+      __steamWorkshopTestUtils.ageDetailCache('910', 6 * 60_000)
+      __steamWorkshopTestUtils.seedCacheEntry({ keyword: 'expired-entry' }, 8 * 24 * 60 * 60_000)
+      __steamWorkshopTestUtils.persistCacheTo(file)
+      const persisted = JSON.parse(fs.readFileSync(file, 'utf8'))
+      assert.equal(Object.keys(persisted.entries).length, 0)
+      const fetchedAt = new Date(persisted.details['910'].fetchedAt).toISOString()
+      assert.equal(fs.existsSync(file + '.tmp'), false)
+      __steamWorkshopTestUtils.resetRuntimeForTests()
+      __steamWorkshopTestUtils.loadCacheFrom(file)
+      globalThis.fetch = async () => { throw new Error('offline') }
+      const result = await fetchWorkshopFileDetail('910')
+      assert.equal(result.title, 'Stored')
+      assert.equal(result.cache?.source, 'cache-offline')
+      assert.equal(result.cache?.fetchedAt, fetchedAt)
+    }
+    finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('coalesces identical ID sets regardless of their order', async () => {
+    __steamWorkshopTestUtils.resetRuntimeForTests()
+    let count = 0
+    let release!: (response: Response) => void
+    globalThis.fetch = async () => { count += 1; return new Promise(resolve => release = resolve) }
+    const first = fetchWorkshopModMetadata(['921', '920'], { force: true })
+    const second = fetchWorkshopModMetadata(['920', '921'], { force: true })
+    release(new Response(JSON.stringify({ response: { publishedfiledetails: [
+      { publishedfileid: '920', result: 1, title: 'A' }, { publishedfileid: '921', result: 1, title: 'B' },
+    ] } }), { status: 200 }))
+    const results = await Promise.all([first, second])
+    assert.equal(count, 1)
+    assert.equal(results[0].items.size, 2)
+    assert.equal(results[1].items.size, 2)
+  })
+
+  it('does not wait beyond the request budget for Retry-After', async () => {
+    __steamWorkshopTestUtils.resetRuntimeForTests()
+    let count = 0
+    globalThis.fetch = async () => { count += 1; return new Response('', { status: 429, headers: { 'Retry-After': '99999' } }) }
+    const result = await fetchDstSteamWorkshopMods({ keyword: 'budget-' + Date.now(), subscribedModStatusByWorkshopId: new Map() })
+    assert.equal(result.meta?.upstreamUnavailable, true)
+    assert.equal(count, 1)
+  })
+
+  it('redacts credentials and API keys from public source links', () => {
+    const safe = __steamWorkshopTestUtils.sanitizeSteamSourceUrl('https://name:password@example.test/path?key=secret&token=hidden&page=2')
+    assert.equal(safe, 'https://example.test/path?page=2')
+    assert.equal(__steamWorkshopTestUtils.sanitizeSteamSourceUrl('javascript:alert(1)'), '')
+  })
+
+  it('preserves the list acquisition time and reports a failed stale refresh as offline', async () => {
+    const previous = process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+    process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
+    const keyword = 'stale-status'
+    __steamWorkshopTestUtils.seedCacheEntry({ keyword }, 3 * 60_000)
+    globalThis.fetch = async () => { throw new Error('offline') }
+    try {
+      const first = await fetchDstSteamWorkshopMods({ keyword, subscribedModStatusByWorkshopId: new Map() })
+      const acquired = first.meta.dataFetchedAt
+      assert.ok(acquired)
+      assert.ok(Date.now() - Date.parse(acquired) >= 3 * 60_000)
+      await __steamWorkshopTestUtils.waitForListRefresh({ keyword })
+      const next = await fetchDstSteamWorkshopMods({ keyword, subscribedModStatusByWorkshopId: new Map() })
+      assert.equal(next.meta.offline, true)
+      assert.equal(next.meta.dataFetchedAt, acquired)
+      assert.equal(next.items.length, first.items.length)
+    }
+    finally {
+      await __steamWorkshopTestUtils.waitForListRefresh({ keyword })
+      if (previous === undefined) delete process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+      else process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previous
+    }
+  })
+
 })

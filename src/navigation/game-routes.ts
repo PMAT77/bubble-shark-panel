@@ -69,8 +69,8 @@ export function routeToDstWorldSettings(
   return { name: ROUTE_NAMES.dstWorldSettings, params: { instanceId }, query }
 }
 
-export function routeToDstModList(): RouteLocationRaw {
-  return { name: ROUTE_NAMES.dstModList }
+export function routeToDstModList(instanceId?: string, tab?: 'market' | 'subscribed'): RouteLocationRaw {
+  return { name: ROUTE_NAMES.dstModList, query: { ...(instanceId ? { instanceId } : {}), ...(tab ? { tab } : {}) } }
 }
 
 export function routeToDstModDetail(workshopId: string, instanceId: string): RouteLocationRaw {

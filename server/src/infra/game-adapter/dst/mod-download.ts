@@ -161,7 +161,7 @@ export async function downloadDstWorkshopMods(input: {
    * 分开：两类任务共用同一个键时，取消 Mod 下载会连带杀掉正在跑的游戏安装。
    */
   cancelKey?: string
-}): Promise<{ ok: boolean, error?: string, cancelled?: boolean }> {
+}): Promise<{ ok: boolean, error?: string, cancelled?: boolean, items?: Array<{ workshopId: string, ok: boolean }> }> {
   const missingIds = resolveWorkshopDownloadIds(input.hostInstallPath, input.workshopIds, {
     force: input.force,
   })
@@ -169,15 +169,23 @@ export async function downloadDstWorkshopMods(input: {
     return { ok: true }
   }
 
+  const confirmedIds = new Set<string>()
+  const observe = (line: string) => {
+    const id = /Success\.\s+Downloaded item\s+(\d+)\b/i.exec(line)?.[1]
+    if (id) confirmedIds.add(id)
+    input.onLogLine?.(line)
+  }
   const result = await runSteamcmdWorkshopDownloadInContainer({
     hostInstallPath: input.hostInstallPath,
     workshopIds: missingIds,
     cancelKey: input.cancelKey?.trim() || input.instanceId,
-    onLogLine: input.onLogLine,
+    onLogLine: observe,
     onAwaitingSteamcmdLock: input.onAwaitingSteamcmdLock,
     onDownloadStart: input.onDownloadStart,
     timeoutMs: DEFAULT_WORKSHOP_DOWNLOAD_TIMEOUT_MS,
   })
+  for (const line of result.output.split(/\r?\n/)) observe(line)
+  const items = missingIds.map(workshopId => ({ workshopId, ok: confirmedIds.has(workshopId) && isDstWorkshopModPresent(input.hostInstallPath, workshopId) }))
 
   if (!result.ok) {
     return {
@@ -186,6 +194,7 @@ export async function downloadDstWorkshopMods(input: {
         ? '下载已取消'
         : formatModDownloadFailureMessage(result.output),
       cancelled: result.cancelled === true,
+      items,
     }
   }
 
@@ -195,6 +204,7 @@ export async function downloadDstWorkshopMods(input: {
     return {
       ok: false,
       error: formatModDownloadFailureMessage(failureOutput),
+      items,
     }
   }
 
@@ -203,8 +213,9 @@ export async function downloadDstWorkshopMods(input: {
     return {
       ok: false,
       error: formatMissingWorkshopModError(input.hostInstallPath, stillMissing),
+      items,
     }
   }
 
-  return { ok: true }
+  return { ok: true, items: missingIds.map(workshopId => ({ workshopId, ok: true })) }
 }

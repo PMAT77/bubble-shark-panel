@@ -202,11 +202,12 @@ async function fetchResponse(
       body: options.body,
       signal: controller.signal,
     })
+    const body = await response.text()
     return {
       status: response.status,
       headers: { get: (name: string) => response.headers.get(name) },
-      text: () => response.text(),
-      json: () => response.json() as Promise<unknown>,
+      text: async () => body,
+      json: async () => JSON.parse(body) as unknown,
     }
   }
   catch (error) {
@@ -223,11 +224,14 @@ async function tunneledResponse(
   options: SteamRequestOptions,
 ): Promise<SteamHttpResponse> {
   const proxyUrl = new URL(proxy.url)
+  const deadline = Date.now() + options.timeoutMs
   const isSecureTarget = target.protocol === 'https:'
   const targetPort = target.port || (isSecureTarget ? '443' : '80')
 
   const tunnel = await openTunnel(proxyUrl, target.hostname, targetPort, options.timeoutMs)
   try {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new SteamWorkshopFetchError('STEAM_TIMEOUT', '请求 Steam 超时')
     const response = await sendOverSocket(tunnel.socket, {
       secure: isSecureTarget,
       servername: target.hostname,
@@ -242,7 +246,7 @@ async function tunneledResponse(
       method: options.method ?? 'GET',
       body: options.body,
       path: `${target.pathname}${target.search}`,
-      timeoutMs: options.timeoutMs,
+      timeoutMs: remaining,
     })
     return response
   }
@@ -276,6 +280,7 @@ function openTunnel(
         return
       }
       settled = true
+      clearTimeout(timer)
       socket?.destroy()
       reject(error)
     }
@@ -297,6 +302,10 @@ function openTunnel(
       headers,
       timeout: timeoutMs,
     })
+    const timer = setTimeout(() => {
+      request.destroy()
+      fail(new SteamWorkshopFetchError('STEAM_TIMEOUT', '请求 Steam 超时'))
+    }, timeoutMs)
 
     request.once('connect', (response, connectedSocket: Socket) => {
       socket = connectedSocket
@@ -313,6 +322,7 @@ function openTunnel(
         return
       }
       settled = true
+      clearTimeout(timer)
       // 隧道建立后由业务请求自己管超时，这里清掉代理连接的超时
       connectedSocket.setTimeout(0)
       resolve({

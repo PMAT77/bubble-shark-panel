@@ -182,6 +182,7 @@ export interface UpdateGameInstanceRuntimeInput {
 }
 
 export interface DbInstanceMod {
+  downloadIntent?: 'install' | 'update' | null
   id: string
   instanceId: string
   workshopId: string

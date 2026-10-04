@@ -242,7 +242,8 @@ describe('save import execution', () => {
     assert.equal(second.installStatus, 'pending')
     // workshop 内容缺失提示（实例未下载 mod 内容）：面板不自动下载，提示去 Mod 页点开始
     assert.deepEqual(detail.missingWorkshopContent.sort(), ['123456789', '987654321'])
-    assert.ok(detail.warnings.some(warning => warning.includes('开始下载')))
+    assert.ok(detail.warnings.some(warning => warning.includes('Mod 管理 → 已订阅')))
+    assert.ok(detail.warnings.every(warning => !warning.includes('世界设置 → 模组')))
     // 缺失内容的 Mod 不进 modoverrides.lua：否则 DST 每次启动都会自行补下载，legacy 包常超时失败
     assert.equal(fs.readFileSync(path.join(clusterRoot, 'Master', 'modoverrides.lua'), 'utf8'), 'return {}\n')
     // staging 清理

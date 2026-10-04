@@ -1,4 +1,5 @@
 import { registerModImportRoutes } from './mod-import-routes'
+import { getModAccessStatus } from './mod-access-service'
 import { hasContentRecoveryFailure } from '../../shared/instance-content/operation'
 import fs from 'node:fs'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -37,6 +38,7 @@ import {
   modUpdateCheckPayloadSchema,
   modConfigPayloadSchema,
   modInstallJobsQuerySchema,
+  modDownloadQueueStartSchema,
 } from '../../../../shared/contracts/mod'
 import { DST_APP_ID } from '../../infra/game-adapter/dst/constants'
 import { resolveInstanceInstallPath } from '../../infra/game-adapter/dst/cluster-service'
@@ -858,6 +860,16 @@ export function registerModModule(app: FastifyInstance) {
     return success(queue, request)
   })
 
+  app.get('/app/instances/:instanceId/mods/access-status', async (request) => {
+    const authorized = await authorizeModInstance(request, 'mod:read')
+    if (authorized.error) return authorized.error
+    const parsed = modInstanceParamsSchema.safeParse(request.params)
+    if (!parsed.success) return businessError('请求参数无效', request)
+    const resolved = await resolveLocalDstInstance(parsed.data.instanceId, request, { ensureClusterDirectory: false })
+    if (!resolved.ok) return resolved.error
+    return success(getModAccessStatus(parsed.data.instanceId), request)
+  })
+
   /** 开始/继续下载队列（幂等：已在跑时返回当前状态） */
   app.post('/app/instances/:instanceId/mods/download-queue/start', async (request): Promise<ApiSuccessResponse<ModDownloadQueueDto> | ApiErrorResponse> => {
     const authorized = await authorizeModInstance(request, 'mod:install')
@@ -868,6 +880,8 @@ export function registerModModule(app: FastifyInstance) {
     if (!parsedParams.success) {
       return businessError('请求参数无效', request)
     }
+    const parsedBody = modDownloadQueueStartSchema.safeParse(request.body ?? {})
+    if (!parsedBody.success) return businessError('请求参数无效', request)
     const instanceId = parsedParams.data.instanceId
     const resolved = await resolveLocalDstInstance(instanceId, request, {
       messages: {
@@ -882,7 +896,7 @@ export function registerModModule(app: FastifyInstance) {
     const queue = await startModDownloadQueue({
       instanceId,
       installPath: resolved.instance.installPath,
-      retryFailed: true,
+      retryFailed: parsedBody.data.retryFailed,
     })
     return success(queue, request)
   })

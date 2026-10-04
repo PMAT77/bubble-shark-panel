@@ -58,7 +58,16 @@ for (const name of names) {
   results.push({ name, label: step.label, status, seconds })
   console.log(`[local-checks] ${name} → ${status}（${seconds}s，日志：logs/verify/${name}.log）`)
   if (status !== 'PASS') {
-    console.error(result.error?.message ?? log.split(/\r?\n/).slice(-100).join('\n'))
+    const lines = log.split(/\r?\n/)
+    const failures = lines.flatMap((line, index) => /^\s*(?:not ok\b|✖)/.test(line)
+      ? lines.slice(Math.max(0, index - 1), index + 40)
+      : [])
+    console.error(result.error?.message ?? [...failures, ...lines.slice(-100)].join('\n'))
+    if (process.env.GITHUB_ACTIONS === 'true' && status === 'FAIL') {
+      const details = result.error?.message ?? (failures.length > 0 ? failures : lines.slice(-100)).join('\n')
+      const annotation = details.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A')
+      console.error(`::error title=${step.label}::${annotation}`)
+    }
   }
 }
 

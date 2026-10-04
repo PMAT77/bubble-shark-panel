@@ -26,7 +26,11 @@ test('共用门禁只执行一次全量测试，保留按需步骤及失败、�
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.writeFileSync(target, `import fs from 'node:fs';
 fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify([${JSON.stringify(entry)}, ...process.argv.slice(2)]) + '\\n');
-if (process.env.GSH_CHECK_FIXTURE_FAIL === ${JSON.stringify(entry)}) { console.error('fixture failure'); process.exit(3) }
+if (process.env.GSH_CHECK_FIXTURE_FAIL === ${JSON.stringify(entry)}) {
+  console.error('not ok 1 - fixture failure'); console.error('  error: fixture detail');
+  for (let i = 0; i < 120; i++) console.error('fixture output');
+  process.exit(3);
+}
 if (process.env.GSH_CHECK_FIXTURE_SKIP === ${JSON.stringify(entry)}) console.log('[installer-smoke] SKIP: fixture');`)
   }
   const run = (args: string[] = [], env: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath,
@@ -46,10 +50,12 @@ if (process.env.GSH_CHECK_FIXTURE_SKIP === ${JSON.stringify(entry)}) console.log
   fs.writeFileSync(trace, '')
   assert.equal(run(['server-tests', 'server-tests']).status, 0)
   assert.deepEqual(calls(), [['scripts/run-server-tests.mjs']])
-  const failed = run(['gsh'], { GSH_CHECK_FIXTURE_FAIL: 'scripts/check-gsh-cli.mjs' })
+  const failed = run(['gsh'], { GSH_CHECK_FIXTURE_FAIL: 'scripts/check-gsh-cli.mjs', GITHUB_ACTIONS: 'true' })
   assert.equal(failed.status, 1)
   assert.match(failed.stdout, /gsh → FAIL/)
   assert.match(failed.stderr, /fixture failure/)
+  assert.match(failed.stderr, /fixture detail/)
+  assert.match(failed.stderr, /::error title=gsh CLI 检查::.*%0A  error: fixture detail/)
   assert.match(fs.readFileSync(path.join(root, 'logs/verify/gsh.log'), 'utf8'), /fixture failure/)
   const skipEnv = { GSH_CHECK_FIXTURE_SKIP: 'scripts/check-installer-smoke.mjs' }
   assert.match(run(['installer'], skipEnv).stdout, /installer → SKIP/)

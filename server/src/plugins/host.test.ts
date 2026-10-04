@@ -178,9 +178,10 @@ describe('plugin runtime', () => {
     const statuses = runtime?.listStatus() ?? []
     const demo = statuses.find(item => item.pluginId === 'demo-plugin')
     assert.ok(demo, '应当有 demo-plugin 的状态记录')
-    // 插件跑完就退出，宿主会记录它的退出；这里只要求状态与错误字段可用
-    assert.ok(['running', 'crashed', 'stopped'].includes(demo.state))
-    assert.equal(typeof demo.restarts, 'number')
+    // result.json 先于退出事件到达，查询时可能仍在运行，也可能已正常完成。
+    assert.ok(['running', 'finished'].includes(demo.state), `插件应当运行或正常完成，实际：${JSON.stringify(demo)}`)
+    assert.ok(demo.startedAt, '应当保留插件启动时间')
+    assert.equal(demo.restarts, 0, '正常完成的插件不应自动重启')
   })
 
   it('反复崩溃的插件最终停在 crashed，而不是无限重启', async () => {

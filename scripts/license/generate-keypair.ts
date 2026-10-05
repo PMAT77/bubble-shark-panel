@@ -4,7 +4,7 @@
  *
  * 用途与纪律：
  * - **私钥永远不要进仓库、不要上传、不要放进面板部署目录**；它只存在于你签发的机器上。
- * - 公钥要随构建注入（授权用 `GSH_LICENSE_PUBLIC_KEY`，插件用 `GSH_PLUGIN_PUBLIC_KEY`）；公钥不是秘密。
+ * - 公钥要随构建注入（授权用 `BSP_LICENSE_PUBLIC_KEY`，插件用 `BSP_PLUGIN_PUBLIC_KEY`）；公钥不是秘密。
  * - 换密钥意味着所有已签发的许可或插件立即失效，所以私钥要备份（离线介质），并在一开始就定好。
  * - **建议授权与插件各生成一把**（`--purpose license` / `--purpose plugin`）：
  *   两者按不同节奏签发，混用一把私钥会让插件签名流程的失误波及所有客户授权。
@@ -18,7 +18,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
-const DEFAULT_OUT_DIR = path.join(os.homedir(), '.gsh-license-keys')
+const DEFAULT_OUT_DIR = path.join(os.homedir(), '.bsp-license-keys')
 
 function parseArgs(argv: string[]): { outDir: string, purpose: 'license' | 'plugin', force: boolean } {
   let outDir = DEFAULT_OUT_DIR
@@ -61,9 +61,9 @@ function parseArgs(argv: string[]): { outDir: string, purpose: 'license' | 'plug
 
 const { outDir, purpose, force } = parseArgs(process.argv.slice(2))
 const baseName = purpose === 'plugin' ? 'plugin-private' : 'license-private'
-const privateKeyPath = path.join(outDir, `${baseName}.gsh-key`)
-const publicKeyPath = path.join(outDir, `${baseName}.gsh-key.public.pem`)
-const envName = purpose === 'plugin' ? 'GSH_PLUGIN_PUBLIC_KEY' : 'GSH_LICENSE_PUBLIC_KEY'
+const privateKeyPath = path.join(outDir, `${baseName}.bsp-key`)
+const publicKeyPath = path.join(outDir, `${baseName}.bsp-key.public.pem`)
+const envName = purpose === 'plugin' ? 'BSP_PLUGIN_PUBLIC_KEY' : 'BSP_LICENSE_PUBLIC_KEY'
 
 if (!force && (fs.existsSync(privateKeyPath) || fs.existsSync(publicKeyPath))) {
   console.error(`[keygen] 目标位置已有密钥：${outDir}`)

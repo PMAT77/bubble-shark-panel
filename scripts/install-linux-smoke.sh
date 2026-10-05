@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-GSH_INSTALLER_LIB_ONLY=1
+BSP_INSTALLER_LIB_ONLY=1
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 if [[ "${SCRIPT_DIR}" == "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR='.'
@@ -13,29 +13,29 @@ source "${SCRIPT_DIR}/install.linux.sh"
 # 机器上已安装的旧版本——发版时它要跟着往上挪一格。INSTALLED 必须严格小于 RELEASE，
 # 否则「升级请求应被接受」会退化成同版本重装、被闸门拒绝：v0.5.0、v0.6.0 两次发布都
 # 因为这个原因炸在 CI 上，所以下面用断言把它钉死，忘了改会当场报错而不是留下怪现象。
-SMOKE_RELEASE_TAG="${GSH_RELEASE_TAG}"
+SMOKE_RELEASE_TAG="${BSP_RELEASE_TAG}"
 SMOKE_INSTALLED_TAG='v0.6.0'
 # 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
 SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.14.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${GSH_RELEASE_TAG}" == "v0.14.0" ]]
+# v0.15.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${BSP_RELEASE_TAG}" == "v0.15.0" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
-[[ "${GSH_GAME_DST_IMAGE}" == "" ]]
-[[ "${GSH_STEAMCMD_IMAGE}" == "" ]]
+[[ "${BSP_GAME_DST_IMAGE}" == "" ]]
+[[ "${BSP_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.14.0"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.15.0"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/game-server-hub:v0.14.0" ]]
-[[ "${GSH_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
-[[ "${GSH_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.15.0" ]]
+[[ "${BSP_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
+[[ "${BSP_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 
 # 安装器校验的是镜像源提供的 git blob 原始字节（LF）；Windows 检出经 core.autocrlf
 # 得到的是 CRLF 工作区文件，直接哈希会与 pin 不符。先归一化为 LF 再交给安装器校验。
@@ -58,15 +58,15 @@ trap 'rm -rf "${SMOKE_TMP_DIR}" "${SMOKE_ASSET_DIR}"' EXIT
 SMOKE_ENV_FILE="${SMOKE_TMP_DIR}/panel.env"
 printf '%s\n' \
   'ADMIN_USERNAME=keep-me' \
-  'GSH_RUNTIME_MODE=native' \
-  'GSH_RELEASE_VERSION=v0.1.4' \
+  'BSP_RUNTIME_MODE=native' \
+  'BSP_RELEASE_VERSION=v0.1.4' \
   > "${SMOKE_ENV_FILE}"
 upsert_env_values "${SMOKE_ENV_FILE}" \
-  'GSH_RUNTIME_MODE=native' \
-  'GSH_RELEASE_VERSION=v0.1.5'
+  'BSP_RUNTIME_MODE=native' \
+  'BSP_RELEASE_VERSION=v0.1.5'
 [[ "$(read_env_value "${SMOKE_ENV_FILE}" 'ADMIN_USERNAME')" == 'keep-me' ]]
-[[ "$(read_env_value "${SMOKE_ENV_FILE}" 'GSH_RELEASE_VERSION')" == 'v0.1.5' ]]
-[[ "$(grep -c '^GSH_RELEASE_VERSION=' "${SMOKE_ENV_FILE}")" == '1' ]]
+[[ "$(read_env_value "${SMOKE_ENV_FILE}" 'BSP_RELEASE_VERSION')" == 'v0.1.5' ]]
+[[ "$(grep -c '^BSP_RELEASE_VERSION=' "${SMOKE_ENV_FILE}")" == '1' ]]
 
 PANEL_LOG_DIR="${SMOKE_TMP_DIR}"
 STATUS_FILE="${PANEL_LOG_DIR}/install.status"
@@ -74,8 +74,8 @@ DIAGNOSTICS_FILE="${PANEL_LOG_DIR}/install.diagnostics.log"
 CURRENT_STAGE='smoke-test'
 LAST_ERROR_MESSAGE='expected smoke failure'
 LAST_ERROR_LINE='42'
-GSH_DIAGNOSTICS_SKIP_DOCKER=1
-GSH_DIAGNOSTICS_UNPRIVILEGED=1
+BSP_DIAGNOSTICS_SKIP_DOCKER=1
+BSP_DIAGNOSTICS_UNPRIVILEGED=1
 (handle_install_exit 23) 2>/dev/null
 grep -Fq '[smoke-test] [error]' "${STATUS_FILE}"
 grep -Fq 'stage=smoke-test' "${DIAGNOSTICS_FILE}"
@@ -190,17 +190,17 @@ is_private_ipv4 '192.168.1.1'
 is_private_ipv4 '169.254.169.254'
 is_private_ipv4 '100.64.1.1'
 ! is_private_ipv4 '111.170.172.120'
-! is_private_ipv4 'gsh.example.com'
+! is_private_ipv4 'bsp.example.com'
 ! is_private_ipv4 '999.1.1.1'
 is_public_ipv4 '111.170.172.120'
 ! is_public_ipv4 '172.16.0.8'
 ! is_public_ipv4 '999.1.1.1'
-! is_public_ipv4 'gsh.example.com'
+! is_public_ipv4 'bsp.example.com'
 [[ "$(url_host 'http://172.16.0.8:9527')" == '172.16.0.8' ]]
-[[ "$(url_host 'https://gsh.example.com/panel')" == 'gsh.example.com' ]]
+[[ "$(url_host 'https://bsp.example.com/panel')" == 'bsp.example.com' ]]
 is_private_host '172.16.0.8'
 is_private_host 'localhost'
-! is_private_host 'gsh.example.com'
+! is_private_host 'bsp.example.com'
 
 PANEL_PROTOCOL='http'
 PANEL_PORT='9527'
@@ -208,10 +208,10 @@ PANEL_PORT='9527'
 # 2) 显式 PANEL_PUBLIC_URL：直接采用，且不发起任何探测请求
 PANEL_HOST='172.16.0.8'
 PANEL_HOST_SOURCE='interface'
-PANEL_PUBLIC_URL_OVERRIDE='https://gsh.example.com'
+PANEL_PUBLIC_URL_OVERRIDE='https://bsp.example.com'
 : > "${ADDRESS_PROBE_LOG}"
 resolve_panel_access_urls
-[[ "${PANEL_ACCESS_URL}" == 'https://gsh.example.com' ]]
+[[ "${PANEL_ACCESS_URL}" == 'https://bsp.example.com' ]]
 [[ "${PANEL_PUBLIC_IP_SOURCE}" == 'user' ]]
 [[ ! -s "${ADDRESS_PROBE_LOG}" ]]
 
@@ -236,8 +236,8 @@ resolve_panel_access_urls
 # 5) 内网地址 + 探测命中：对外用探测结果，内网地址仍然并列保留
 PANEL_HOST='172.16.0.8'
 PANEL_HOST_SOURCE='interface'
-GSH_PANEL_AUTO_PUBLIC_IP='1'
-GSH_PANEL_PUBLIC_IP_BUDGET_SECONDS='3'
+BSP_PANEL_AUTO_PUBLIC_IP='1'
+BSP_PANEL_PUBLIC_IP_BUDGET_SECONDS='3'
 STUB_PUBLIC_IP='111.170.172.120'
 : > "${ADDRESS_PROBE_LOG}"
 resolve_panel_access_urls
@@ -256,13 +256,13 @@ resolve_panel_access_urls
 
 # 7) 关闭探测：零请求
 STUB_PUBLIC_IP='111.170.172.120'
-GSH_PANEL_AUTO_PUBLIC_IP='0'
+BSP_PANEL_AUTO_PUBLIC_IP='0'
 : > "${ADDRESS_PROBE_LOG}"
 resolve_panel_access_urls
 [[ "${PANEL_ACCESS_URL}" == 'http://172.16.0.8:9527' ]]
 [[ "${PANEL_PUBLIC_IP_SOURCE}" == 'lan' ]]
 [[ ! -s "${ADDRESS_PROBE_LOG}" ]]
-GSH_PANEL_AUTO_PUBLIC_IP='1'
+BSP_PANEL_AUTO_PUBLIC_IP='1'
 
 # 8) 云平台元数据命中：采信元数据结果，且不再请求出站回显端点
 STUB_PUBLIC_IP=''
@@ -281,8 +281,8 @@ STUB_METADATA_IP=''
 # 9) 升级保留策略：用户设置的对外地址保留；旧值只是内网地址且本次解析到对外地址才纠正
 PANEL_PUBLIC_IP_SOURCE='ip_echo'
 PANEL_ACCESS_URL='http://111.170.172.120:9527'
-reconcile_existing_public_url 'https://gsh.example.com'
-[[ "${PANEL_ACCESS_URL}" == 'https://gsh.example.com' ]]
+reconcile_existing_public_url 'https://bsp.example.com'
+[[ "${PANEL_ACCESS_URL}" == 'https://bsp.example.com' ]]
 PANEL_ACCESS_URL='http://111.170.172.120:9527'
 reconcile_existing_public_url 'http://172.16.0.8:9527'
 [[ "${PANEL_ACCESS_URL}" == 'http://111.170.172.120:9527' ]]
@@ -292,29 +292,29 @@ reconcile_existing_public_url 'http://172.16.0.8:9527'
 [[ "${PANEL_ACCESS_URL}" == 'http://172.16.0.8:9527' ]]
 
 # ---- Native 面板内更新的特权执行器与触发单元（只断言产物内容，不触碰 systemd）----
-[[ "${NATIVE_UPDATE_HELPER_PATH}" == '/usr/local/lib/game-server-hub/gsh-native-update' ]]
-[[ "${NATIVE_UPDATE_PATH_UNIT_FILE}" == '/etc/systemd/system/game-server-hub-update.path' ]]
+[[ "${NATIVE_UPDATE_HELPER_PATH}" == '/usr/local/lib/bubblesharkpanel/bsp-native-update' ]]
+[[ "${NATIVE_UPDATE_PATH_UNIT_FILE}" == '/etc/systemd/system/bubblesharkpanel-update.path' ]]
 [[ "${NATIVE_UPDATE_DIR}" == "${PANEL_DATA_DIR}/panel-update" ]]
 
 NATIVE_UPDATE_SERVICE_UNIT_CONTENT="$(native_update_service_unit)"
 [[ "${NATIVE_UPDATE_SERVICE_UNIT_CONTENT}" == *'Type=oneshot'* ]]
 [[ "${NATIVE_UPDATE_SERVICE_UNIT_CONTENT}" == *"ExecStart=${NATIVE_UPDATE_HELPER_PATH}"* ]]
-# 执行器不去猜路径：安装期定下来的真实路径必须由 unit 注入（panel.env 里没有 GSH_STACK_DIR）
-[[ "${NATIVE_UPDATE_SERVICE_UNIT_CONTENT}" == *"Environment=\"GSH_PANEL_ENV_FILE=${PANEL_ENV_FILE}\""* ]]
-[[ "${NATIVE_UPDATE_SERVICE_UNIT_CONTENT}" == *"Environment=\"GSH_INSTALL_DIR=${PANEL_INSTALL_DIR}\""* ]]
-[[ "${NATIVE_UPDATE_SERVICE_UNIT_CONTENT}" == *"Environment=\"GSH_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}\""* ]]
+# 执行器不去猜路径：安装期定下来的真实路径必须由 unit 注入（panel.env 里没有 BSP_STACK_DIR）
+[[ "${NATIVE_UPDATE_SERVICE_UNIT_CONTENT}" == *"Environment=\"BSP_PANEL_ENV_FILE=${PANEL_ENV_FILE}\""* ]]
+[[ "${NATIVE_UPDATE_SERVICE_UNIT_CONTENT}" == *"Environment=\"BSP_INSTALL_DIR=${PANEL_INSTALL_DIR}\""* ]]
+[[ "${NATIVE_UPDATE_SERVICE_UNIT_CONTENT}" == *"Environment=\"BSP_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}\""* ]]
 
 NATIVE_UPDATE_PATH_UNIT_CONTENT="$(native_update_path_unit)"
 [[ "${NATIVE_UPDATE_PATH_UNIT_CONTENT}" == *"PathExists=${NATIVE_UPDATE_DIR}/request"* ]]
 [[ "${NATIVE_UPDATE_PATH_UNIT_CONTENT}" == *"Unit=${NATIVE_UPDATE_SERVICE}"* ]]
 
 # 执行器必须自带这几道闸：官方摘要校验、只升不降、并发保护、中断也要落终态
-HELPER_SOURCE="${SCRIPT_DIR}/gsh-native-update.sh"
+HELPER_SOURCE="${SCRIPT_DIR}/bsp-native-update.sh"
 [[ -f "${HELPER_SOURCE}" ]]
 grep -Fq 'verify_sha256' "${HELPER_SOURCE}"
 grep -Fq 'is_newer_version' "${HELPER_SOURCE}"
 grep -Fq 'flock -w' "${HELPER_SOURCE}"
-grep -Fq 'GSH_RELEASE_TAG="${TARGET_TAG}"' "${HELPER_SOURCE}"
+grep -Fq 'BSP_RELEASE_TAG="${TARGET_TAG}"' "${HELPER_SOURCE}"
 # root 的中间产物必须待在 root 专属子目录里：面板对交换目录有写权限，
 # 定名文件直接落在那里等于给面板一个符号链接攻击面
 grep -Fq 'ROOT_DIR="${UPDATE_DIR}/.root"' "${HELPER_SOURCE}"
@@ -323,34 +323,34 @@ grep -Fq 'on_exit' "${HELPER_SOURCE}"
 
 # 升级换了 current 链接后必须重启面板，否则升级完还在跑旧版本
 grep -Fq 'NATIVE_RELEASE_REPLACED' "${SCRIPT_DIR}/install.linux.sh"
-grep -Fq 'try-restart game-server-hub.service' "${SCRIPT_DIR}/install.linux.sh"
+grep -Fq 'try-restart ${PANEL_NATIVE_SERVICE}' "${SCRIPT_DIR}/install.linux.sh"
 
 # 面板侧靠 panel.env 的交换目录键判断更新组件是否就绪
-printf '%s\n' 'GSH_RUNTIME_MODE=native' > "${SMOKE_ENV_FILE}"
-upsert_env_values "${SMOKE_ENV_FILE}" "GSH_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}"
-[[ "$(read_env_value "${SMOKE_ENV_FILE}" 'GSH_NATIVE_UPDATE_DIR')" == "${NATIVE_UPDATE_DIR}" ]]
+printf '%s\n' 'BSP_RUNTIME_MODE=native' > "${SMOKE_ENV_FILE}"
+upsert_env_values "${SMOKE_ENV_FILE}" "BSP_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}"
+[[ "$(read_env_value "${SMOKE_ENV_FILE}" 'BSP_NATIVE_UPDATE_DIR')" == "${NATIVE_UPDATE_DIR}" ]]
 
 # ---- 执行器的行为（只测非特权纯逻辑：请求校验与版本闸门）----
 # LIB_ONLY 必须在 source 之前设置：更新执行器在它不等于 1 时会执行真实更新主流程
 # （要求 root、读 panel.env、还会调用 --mode native 安装器）。此前这里只是 source，
 # 等于让冒烟测试顺手跑了一次真更新——上面新增的离线镜像包用例会因此被真实触发。
-GSH_NATIVE_UPDATE_LIB_ONLY=1
+BSP_NATIVE_UPDATE_LIB_ONLY=1
 # shellcheck disable=SC1090,SC1091
-source "${SCRIPT_DIR}/gsh-native-update.sh"
+source "${SCRIPT_DIR}/bsp-native-update.sh"
 
 NATIVE_HELPER_TEST_DIR="$(mktemp -d)"
 NATIVE_HELPER_ENV="${NATIVE_HELPER_TEST_DIR}/panel.env"
 printf '%s\n' \
-  "GSH_NATIVE_UPDATE_DIR=${NATIVE_HELPER_TEST_DIR}/panel-update" \
-  "GSH_NATIVE_USER=$(id -un)" \
-  "GSH_RELEASE_VERSION=${SMOKE_INSTALLED_TAG}" \
+  "BSP_NATIVE_UPDATE_DIR=${NATIVE_HELPER_TEST_DIR}/panel-update" \
+  "BSP_NATIVE_USER=$(id -un)" \
+  "BSP_RELEASE_VERSION=${SMOKE_INSTALLED_TAG}" \
   'SERVER_PORT=9527' \
   > "${NATIVE_HELPER_ENV}"
 PANEL_ENV_FILE="${NATIVE_HELPER_ENV}"
 load_config
 [[ "${UPDATE_DIR}" == "${NATIVE_HELPER_TEST_DIR}/panel-update" ]]
 [[ "${ROOT_DIR}" == "${UPDATE_DIR}/.root" ]]
-[[ "$(read_env_value "${PANEL_ENV_FILE}" 'GSH_NATIVE_USER')" == "$(id -un)" ]]
+[[ "$(read_env_value "${PANEL_ENV_FILE}" 'BSP_NATIVE_USER')" == "$(id -un)" ]]
 
 is_valid_release_tag 'v0.4.5'
 is_valid_release_tag 'v0.4.5-beta.1'
@@ -393,15 +393,15 @@ rm -rf "${NATIVE_HELPER_TEST_DIR}"
 rm -rf "${COMPOSE_PLUGIN_TEST_DIR}"
 
 # ---- 镜像路线判定 ----
-# resolve_image_route 会读网络档、GSH_IMAGE_SOURCE 与层数据探测结论，并问一次本地镜像。
+# resolve_image_route 会读网络档、BSP_IMAGE_SOURCE 与层数据探测结论，并问一次本地镜像。
 # 这里把 docker 固定成「本地没有该镜像」，其余按分支逐个断言。
 RESOLVED_INSTALL_MODE='docker'
 RESOLVED_NETWORK_PROFILE='global'
 PANEL_IMAGE_OVERRIDE=''
-GSH_IMAGE_SOURCE='auto'
+BSP_IMAGE_SOURCE='auto'
 GHCR_REACHABLE=1
 GHCR_LAYER_ACCESSIBLE=1
-GSH_FORCE_IMAGE_PULL=0
+BSP_FORCE_IMAGE_PULL=0
 docker() { return 1; }
 
 # 海外 + 层数据可用 → 直拉
@@ -429,7 +429,7 @@ resolve_image_route
 [[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
 
 # 显式指定 native → 无论网络档都直拉
-GSH_IMAGE_SOURCE='native'
+BSP_IMAGE_SOURCE='native'
 RESOLVED_NETWORK_PROFILE='cn'
 GHCR_REACHABLE=1
 GHCR_LAYER_ACCESSIBLE=1
@@ -438,12 +438,12 @@ resolve_image_route
 [[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
 
 # 显式指定 offline → 无论网络档都走离线包
-GSH_IMAGE_SOURCE='offline'
+BSP_IMAGE_SOURCE='offline'
 RESOLVED_NETWORK_PROFILE='global'
 resolve_image_route
 [[ "${IMAGE_ROUTE}" == 'offline' ]]
 [[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
-GSH_IMAGE_SOURCE='auto'
+BSP_IMAGE_SOURCE='auto'
 
 # 本地已有目标镜像 → 跳过下载
 docker() { return 0; }
@@ -452,17 +452,17 @@ resolve_image_route
 [[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
 
 # 强制拉取时跳过「本地已有」判断，改由网络档决定路线
-GSH_FORCE_IMAGE_PULL=1
+BSP_FORCE_IMAGE_PULL=1
 RESOLVED_NETWORK_PROFILE='cn'
 resolve_image_route
 [[ "${IMAGE_ROUTE}" == 'offline' ]]
 [[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
-GSH_FORCE_IMAGE_PULL=0
+BSP_FORCE_IMAGE_PULL=0
 RESOLVED_NETWORK_PROFILE='global'
 
 # 覆盖引用 → 按指定引用走，不判定 registry
 docker() { return 1; }
-PANEL_IMAGE_OVERRIDE='registry.example.com/gsh:test'
+PANEL_IMAGE_OVERRIDE='registry.example.com/bsp:test'
 resolve_image_route
 [[ "${IMAGE_ROUTE}" == 'custom' ]]
 [[ "${OFFLINE_IMAGE_ROUTE}" == '0' ]]
@@ -558,7 +558,7 @@ STATUS_FILE="${PANEL_LOG_DIR}/install-summary.status"
 mkdir -p "${PANEL_LOG_DIR}"
 RESOLVED_INSTALL_MODE='docker'
 RESOLVED_NETWORK_PROFILE='cn'
-GSH_RELEASE_TAG="${SMOKE_FAKE_TAG}"
+BSP_RELEASE_TAG="${SMOKE_FAKE_TAG}"
 PANEL_ACCESS_URL='http://192.0.2.10:9527'
 PANEL_LAN_URL='http://192.0.2.10:9527'
 PANEL_PUBLIC_IP_SOURCE='ip_echo'
@@ -566,9 +566,9 @@ ADMIN_USERNAME='superadmin'
 ADMIN_PASSWORD='Smoke-Test-Password1'
 HIDE_ADMIN_PASSWORD=0
 PANEL_ENV_FILE="${SMOKE_TMP_DIR}/panel.env"
-# 用变量拼出镜像引用：release:verify 会扫描脚本里所有 ghcr.io/pmat77/game-server-hub:<版本>
+# 用变量拼出镜像引用：release:verify 会扫描脚本里所有 ghcr.io/pmat77/bubblesharkpanel:<版本>
 # 形式的字面量并要求它等于当前发布版本，这里写死一个假版本会让发布门禁误判。
-PANEL_IMAGE="ghcr.io/pmat77/game-server-hub:${SMOKE_FAKE_TAG}"
+PANEL_IMAGE="ghcr.io/pmat77/bubblesharkpanel:${SMOKE_FAKE_TAG}"
 [[ -n "${PANEL_IMAGE}" ]]
 PANEL_INSTALL_DIR="${SMOKE_TMP_DIR}"
 NATIVE_CURRENT_LINK="${SMOKE_TMP_DIR}/current"
@@ -604,21 +604,21 @@ fi
 # 标记文件让「调用前无 swap、调用后有 swap」可以按顺序模拟，而不用在同一轮里做状态机。
 SWAP_TEST_DIR="$(mktemp -d)"
 SWAP_MARKER="${SWAP_TEST_DIR}/swap-active"
-SWAP_FILE="${SWAP_TEST_DIR}/swapfile-gsh"
+SWAP_FILE="${SWAP_TEST_DIR}/swapfile-bsp"
 SWAP_FSTAB="${SWAP_TEST_DIR}/fstab"
 SWAP_SYSCTL_DIR="${SWAP_TEST_DIR}/sysctl.d"
 # 这些名字必须与安装器/cmd_setup_swap 真正读取的键一致：invoke_swap_setup 在子 shell 里
-# source gsh.sh 再调 cmd_setup_swap，只有导出的环境变量能传进去。
+# source bsp.sh 再调 cmd_setup_swap，只有导出的环境变量能传进去。
 export SWAP_MARKER
-export GSH_SWAP_FILE="${SWAP_FILE}"
-export GSH_SWAP_FSTAB_FILE="${SWAP_FSTAB}"
-export GSH_SWAP_SYSCTL_DIR="${SWAP_SYSCTL_DIR}"
+export BSP_SWAP_FILE="${SWAP_FILE}"
+export BSP_SWAP_FSTAB_FILE="${SWAP_FSTAB}"
+export BSP_SWAP_SYSCTL_DIR="${SWAP_SYSCTL_DIR}"
 export STUB_MEM_MB='7629'
 mkdir -p "${SWAP_SYSCTL_DIR}"
 printf '/dev/vda1 / ext4 defaults 0 1' > "${SWAP_FSTAB}" # 故意不带行尾换行
 swapon() {
   if [[ -e "${SWAP_MARKER}" ]]; then
-    printf '/swapfile-gsh file 2097148 0 -2\n'
+    printf '/swapfile-bsp file 2097148 0 -2\n'
   fi
   return 0
 }
@@ -677,7 +677,7 @@ grep -Fxq '/dev/vda1 / ext4 defaults 0 1' "${SWAP_FSTAB}" || {
 }
 [[ "$(wc -l < "${SWAP_FSTAB}")" -eq 2 ]]
 [[ "$(tail -c 1 "${SWAP_FSTAB}" | od -An -tu1 | tr -d '[:space:]')" == '10' ]]
-grep -Fq 'vm.swappiness = 20' "${SWAP_SYSCTL_DIR}/99-game-server-hub.conf"
+grep -Fq 'vm.swappiness = 20' "${SWAP_SYSCTL_DIR}/99-bubblesharkpanel.conf"
 
 # 3) 内存档位够用：不创建 swapfile
 rm -f "${SWAP_MARKER}" "${SWAP_FILE}"
@@ -687,15 +687,30 @@ ensure_small_host_swap
 [[ "${AUTO_SWAP_STATE}" == 'skipped' ]]
 [[ ! -e "${SWAP_FILE}" ]]
 
-# 4) GSH_SWAP_ON_INSTALL=0：即使内存很小也不创建
-GSH_SWAP_ON_INSTALL='0'
+# 4) BSP_SWAP_ON_INSTALL=0：即使内存很小也不创建
+BSP_SWAP_ON_INSTALL='0'
 AUTO_SWAP_STATE='none'
 STUB_MEM_MB='3915'
 ensure_small_host_swap
 [[ "${AUTO_SWAP_STATE}" == 'skipped' ]]
 [[ ! -e "${SWAP_FILE}" ]]
-GSH_SWAP_ON_INSTALL='1'
+BSP_SWAP_ON_INSTALL='1'
 STUB_MEM_MB='7629'
 rm -rf "${SWAP_TEST_DIR}"
 
+(
+  legacy_layout="$(mktemp -d)"
+  trap 'rm -rf "$legacy_layout"' EXIT
+  mkdir -p "$legacy_layout/data" "$legacy_layout/instances" "$legacy_layout/backups"
+  printf '%s\n' "GSH_RUNTIME_MODE=native" "DB_PATH=$legacy_layout/data/custom.sqlite" "GSH_INSTANCES_ROOT=$legacy_layout/instances" "GSH_BACKUPS_ROOT=$legacy_layout/backups" "GSH_NATIVE_STEAMCMD_PATH=$legacy_layout/steamcmd.sh" > "$legacy_layout/panel.env"
+  unset BSP_RUNTIME_MODE BSP_STACK_DIR BSP_INSTALL_DIR BSP_INSTANCES_ROOT BSP_BACKUPS_ROOT BSP_NATIVE_STEAMCMD_PATH BSP_NATIVE_RUNTIME_DIR DB_PATH PANEL_DATA_DIR PANEL_INSTANCES_DIR PANEL_BACKUPS_DIR
+  PANEL_INSTALL_DIR="$legacy_layout"
+  BSP_INSTALLER_LIB_ONLY=1 source "${SCRIPT_DIR}/install.linux.sh"
+  [[ "$PANEL_DATA_DIR" == "$legacy_layout/data" ]]
+  [[ "$PANEL_DB_FILENAME" == custom.sqlite ]]
+  [[ "$PANEL_INSTANCES_DIR" == "$legacy_layout/instances" ]]
+  [[ "$PANEL_BACKUPS_DIR" == "$legacy_layout/backups" ]]
+  [[ "$NATIVE_STEAMCMD_PATH" == "$legacy_layout/steamcmd.sh" ]]
+  [[ "$PANEL_NATIVE_SERVICE" == game-server-hub.service ]]
+)
 printf 'install-linux-smoke-ok\n'

@@ -19,7 +19,7 @@ import {
  * 否则进程会在「启动即崩」里被 systemd/Docker 反复拉起，而用户没有任何界面可用。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-db-restore-'))
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-db-restore-'))
 const migrationsFolder = resolveMigrationsFolder()
 
 /** 只用到 log；用最小替身避免为一次日志拉起整个服务 */
@@ -63,7 +63,7 @@ describe('database restore', () => {
 
   it('替换主库、清掉 WAL 副文件，并把旧库留在原地', () => {
     const dir = caseDir('swap')
-    const dbPath = path.join(dir, 'game-server-hub.sqlite')
+    const dbPath = path.join(dir, 'bubblesharkpanel.sqlite')
     const preparedPath = `${dbPath}.restore-tmp`
     const replacedPath = `${dbPath}.replaced-test`
     fs.writeFileSync(dbPath, 'old-database')
@@ -83,7 +83,7 @@ describe('database restore', () => {
 
   it('没有恢复标记时启动收尾什么都不做', async () => {
     const dir = caseDir('no-marker')
-    const dbPath = path.join(dir, 'game-server-hub.sqlite')
+    const dbPath = path.join(dir, 'bubblesharkpanel.sqlite')
     createPanelDatabase(dbPath)
     const { app } = fakeApp()
 
@@ -95,7 +95,7 @@ describe('database restore', () => {
 
   it('恢复成功后清理标记与恢复前的旧库', async () => {
     const dir = caseDir('finalize-ok')
-    const dbPath = path.join(dir, 'game-server-hub.sqlite')
+    const dbPath = path.join(dir, 'bubblesharkpanel.sqlite')
     const replacedPath = `${dbPath}.replaced-1`
     createPanelDatabase(dbPath)
     fs.writeFileSync(replacedPath, 'previous-database')
@@ -116,7 +116,7 @@ describe('database restore', () => {
 
   it('恢复后的库不可用时自动回退到恢复前的数据', async () => {
     const dir = caseDir('rollback')
-    const dbPath = path.join(dir, 'game-server-hub.sqlite')
+    const dbPath = path.join(dir, 'bubblesharkpanel.sqlite')
     const replacedPath = `${dbPath}.replaced-2`
     // 当前主库是坏文件（模拟替换进去的库打不开），恢复前的旧库仍在
     fs.writeFileSync(dbPath, 'broken')
@@ -136,6 +136,6 @@ describe('database restore', () => {
     assert.equal(fs.existsSync(resolveRestoreMarkerPath(dbPath)), false)
     assert.ok(lines.some(line => line.level === 'warn' && line.message.includes('已回退')))
     // 坏库挪开留证，便于事后排查
-    assert.ok(fs.readdirSync(dir).some(name => name.startsWith('game-server-hub.sqlite.broken-')))
+    assert.ok(fs.readdirSync(dir).some(name => name.startsWith('bubblesharkpanel.sqlite.broken-')))
   })
 })

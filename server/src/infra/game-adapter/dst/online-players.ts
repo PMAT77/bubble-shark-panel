@@ -4,10 +4,10 @@ import type { DstConsoleShard } from '../../../shared/instance/dst-container-com
 import { getDstContainerCommandPort } from '../../../shared/instance/dst-container-command-port'
 import { instanceConsoleLogStore } from '../../../shared/instance-runtime/console-log-store'
 
-export const DST_ONLINE_PLAYER_COUNT_MARKER = 'GSH_PLAYER_COUNT:'
-export const DST_ONLINE_PLAYER_LIST_BEGIN_MARKER = 'GSH_PLAYER_LIST_BEGIN:'
-export const DST_ONLINE_PLAYER_LIST_ITEM_MARKER = 'GSH_PLAYER_LIST_ITEM:'
-export const DST_ONLINE_PLAYER_LIST_END_MARKER = 'GSH_PLAYER_LIST_END:'
+export const DST_ONLINE_PLAYER_COUNT_MARKER = 'BSP_PLAYER_COUNT:'
+export const DST_ONLINE_PLAYER_LIST_BEGIN_MARKER = 'BSP_PLAYER_LIST_BEGIN:'
+export const DST_ONLINE_PLAYER_LIST_ITEM_MARKER = 'BSP_PLAYER_LIST_ITEM:'
+export const DST_ONLINE_PLAYER_LIST_END_MARKER = 'BSP_PLAYER_LIST_END:'
 
 /**
  * 读取容器日志的尾部行数。
@@ -104,7 +104,7 @@ export function parseDstOnlinePlayerList(
    * 标记行必须落在行尾。
    *
    * 面板下发的那行 Lua 源码会被游戏原样回显到日志里，里面同样含这三个标记
-   * （`... end print("GSH_PLAYER_LIST_END:token")`）。不加行尾约束，
+   * （`... end print("BSP_PLAYER_LIST_END:token")`）。不加行尾约束，
    * 回显行会被当成真的 END，解析在半路就收工；BEGIN 也一并约束，
    * 免得 `#AllPlayers` 之类的字样凑出一个假读数。
    */

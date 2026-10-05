@@ -61,7 +61,7 @@ export function resolveDefaultInstallRoot(steamcmdCommandPath: string): string {
   }
   return process.platform === 'win32'
     ? 'C:\\steamcmd\\instances'
-    : '/var/lib/game-server-hub/instances'
+    : '/var/lib/bubblesharkpanel/instances'
 }
 
 export function resolveEffectiveInstallRoot(rawInstallRoot: string | undefined, steamcmdCommandPath: string): string {

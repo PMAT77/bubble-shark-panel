@@ -168,8 +168,8 @@ describe('steam workshop parser', () => {
   })
 
   it('enriches missing ratings via GetDetails when api key is set', async () => {
-    const previousKey = process.env.GSH_STEAM_WEBAPI_KEY
-    process.env.GSH_STEAM_WEBAPI_KEY = 'test-key'
+    const previousKey = process.env.BSP_STEAM_WEBAPI_KEY
+    process.env.BSP_STEAM_WEBAPI_KEY = 'test-key'
     try {
       globalThis.fetch = async (input: string | URL | Request) => {
         const url = String(input)
@@ -199,10 +199,10 @@ describe('steam workshop parser', () => {
     }
     finally {
       if (previousKey === undefined) {
-        delete process.env.GSH_STEAM_WEBAPI_KEY
+        delete process.env.BSP_STEAM_WEBAPI_KEY
       }
       else {
-        process.env.GSH_STEAM_WEBAPI_KEY = previousKey
+        process.env.BSP_STEAM_WEBAPI_KEY = previousKey
       }
     }
   })
@@ -280,8 +280,8 @@ describe('fetchDstSteamWorkshopMods', () => {
   it('returns degraded empty result when live fetch fails without cache', async () => {
     __steamWorkshopTestUtils.clearSteamModListCache()
     const keyword = `degraded-${Date.now()}`
-    const previousFallbackFlag = process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
-    process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
+    const previousFallbackFlag = process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+    process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
     globalThis.fetch = async () => new Response('upstream down', { status: 503 })
     try {
       const result = await fetchDstSteamWorkshopMods({
@@ -299,10 +299,10 @@ describe('fetchDstSteamWorkshopMods', () => {
     }
     finally {
       if (previousFallbackFlag === undefined) {
-        delete process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+        delete process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
       }
       else {
-        process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previousFallbackFlag
+        process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previousFallbackFlag
       }
     }
   })
@@ -310,8 +310,8 @@ describe('fetchDstSteamWorkshopMods', () => {
   it('falls back to the offline window instead of an empty list', async () => {
     __steamWorkshopTestUtils.clearSteamModListCache()
     const keyword = `offline-${Date.now()}`
-    const previousFallbackFlag = process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
-    process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
+    const previousFallbackFlag = process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+    process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
     // 8 天前拉到过、早已过了 30 分钟的 stale 窗口，但还在 7 天离线窗口…… 这里用 8 天
     // 之内的值：默认离线窗口是 7 天，所以取 3 天前，确保仍在窗口内
     __steamWorkshopTestUtils.seedCacheEntry(
@@ -339,10 +339,10 @@ describe('fetchDstSteamWorkshopMods', () => {
     }
     finally {
       if (previousFallbackFlag === undefined) {
-        delete process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+        delete process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
       }
       else {
-        process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previousFallbackFlag
+        process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previousFallbackFlag
       }
     }
   })
@@ -350,8 +350,8 @@ describe('fetchDstSteamWorkshopMods', () => {
   it('still reports upstream unavailable when the cache is older than the offline window', async () => {
     __steamWorkshopTestUtils.clearSteamModListCache()
     const keyword = `expired-${Date.now()}`
-    const previousFallbackFlag = process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
-    process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
+    const previousFallbackFlag = process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+    process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
     // 30 天前：超出默认 7 天离线窗口，此时只能老实降级
     __steamWorkshopTestUtils.seedCacheEntry(
       { keyword, page: 1, pageSize: 20, sort: 'trend', trendDays: 7 },
@@ -373,10 +373,10 @@ describe('fetchDstSteamWorkshopMods', () => {
     }
     finally {
       if (previousFallbackFlag === undefined) {
-        delete process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+        delete process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
       }
       else {
-        process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previousFallbackFlag
+        process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previousFallbackFlag
       }
     }
   })
@@ -682,7 +682,7 @@ describe('fetchWorkshopModMetadata', () => {
 
 describe('offline detail persistence and shared metadata requests', () => {
   it('persists details atomically, prunes expired lists and preserves fetched time on offline fallback', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-workshop-cache-'))
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-workshop-cache-'))
     const file = path.join(root, 'cache.json')
     __steamWorkshopTestUtils.resetRuntimeForTests()
     globalThis.fetch = async () => new Response(JSON.stringify({ response: { publishedfiledetails: [{ publishedfileid: '910', result: 1, title: 'Stored', description: 'Offline content' }] } }), { status: 200 })
@@ -738,8 +738,8 @@ describe('offline detail persistence and shared metadata requests', () => {
   })
 
   it('preserves the list acquisition time and reports a failed stale refresh as offline', async () => {
-    const previous = process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
-    process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
+    const previous = process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+    process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = '1'
     const keyword = 'stale-status'
     __steamWorkshopTestUtils.seedCacheEntry({ keyword }, 3 * 60_000)
     globalThis.fetch = async () => { throw new Error('offline') }
@@ -756,8 +756,8 @@ describe('offline detail persistence and shared metadata requests', () => {
     }
     finally {
       await __steamWorkshopTestUtils.waitForListRefresh({ keyword })
-      if (previous === undefined) delete process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
-      else process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previous
+      if (previous === undefined) delete process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK
+      else process.env.BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK = previous
     }
   })
 

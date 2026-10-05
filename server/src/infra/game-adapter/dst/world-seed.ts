@@ -20,19 +20,19 @@ import { isCavesShardConfigured } from './shard-layout'
  * 于是面板自带一个仅服务端的极小 Mod：种子直接写死在它的 modworldgenmain.lua 里
  * （不依赖 Mod 配置项——DST 的 configuration_options 只有下拉选项，没有自由文本输入）。
  */
-export const GSH_WORLD_SEED_MOD_ID = '99999999999'
+export const BSP_WORLD_SEED_MOD_ID = '99999999999'
 
 /**
  * 保留 ID：11 位数字，远超 Steam 创意工坊实际分配的 UGC ID 区间，避免与真实 Mod 撞号。
  * 若日后 Steam 真的分配了该 ID，改这个常量即可（旧目录由落位逻辑清理）。
  */
 export function toWorldSeedModName(): string {
-  return `workshop-${GSH_WORLD_SEED_MOD_ID}`
+  return `workshop-${BSP_WORLD_SEED_MOD_ID}`
 }
 
 /** 是否为面板内置的世界种子 Mod（导入存档、订阅入口等处要把它排除在外） */
 export function isWorldSeedModId(value: string): boolean {
-  return value.trim() === GSH_WORLD_SEED_MOD_ID
+  return value.trim() === BSP_WORLD_SEED_MOD_ID
 }
 
 export const SHARD_FOLDER_BY_ID: Record<ShardId, DstShardFolder> = {
@@ -58,7 +58,7 @@ export function resolveWorldSeedModDir(installPath: string, shardFolder: DstShar
     shardFolder,
     'content',
     DST_WORKSHOP_APP_ID,
-    GSH_WORLD_SEED_MOD_ID,
+    BSP_WORLD_SEED_MOD_ID,
   )
 }
 
@@ -73,7 +73,7 @@ export function buildWorldSeedModInfoContent(): string {
   return [
     'name = "GSH World Seed"',
     'description = "由服务器面板写入的世界生成种子；只在本分片生成地图时生效。"',
-    'author = "Game Server Hub"',
+    'author = "BubbleShark Panel"',
     'version = "1.0.0"',
     'api_version = 10',
     // priority 取较大值：DST 按 priority 升序加载 Mod，靠后加载可以让本 Mod 最后设置 SEED，
@@ -98,7 +98,7 @@ export function buildWorldSeedModInfoContent(): string {
  */
 export function buildWorldSeedModWorldgenMainContent(seed: string): string {
   return [
-    '-- 由 Game Server Hub 自动生成，请勿手工编辑：本分片的世界生成种子。',
+    '-- 由 BubbleShark Panel 自动生成，请勿手工编辑：本分片的世界生成种子。',
     '-- worldgen_main.lua 会在加载完所有 Mod 之后执行 SEED = SetWorldGenSeed(SEED)，',
     '-- 因此这里设置的全局 SEED 就是本次生成实际使用的种子（并写入存档 meta.seed）。',
     `GLOBAL.SEED = ${seed}`,
@@ -134,7 +134,7 @@ function writeIfChanged(filePath: string, content: string): void {
 /** 移除某个分片的内置 Mod 目录（仅限保留 ID 目录，防误删） */
 function removeWorldSeedModDir(installPath: string, shardFolder: DstShardFolder): void {
   const modDir = resolveWorldSeedModDir(installPath, shardFolder)
-  if (path.basename(modDir) !== GSH_WORLD_SEED_MOD_ID) {
+  if (path.basename(modDir) !== BSP_WORLD_SEED_MOD_ID) {
     return
   }
   fs.rmSync(modDir, { recursive: true, force: true })
@@ -158,7 +158,7 @@ export function ensureWorldSeedModLayout(
     const seed = seeds[SHARD_ID_BY_FOLDER[shardFolder]]
     if (!seed || validateWorldSeed(seed)) {
       // 先撤加载入口，再删除内容，避免留下悬空接入。
-      removeDstLegacyModLinks(installPath, [GSH_WORLD_SEED_MOD_ID])
+      removeDstLegacyModLinks(installPath, [BSP_WORLD_SEED_MOD_ID])
       removeWorldSeedModDir(installPath, shardFolder)
       continue
     }
@@ -184,11 +184,11 @@ function syncWorldSeedLegacyLink(
 ): void {
   const sameSeed = (seeds.master?.trim() ?? '') === (seeds.caves?.trim() ?? '')
   if (enabledFolders.length === 0 || (isCavesShardConfigured(installPath) && !sameSeed)) {
-    removeDstLegacyModLinks(installPath, [GSH_WORLD_SEED_MOD_ID])
+    removeDstLegacyModLinks(installPath, [BSP_WORLD_SEED_MOD_ID])
     return
   }
   try {
-    ensureDstLegacyModLink(installPath, GSH_WORLD_SEED_MOD_ID, resolveWorldSeedModDir(installPath, enabledFolders[0]))
+    ensureDstLegacyModLink(installPath, BSP_WORLD_SEED_MOD_ID, resolveWorldSeedModDir(installPath, enabledFolders[0]))
   }
   catch {
     // best-effort：接入失败只影响内置种子生效，不影响实例启动

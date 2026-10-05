@@ -1,4 +1,4 @@
-import process from 'node:process'
+import { readBrandEnv } from '../../../../shared/brand-env'
 
 export interface SteamcmdRuntimeConfig {
   downloadRegion: string
@@ -16,7 +16,7 @@ const DEFAULT_INSTALL_RETRY_DELAYS_MS = [4000, 8000, 8000, 8000]
 const DEFAULT_APP_UPDATE_TIMEOUT_MS = 60 * 60 * 1000
 
 function parseInstallMaxAttempts(): number {
-  const raw = process.env.GSH_STEAMCMD_INSTALL_MAX_ATTEMPTS?.trim()
+  const raw = readBrandEnv('BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS')?.trim()
   if (!raw) {
     return DEFAULT_INSTALL_MAX_ATTEMPTS
   }
@@ -28,7 +28,7 @@ function parseInstallMaxAttempts(): number {
 }
 
 function parseInstallRetryDelaysMs(): number[] {
-  const raw = process.env.GSH_STEAMCMD_INSTALL_RETRY_DELAYS_MS?.trim()
+  const raw = readBrandEnv('BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS')?.trim()
   if (!raw) {
     return [...DEFAULT_INSTALL_RETRY_DELAYS_MS]
   }
@@ -43,7 +43,7 @@ function parseInstallRetryDelaysMs(): number[] {
 }
 
 function parseAppUpdateTimeoutMs(): number {
-  const raw = process.env.GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS?.trim()
+  const raw = readBrandEnv('BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS')?.trim()
   if (!raw) {
     return DEFAULT_APP_UPDATE_TIMEOUT_MS
   }
@@ -56,11 +56,11 @@ function parseAppUpdateTimeoutMs(): number {
 
 /** 读取 panel.env 中的 SteamCMD 运行时调优项（安装容器专用） */
 export function loadSteamcmdRuntimeConfig(): SteamcmdRuntimeConfig {
-  const downloadRegion = process.env.GSH_STEAMCMD_DOWNLOAD_REGION?.trim() ?? ''
-  const httpProxy = process.env.GSH_STEAMCMD_HTTP_PROXY?.trim() ?? ''
-  const httpsProxy = process.env.GSH_STEAMCMD_HTTPS_PROXY?.trim() || httpProxy
-  const noProxy = process.env.GSH_STEAMCMD_NO_PROXY?.trim() ?? ''
-  const networkModeRaw = process.env.GSH_STEAMCMD_NETWORK_MODE?.trim().toLowerCase() ?? ''
+  const downloadRegion = readBrandEnv('BSP_STEAMCMD_DOWNLOAD_REGION')?.trim() ?? ''
+  const httpProxy = readBrandEnv('BSP_STEAMCMD_HTTP_PROXY')?.trim() ?? ''
+  const httpsProxy = readBrandEnv('BSP_STEAMCMD_HTTPS_PROXY')?.trim() || httpProxy
+  const noProxy = readBrandEnv('BSP_STEAMCMD_NO_PROXY')?.trim() ?? ''
+  const networkModeRaw = readBrandEnv('BSP_STEAMCMD_NETWORK_MODE')?.trim().toLowerCase() ?? ''
 
   return {
     downloadRegion,

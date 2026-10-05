@@ -24,8 +24,8 @@ import { encodeTileRuns } from './terrain-rle'
  * 这里用真实数据库 + 真实鉴权（登录拿令牌）+ 伪造的实例记录，把三个接口都打一遍。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-map-routes-'))
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-map-routes-'))
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 // 面板数据目录由 DB_PATH 推导（地图产物与数据库同级），因此必须在建库前指好

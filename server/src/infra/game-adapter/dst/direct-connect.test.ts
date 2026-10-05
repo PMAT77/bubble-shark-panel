@@ -55,10 +55,10 @@ describe('direct-connect', () => {
   })
 
   it('buildDstConnectInfo returns structured connect payload', async () => {
-    const previous = process.env.GSH_DST_CONNECT_HOST
-    process.env.GSH_DST_CONNECT_HOST = '203.0.113.10'
+    const previous = process.env.BSP_DST_CONNECT_HOST
+    process.env.BSP_DST_CONNECT_HOST = '203.0.113.10'
     clearDstConnectHostCache()
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-direct-connect-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-direct-connect-'))
     ensureDstClusterConfig(dir, { instanceName: 'Test Room', gamePort: 11001 })
     try {
       const info = await buildDstConnectInfo(dir, { gamePort: 11001, running: true })
@@ -75,19 +75,19 @@ describe('direct-connect', () => {
     finally {
       clearDstConnectHostCache()
       if (previous === undefined) {
-        delete process.env.GSH_DST_CONNECT_HOST
+        delete process.env.BSP_DST_CONNECT_HOST
       }
       else {
-        process.env.GSH_DST_CONNECT_HOST = previous
+        process.env.BSP_DST_CONNECT_HOST = previous
       }
     }
   })
 
   it('buildDstConnectInfo appends caves UDP ports once the caves shard exists', async () => {
-    const previous = process.env.GSH_DST_CONNECT_HOST
-    process.env.GSH_DST_CONNECT_HOST = '203.0.113.10'
+    const previous = process.env.BSP_DST_CONNECT_HOST
+    process.env.BSP_DST_CONNECT_HOST = '203.0.113.10'
     clearDstConnectHostCache()
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-direct-connect-caves-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-direct-connect-caves-'))
     ensureDstClusterConfig(dir, { instanceName: 'Caves Room', gamePort: 10999 })
     try {
       const before = await buildDstConnectInfo(dir, { gamePort: 10999, running: true })
@@ -98,10 +98,10 @@ describe('direct-connect', () => {
     }
     finally {
       if (previous === undefined) {
-        delete process.env.GSH_DST_CONNECT_HOST
+        delete process.env.BSP_DST_CONNECT_HOST
       }
       else {
-        process.env.GSH_DST_CONNECT_HOST = previous
+        process.env.BSP_DST_CONNECT_HOST = previous
       }
       clearDstConnectHostCache()
     }

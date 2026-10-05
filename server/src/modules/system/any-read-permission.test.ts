@@ -35,7 +35,7 @@ interface ApiEnvelope<T> {
   data: T
 }
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-any-read-permission-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-any-read-permission-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 let app: FastifyInstance

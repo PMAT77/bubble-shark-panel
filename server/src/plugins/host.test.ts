@@ -23,15 +23,15 @@ import { readPluginAudit, resolvePluginAuditRoot, summarizeAuditParams } from '.
  * 3. 停用/关闭时进程被真正终止，不留孤儿进程。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-plugin-host-'))
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-plugin-host-'))
 const pluginsRoot = path.join(workDir, 'plugins')
 const auditRoot = path.join(workDir, 'plugin-audit')
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../drizzle')
 
 process.env.DB_PATH = dbFilePath
-process.env.GSH_PLUGINS_ROOT = pluginsRoot
-process.env.GSH_PLUGIN_AUDIT_ROOT = auditRoot
+process.env.BSP_PLUGINS_ROOT = pluginsRoot
+process.env.BSP_PLUGIN_AUDIT_ROOT = auditRoot
 
 /**
  * 最小插件脚本：读环境变量 → 调 capability → 写 result.json → 退出。
@@ -42,15 +42,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 
-const pluginId = process.env.GSH_PLUGIN_ID ?? ''
-const baseUrl = process.env.GSH_CAPABILITY_URL ?? ''
-const token = process.env.GSH_PLUGIN_TOKEN ?? ''
-const pluginDir = process.env.GSH_PLUGIN_DIR ?? process.cwd()
+const pluginId = process.env.BSP_PLUGIN_ID ?? ''
+const baseUrl = process.env.BSP_CAPABILITY_URL ?? ''
+const token = process.env.BSP_PLUGIN_TOKEN ?? ''
+const pluginDir = process.env.BSP_PLUGIN_DIR ?? process.cwd()
 
 async function call(pathname, body = {}) {
   const response = await fetch(baseUrl + pathname, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-gsh-plugin-token': token },
+    headers: { 'content-type': 'application/json', 'x-bsp-plugin-token': token },
     body: JSON.stringify({ pluginId, ...body }),
   })
   return { status: response.status, body: await response.json() }
@@ -70,7 +70,7 @@ async function main() {
     deniedStatus: denied.status,
     deniedError: denied.body?.error ?? null,
     noTokenStatus: noToken.status,
-    apiVersion: process.env.GSH_PLUGIN_API_VERSION ?? null,
+    apiVersion: process.env.BSP_PLUGIN_API_VERSION ?? null,
   }), 'utf8')
   process.exit(0)
 }

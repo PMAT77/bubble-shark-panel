@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import { withInstanceContentActivity } from '../../shared/instance-content/operation'
 import type { FastifyInstance } from 'fastify'
 import type { HostMemoryPressureFailure } from '../../infra/container/host-resource-guard'
@@ -60,9 +61,9 @@ const DEFAULT_DST_MASTER_PORT = 10888
  */
 const DEFAULT_SHARD_READY_WAIT_SEC = 900
 
-/** 就绪等待上限；可用 GSH_SHARD_READY_WAIT_SEC 覆盖（小机器上 Mod 特别多时可再调大） */
+/** 就绪等待上限；可用 BSP_SHARD_READY_WAIT_SEC 覆盖（小机器上 Mod 特别多时可再调大） */
 export function resolveShardReadyWaitSec(): number {
-  const raw = process.env.GSH_SHARD_READY_WAIT_SEC?.trim()
+  const raw = readBrandEnv('BSP_SHARD_READY_WAIT_SEC')?.trim()
   const parsed = raw ? Number(raw) : Number.NaN
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_SHARD_READY_WAIT_SEC
 }
@@ -264,10 +265,10 @@ export async function ensureContainerRuntimeReady(): Promise<{ ok: boolean, mess
   const { runtimeMode } = getServerContainerConfig()
   if (runtimeMode === 'native') {
     if ((await resolveRuntimeStatus()) !== 'running') {
-      return { ok: false, message: '无法连接 systemd 用户服务管理器，请确认 gsh 用户已启用 linger 且 user bus 正常' }
+      return { ok: false, message: '无法连接 systemd 用户服务管理器，请确认 bsp 用户已启用 linger 且 user bus 正常' }
     }
     if (!(await isSteamcmdRuntimeReady())) {
-      return { ok: false, message: 'SteamCMD 未就绪，请检查 GSH_NATIVE_STEAMCMD_PATH 或重新运行 Native 安装器' }
+      return { ok: false, message: 'SteamCMD 未就绪，请检查 BSP_NATIVE_STEAMCMD_PATH 或重新运行 Native 安装器' }
     }
     return { ok: true }
   }
@@ -278,7 +279,7 @@ export async function ensureContainerRuntimeReady(): Promise<{ ok: boolean, mess
   if (!pullResult.ok) {
     return {
       ok: false,
-      message: `SteamCMD 镜像未就绪：${pullResult.error}。请检查网络或 panel.env 中的 GSH_STEAMCMD_IMAGE`,
+      message: `SteamCMD 镜像未就绪：${pullResult.error}。请检查网络或 panel.env 中的 BSP_STEAMCMD_IMAGE`,
     }
   }
   return { ok: true }
@@ -291,10 +292,12 @@ export function resolveDefaultInstanceInstallPath(instanceId: string): string {
 
 export async function resolveInstanceContainerRef(instanceId: string): Promise<ContainerRef | undefined> {
   const instance = await getGameInstanceById(instanceId)
+  const existing = await getContainerRuntime().findByName(buildMasterContainerName(instanceId))
+  if (existing) return existing
   if (instance?.containerId) {
     return {
       id: instance.containerId,
-      name: buildMasterContainerName(instanceId),
+      name: instance.containerId.endsWith('.service') ? instance.containerId.slice(0, -8) : buildMasterContainerName(instanceId),
     }
   }
   const runtime = getContainerRuntime()
@@ -1007,7 +1010,7 @@ async function startCavesAfterMasterReady(
     }
     if (readiness.kind === 'stopped' || readiness.kind === 'restart-loop') {
       await failStart(
-        `${readiness.detail}，已中止启动洞穴分片。内存不足时可先执行 gsh setup-swap 增加 swap，'
+        `${readiness.detail}，已中止启动洞穴分片。内存不足时可先执行 bsp setup-swap 增加 swap，'
         + '或在「世界设置 → 模组」减少订阅的 Mod；完整日志见控制台。`,
       )
       return

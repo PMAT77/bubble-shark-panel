@@ -23,7 +23,7 @@ import {
 const tempDirs: string[] = []
 
 function createTempStackDir(files: string[]): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-stack-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-stack-'))
   tempDirs.push(dir)
   for (const file of files) {
     const filePath = path.join(dir, file)
@@ -49,23 +49,23 @@ function buildConfig(partial: Partial<ServerConfig>): ServerConfig {
     dockerHost: 'unix:///var/run/docker.sock',
     instancesRoot: '/tmp/instances',
     backupsRoot: '/tmp/backups',
-    gameDstImage: 'ghcr.io/pmat77/game-server-hub:latest',
-    steamcmdImage: 'ghcr.io/pmat77/game-server-hub:latest',
+    gameDstImage: 'ghcr.io/pmat77/bubblesharkpanel:latest',
+    steamcmdImage: 'ghcr.io/pmat77/bubblesharkpanel:latest',
     imageMirrors: [],
     edition: 'community',
     runtimeMode: 'docker',
     nativeRuntimeDir: '/tmp/runtime',
-    nativeSteamcmdPath: '/opt/game-server-hub/runtime/steamcmd/steamcmd.sh',
+    nativeSteamcmdPath: '/opt/bubblesharkpanel/runtime/steamcmd/steamcmd.sh',
     nativeSystemdUnitDir: '/tmp/systemd',
     nativeUpdateDir: '/tmp/panel-update',
-    panelImage: 'ghcr.io/pmat77/game-server-hub:latest',
+    panelImage: 'ghcr.io/pmat77/bubblesharkpanel:latest',
     panelUpdaterImage: '',
     stackDir: '',
     composeFiles: ['docker-compose.yml', 'docker-compose.bind.yml'],
-    panelContainerName: 'game-server-hub-panel',
+    panelContainerName: 'bubblesharkpanel-panel',
     trustedProxies: [],
     installPathPolicy: 'instances-root',
-    githubRepo: 'PMAT77/game-serve-hub',
+    githubRepo: 'PMAT77/bubble-shark-panel',
     githubApiBase: 'https://api.github.com',
     githubProxy: '',
     panelUpdateSource: 'auto',
@@ -106,7 +106,7 @@ describe('resolveStackPaths', () => {
   })
 
   it('falls back to container mount when host path is not visible in process', () => {
-    const hostDir = '/opt/game-server-hub'
+    const hostDir = '/opt/bubblesharkpanel'
     const mountDir = createTempStackDir(['panel.env', 'docker-compose.yml'])
     assert.deepEqual(resolveStackPaths(hostDir, ['docker-compose.yml'], mountDir), {
       hostDir,
@@ -132,7 +132,7 @@ describe('resolveApplySupport', () => {
   it('asks for one installer rerun when the Native update helper is missing', () => {
     // 老安装（未重跑过安装脚本）没有更新组件：面板内更新不可用，但要说清怎么恢复。
     // 注入口让这条断言不再依赖「本机恰好没装过 Native」。
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-native-support-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-native-support-'))
     tempDirs.push(dir)
     const support = resolveApplySupport(
       buildConfig({ runtimeMode: 'native', nativeUpdateDir: dir }),
@@ -148,10 +148,10 @@ describe('resolveApplySupport', () => {
   })
 
   it('enables in-panel updates once the installer has deployed the update components', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-native-support-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-native-support-'))
     tempDirs.push(dir)
-    const unitFile = path.join(dir, 'game-server-hub-update.path')
-    const helperFile = path.join(dir, 'gsh-native-update')
+    const unitFile = path.join(dir, 'bubblesharkpanel-update.path')
+    const helperFile = path.join(dir, 'bsp-native-update')
     fs.writeFileSync(unitFile, '[Path]\n', 'utf8')
     fs.writeFileSync(helperFile, '#!/usr/bin/env bash\n', 'utf8')
     const support = resolveApplySupport(
@@ -317,49 +317,52 @@ describe('pickPanelUpdateSource', () => {
 describe('resolveTargetImageRef', () => {
   it('targets the release tag so a one-click update actually crosses versions', () => {
     assert.equal(
-      resolveTargetImageRef('v0.3.3', 'ghcr.io/pmat77/game-server-hub:v0.3.2'),
-      'ghcr.io/pmat77/game-server-hub:v0.3.3',
+      resolveTargetImageRef('v0.3.3', 'ghcr.io/pmat77/bubblesharkpanel:v0.3.2'),
+      'ghcr.io/pmat77/bubblesharkpanel:v0.3.3',
     )
   })
 
   it('falls back to the configured tag when the release cannot be read', () => {
     assert.equal(
-      resolveTargetImageRef(null, 'ghcr.io/pmat77/game-server-hub:v0.3.2'),
-      'ghcr.io/pmat77/game-server-hub:v0.3.2',
+      resolveTargetImageRef(null, 'ghcr.io/pmat77/bubblesharkpanel:v0.3.2'),
+      'ghcr.io/pmat77/bubblesharkpanel:v0.3.2',
     )
     assert.equal(
-      resolveTargetImageRef('not-a-tag', 'ghcr.io/pmat77/game-server-hub:v0.3.2'),
-      'ghcr.io/pmat77/game-server-hub:v0.3.2',
+      resolveTargetImageRef('not-a-tag', 'ghcr.io/pmat77/bubblesharkpanel:v0.3.2'),
+      'ghcr.io/pmat77/bubblesharkpanel:v0.3.2',
     )
   })
 
   it('keeps the registry and repository of the configured image', () => {
     assert.equal(
-      resolveTargetImageRef('v0.3.3', 'registry.example.com:5000/gsh/panel:dev'),
-      'registry.example.com:5000/gsh/panel:v0.3.3',
+      resolveTargetImageRef('v0.3.3', 'registry.example.com:5000/bsp/panel:dev'),
+      'registry.example.com:5000/bsp/panel:v0.3.3',
     )
   })
 })
 
 describe('buildOfflineImageCommand', () => {
   it('points at the release asset and how to load it', () => {
-    const command = buildOfflineImageCommand('PMAT77/game-serve-hub', 'v0.3.3') ?? ''
+    const command = buildOfflineImageCommand('PMAT77/bubble-shark-panel', 'v0.3.3') ?? ''
     assert.match(command, /releases\/download\/v0\.3\.3\/game-server-hub-v0\.3\.3-docker-image\.tar\.gz/)
     assert.match(command, /gunzip -c game-server-hub-v0\.3\.3-docker-image\.tar\.gz \| docker load/)
   })
 
   it('returns null without a release tag or repo', () => {
-    assert.equal(buildOfflineImageCommand('PMAT77/game-serve-hub', null), null)
+    assert.equal(buildOfflineImageCommand('PMAT77/bubble-shark-panel', null), null)
     assert.equal(buildOfflineImageCommand('', 'v0.3.3'), null)
   })
 })
 
 describe('buildUpdaterShellCommand', () => {
   it('writes the target image into panel.env and rebuilds without pulling', () => {
-    const script = buildUpdaterShellCommand('ghcr.io/pmat77/game-server-hub:v0.3.3', 'v0.3.3', buildConfig({}))
-    assert.match(script, /PANEL_IMAGE=ghcr\.io\/pmat77\/game-server-hub:v0\.3\.3/)
-    assert.match(script, /GSH_GAME_DST_IMAGE=ghcr\.io\/pmat77\/game-server-hub:v0\.3\.3/)
-    assert.match(script, /GSH_STEAMCMD_IMAGE=ghcr\.io\/pmat77\/game-server-hub:v0\.3\.3/)
+    const script = buildUpdaterShellCommand('ghcr.io/pmat77/bubblesharkpanel:v0.3.3', 'v0.3.3', buildConfig({}))
+    assert.match(script, /PANEL_IMAGE=ghcr\.io\/pmat77\/bubblesharkpanel:v0\.3\.3/)
+    assert.match(script, /BSP_GAME_DST_IMAGE=ghcr\.io\/pmat77\/bubblesharkpanel:v0\.3\.3/)
+    assert.match(script, /BSP_STEAMCMD_IMAGE=ghcr\.io\/pmat77\/bubblesharkpanel:v0\.3\.3/)
+    assert.match(script, /BSP_RELEASE_VERSION=v0\.3\.3/)
+    assert.match(script, /GSH_GAME_DST_IMAGE=ghcr\.io\/pmat77\/bubblesharkpanel:v0\.3\.3/)
+    assert.match(script, /GSH_STEAMCMD_IMAGE=ghcr\.io\/pmat77\/bubblesharkpanel:v0\.3\.3/)
     assert.match(script, /GSH_RELEASE_VERSION=v0\.3\.3/)
     assert.match(script, /cp panel\.env "\$backup"/)
     assert.match(script, /up -d panel/)
@@ -377,8 +380,8 @@ describe('buildUpdaterShellCommand', () => {
 })
 
 describe('updater 容器镜像选择', () => {
-  const target = 'ghcr.io/pmat77/game-server-hub:v0.3.10'
-  const panel = 'ghcr.io/pmat77/game-server-hub:v0.3.9'
+  const target = 'ghcr.io/pmat77/bubblesharkpanel:v0.3.10'
+  const panel = 'ghcr.io/pmat77/bubblesharkpanel:v0.3.9'
 
   it('prefers the configured override, then the target image, then the panel image', () => {
     const candidates = buildUpdaterImageCandidates({
@@ -462,14 +465,14 @@ describe('updater 容器镜像选择', () => {
     )
     assert.equal(resolution.image, null)
     const message = buildUpdaterImageFailureMessage(resolution, 'v0.3.10', buildConfig({
-      stackDir: '/opt/game-server-hub',
+      stackDir: '/opt/bubblesharkpanel',
       runtimeMode: 'docker',
       composeFiles: ['docker-compose.yml', 'docker-compose.bind.yml'],
     }))
     assert.match(message, /无法准备面板更新容器/)
     assert.match(message, /up -d/)
     assert.match(message, /network unreachable/)
-    assert.match(message, /ghcr\.io\/pmat77\/game-server-hub:v0\.3\.10/)
+    assert.match(message, /ghcr\.io\/pmat77\/bubblesharkpanel:v0\.3\.10/)
   })
 })
 

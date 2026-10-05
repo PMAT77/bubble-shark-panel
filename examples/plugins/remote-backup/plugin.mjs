@@ -21,10 +21,10 @@ import path from 'node:path'
 import process from 'node:process'
 import { createReadStream } from 'node:fs'
 
-const pluginId = process.env.GSH_PLUGIN_ID ?? ''
-const baseUrl = process.env.GSH_CAPABILITY_URL ?? ''
-const token = process.env.GSH_PLUGIN_TOKEN ?? ''
-const pluginDir = process.env.GSH_PLUGIN_DIR ?? process.cwd()
+const pluginId = process.env.BSP_PLUGIN_ID ?? process.env.GSH_PLUGIN_ID ?? ''
+const baseUrl = process.env.BSP_CAPABILITY_URL ?? process.env.GSH_CAPABILITY_URL ?? ''
+const token = process.env.BSP_PLUGIN_TOKEN ?? process.env.GSH_PLUGIN_TOKEN ?? ''
+const pluginDir = process.env.BSP_PLUGIN_DIR ?? process.env.GSH_PLUGIN_DIR ?? process.cwd()
 const configPath = path.join(pluginDir, 'config.json')
 const statePath = path.join(pluginDir, 'state.json')
 
@@ -36,7 +36,7 @@ const DEFAULT_CONFIG = {
   // 上传目标：webdav | http-put | directory
   target: {
     kind: 'webdav',
-    // WebDAV 目录地址（kind=webdav 时使用），例如 https://dav.example.com/gsh-backups
+    // WebDAV 目录地址（kind=webdav 时使用），例如 https://dav.example.com/bsp-backups
     url: '',
     // http-put：每次上传 PUT 到这个地址（通常是对象存储的预签名 URL 模板），{name} 会替换为文件名
     putUrlTemplate: '',
@@ -87,7 +87,7 @@ function saveState(state) {
 async function callCapability(pathname, body = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-gsh-plugin-token': token },
+    headers: { 'content-type': 'application/json', 'x-bsp-plugin-token': token },
     body: JSON.stringify({ pluginId, ...body }),
   })
   let payload = null

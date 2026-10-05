@@ -29,18 +29,18 @@ import { setPluginEnabled } from './registry'
  * 又不需要在测试里搭 WebDAV 服务；WebDAV 与预签名 PUT 走的是同一段 htt p 上传代码。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-remote-backup-'))
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-remote-backup-'))
 const pluginsRoot = path.join(workDir, 'plugins')
 const auditRoot = path.join(workDir, 'plugin-audit')
 const backupsRoot = path.join(workDir, 'backups')
 const remoteDir = path.join(workDir, 'remote')
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../drizzle')
 
 process.env.DB_PATH = dbFilePath
-process.env.GSH_PLUGINS_ROOT = pluginsRoot
-process.env.GSH_PLUGIN_AUDIT_ROOT = auditRoot
-process.env.GSH_BACKUPS_ROOT = backupsRoot
+process.env.BSP_PLUGINS_ROOT = pluginsRoot
+process.env.BSP_PLUGIN_AUDIT_ROOT = auditRoot
+process.env.BSP_BACKUPS_ROOT = backupsRoot
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519')
 
@@ -57,7 +57,7 @@ function writeActiveLicense(): void {
   const signature = signWithKey(null, Buffer.from(canonicalizeLicensePayload(payload), 'utf8'), privateKey).toString('base64')
   const licensePath = path.join(path.dirname(dbFilePath), 'license.json')
   fs.writeFileSync(licensePath, `${JSON.stringify({ payload, signature }, null, 2)}\n`, 'utf8')
-  process.env.GSH_LICENSE_FILE = licensePath
+  process.env.BSP_LICENSE_FILE = licensePath
   clearLicenseCache()
 }
 
@@ -139,7 +139,7 @@ before(async () => {
     createdBy: 'test',
   })
 
-  process.env.GSH_LICENSE_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+  process.env.BSP_LICENSE_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString()
   writeActiveLicense()
 })
 

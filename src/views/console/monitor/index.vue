@@ -18,7 +18,7 @@ defineOptions({
 
 const route = useRoute()
 
-const MONITOR_POLL_STORAGE_KEY = 'gsh-monitor-poll-settings'
+const MONITOR_POLL_STORAGE_KEY = 'bsp-monitor-poll-settings'
 const DEFAULT_SYSTEM_POLL_MS = 10_000
 const DEFAULT_NETWORK_POLL_MS = 5_000
 const MIN_POLL_MS = 2_000

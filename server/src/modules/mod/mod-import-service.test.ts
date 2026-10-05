@@ -21,20 +21,20 @@ import { ensureDstUgcModLayout, resolveDstUgcModDir, resolveDstLegacyModDir } fr
 import { resolveLocalModContentVersion } from '../../infra/game-adapter/dst/mod-content-version'
 import { beginInstanceContentActivity, hasContentRecoveryFailure, withInstanceContentOperation } from '../../shared/instance-content/operation'
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-local-mod-test-'))
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-local-mod-test-'))
 const install = path.join(root, 'instance')
 const id = 'local-import-test'
 const owner = 'owner'
 const oldFetch = globalThis.fetch
 let fetchCount = 0
 before(async () => {
-  process.env.GSH_MOD_IMPORT_ROOT = path.join(root, 'uploads')
+  process.env.BSP_MOD_IMPORT_ROOT = path.join(root, 'uploads')
   fs.mkdirSync(path.join(install, 'klei-storage', 'DoNotStarveTogether', 'Cluster_1', 'Master'), { recursive: true })
   await initDatabase(path.join(root, 'db.sqlite'), path.resolve('server/drizzle'), { adminUsername: 'superadmin', adminPassword: '123456', seedDevelopmentUsers: false })
   await createGameInstance({ id, nodeId: 'local-node', name: 'Local import', gameCode: '343050', status: 'stopped', installPath: install })
   globalThis.fetch = (() => { fetchCount++; throw new Error('network forbidden') }) as typeof fetch
 })
-after(() => { globalThis.fetch = oldFetch; closeDatabase(); fs.rmSync(root, { recursive: true, force: true }); delete process.env.GSH_MOD_IMPORT_ROOT })
+after(() => { globalThis.fetch = oldFetch; closeDatabase(); fs.rmSync(root, { recursive: true, force: true }); delete process.env.BSP_MOD_IMPORT_ROOT })
 function zip(entries: Record<string, string>) { return Buffer.from(zipSync(Object.fromEntries(Object.entries(entries).map(([key, value]) => [key, strToU8(value)])))) }
 const content = (version: string) => ({ 'modinfo.lua': `name = "Offline Mod"\nversion = "${version}"\n`, 'modmain.lua': `-- ${version}` })
 const inspect = (data: Buffer, name = '123.zip') => inspectLocalMod(Readable.from([data]), id, owner, name)
@@ -49,14 +49,14 @@ it('authenticates before creating upload directories', async () => {
   const app = Fastify()
   registerAuthModule(app)
   registerModImportRoutes(app, async () => null)
-  const response = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/inspect`, headers: { 'content-type': 'application/x-gsh-mod-archive' }, payload: zip(content('1')) })
+  const response = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/inspect`, headers: { 'content-type': 'application/x-bsp-mod-archive' }, payload: zip(content('1')) })
   assert.equal(response.statusCode, 403)
   assert.equal(fs.existsSync(resolveModImportRoot()), false)
   const admin = await findUserByAccount('superadmin')
   await addUserInstanceGrants(admin!.id, [id], null)
   const login = await app.inject({ method: 'POST', url: '/app/account/login', payload: { account: 'superadmin', password: '123456' } })
   const token = JSON.parse(login.body).data.token
-  const authorized = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/inspect?fileName=777.zip`, headers: { token, 'content-type': 'application/x-gsh-mod-archive' }, payload: zip(content('1')) })
+  const authorized = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/inspect?fileName=777.zip`, headers: { token, 'content-type': 'application/x-bsp-mod-archive' }, payload: zip(content('1')) })
   assert.equal(JSON.parse(authorized.body).status, 1, authorized.body)
   const preview = JSON.parse(authorized.body).data
   assert.equal(preview.workshopId, '777')
@@ -145,7 +145,7 @@ it('rolls files, Lua and DB back when configuration write fails after replacemen
   finally { fs.writeFileSync = write }
   assert.deepEqual((await listInstanceMods(id)).find(mod => mod.workshopId === '123'), before)
   assert.equal(fs.readFileSync(path.join(resolveDstLegacyModDir(install, '123'), 'modmain.lua'), 'utf8'), '-- 2')
-  assert.equal(fs.existsSync(path.join(install, '.gsh-content-transaction')), false)
+  assert.equal(fs.existsSync(path.join(install, '.bsp-content-transaction')), false)
 })
 
 it('restores all files and the old source record when the short DB commit fails', async () => {
@@ -187,14 +187,14 @@ it('installs 30 Mods offline, preserves unrelated records and applies limits to 
   assert.equal(result.installedMods[29]!.loadOrder - result.installedMods[0]!.loadOrder, 29)
   for (const workshopId of ids) assert.equal(fs.readFileSync(path.join(resolveDstSteamWorkshopModDir(install, workshopId), 'modmain.lua'), 'utf8'), '-- batch')
   assert.equal(fetchCount, 0)
-  const limit = process.env.GSH_MOD_IMPORT_MAX_FILES
-  process.env.GSH_MOD_IMPORT_MAX_FILES = '3'
+  const limit = process.env.BSP_MOD_IMPORT_MAX_FILES
+  process.env.BSP_MOD_IMPORT_MAX_FILES = '3'
   try { await assert.rejects(inspect(batchZip(['1100', '1101'])), /条目数超过上限/) }
-  finally { if (limit === undefined) delete process.env.GSH_MOD_IMPORT_MAX_FILES; else process.env.GSH_MOD_IMPORT_MAX_FILES = limit }
-  const byteLimit = process.env.GSH_MOD_IMPORT_MAX_EXTRACTED_BYTES
-  process.env.GSH_MOD_IMPORT_MAX_EXTRACTED_BYTES = '60'
+  finally { if (limit === undefined) delete process.env.BSP_MOD_IMPORT_MAX_FILES; else process.env.BSP_MOD_IMPORT_MAX_FILES = limit }
+  const byteLimit = process.env.BSP_MOD_IMPORT_MAX_EXTRACTED_BYTES
+  process.env.BSP_MOD_IMPORT_MAX_EXTRACTED_BYTES = '60'
   try { await assert.rejects(inspect(batchZip(['1100', '1101'])), /大小超过上限/) }
-  finally { if (byteLimit === undefined) delete process.env.GSH_MOD_IMPORT_MAX_EXTRACTED_BYTES; else process.env.GSH_MOD_IMPORT_MAX_EXTRACTED_BYTES = byteLimit }
+  finally { if (byteLimit === undefined) delete process.env.BSP_MOD_IMPORT_MAX_EXTRACTED_BYTES; else process.env.BSP_MOD_IMPORT_MAX_EXTRACTED_BYTES = byteLimit }
 })
 
 it('validates the entire batch before writes and requires one explicit overwrite confirmation', async () => {
@@ -313,7 +313,7 @@ it('batch routes check dependencies after all items and retain the legacy single
       'workshop-1501/modinfo.lua': 'name="Dependency"',
     })
     const inspected = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/inspect?fileName=deps.zip`,
-      headers: { token, 'content-type': 'application/x-gsh-mod-archive' }, payload: archive })
+      headers: { token, 'content-type': 'application/x-bsp-mod-archive' }, payload: archive })
     const preview = JSON.parse(inspected.body).data as ModImportInspection
     const committed = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/commit`, headers: { token }, payload: batchInput(preview) })
     const body = JSON.parse(committed.body)
@@ -322,7 +322,7 @@ it('batch routes check dependencies after all items and retain the legacy single
     assert.deepEqual(body.data.summary, { installed: 2, failed: 0, remaining: 0 })
     assert.equal(body.data.riskTip, null, 'dependency from the same ZIP is already installed')
     const legacyInspected = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/inspect?fileName=1502.zip`,
-      headers: { token, 'content-type': 'application/x-gsh-mod-archive' }, payload: zip(content('legacy')) })
+      headers: { token, 'content-type': 'application/x-bsp-mod-archive' }, payload: zip(content('legacy')) })
     const legacyPreview = JSON.parse(legacyInspected.body).data as ModImportInspection
     const legacy = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/commit`, headers: { token },
       payload: { importId: legacyPreview.importId, workshopId: '1502', overwrite: false } })
@@ -349,7 +349,7 @@ it('rejects read-only and ungranted batch import requests without changing files
       const token = JSON.parse(login.body).data.token
       const committed = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/commit`, headers: { token }, payload: batchInput(preview) })
       assert.equal(JSON.parse(committed.body).code, ErrorCode.FORBIDDEN)
-      const uploaded = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/inspect`, headers: { token, 'content-type': 'application/x-gsh-mod-archive' }, payload: batchZip(['1600', '1601']) })
+      const uploaded = await app.inject({ method: 'POST', url: `/app/instances/${id}/mods/import/inspect`, headers: { token, 'content-type': 'application/x-bsp-mod-archive' }, payload: batchZip(['1600', '1601']) })
       assert.equal(uploaded.statusCode, 403)
     }
     assert.deepEqual(await listInstanceMods(id), before)

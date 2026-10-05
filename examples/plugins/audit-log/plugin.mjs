@@ -18,10 +18,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 
-const pluginId = process.env.GSH_PLUGIN_ID ?? ''
-const baseUrl = process.env.GSH_CAPABILITY_URL ?? ''
-const token = process.env.GSH_PLUGIN_TOKEN ?? ''
-const pluginDir = process.env.GSH_PLUGIN_DIR ?? process.cwd()
+const pluginId = process.env.BSP_PLUGIN_ID ?? process.env.GSH_PLUGIN_ID ?? ''
+const baseUrl = process.env.BSP_CAPABILITY_URL ?? process.env.GSH_CAPABILITY_URL ?? ''
+const token = process.env.BSP_PLUGIN_TOKEN ?? process.env.GSH_PLUGIN_TOKEN ?? ''
+const pluginDir = process.env.BSP_PLUGIN_DIR ?? process.env.GSH_PLUGIN_DIR ?? process.cwd()
 const configPath = path.join(pluginDir, 'config.json')
 const statePath = path.join(pluginDir, 'state.json')
 const archiveDir = path.join(pluginDir, 'archive')
@@ -85,7 +85,7 @@ async function callCapability(pathname, body = {}) {
   try {
     const response = await fetch(`${baseUrl}${pathname}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-gsh-plugin-token': token },
+      headers: { 'content-type': 'application/json', 'x-bsp-plugin-token': token },
       body: JSON.stringify({ pluginId, ...body }),
     })
     let payload = null

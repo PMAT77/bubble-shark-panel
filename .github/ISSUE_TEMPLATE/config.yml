@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 提问与讨论
-    url: https://github.com/PMAT77/game-serve-hub/issues/new?template=question.yml
+    url: https://github.com/PMAT77/bubble-shark-panel/issues/new?template=question.yml
     about: 使用问题、方案讨论（非 Bug / 非功能请求）
   - name: 安全漏洞报告
-    url: https://github.com/PMAT77/game-serve-hub/security/advisories/new
+    url: https://github.com/PMAT77/bubble-shark-panel/security/advisories/new
     about: 请勿在公开 Issue 讨论可利用漏洞

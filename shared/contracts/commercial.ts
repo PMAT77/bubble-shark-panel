@@ -5,7 +5,7 @@ import { licenseStateSchema } from './license'
  * 商业支持与 Pro 计划（只读）。
  *
  * 为什么需要这个接口：面板的使用者（服主、托管商）看不到仓库，也无从判断
- * 「panel.env 里的 GSH_EDITION」是什么意思、能不能买到 Pro、出了问题找谁。
+ * 「panel.env 里的 BSP_EDITION」是什么意思、能不能买到 Pro、出了问题找谁。
  * 这里把三件事在一次请求里说清楚，且**全部只读**：
  *
  * 1. 当前版本与版本形态（community / pro）；

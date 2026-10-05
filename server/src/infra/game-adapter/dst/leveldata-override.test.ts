@@ -15,7 +15,7 @@ import { parseWorldgenOverride } from './worldgen-override'
 const tempDirs: string[] = []
 
 function makeTempInstall(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-leveldata-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-leveldata-'))
   tempDirs.push(dir)
   return dir
 }

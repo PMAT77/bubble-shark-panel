@@ -21,21 +21,21 @@ function buildSpec(): ShardContainerSpec {
     instanceId: 'instance-1',
     shard: 'master',
     image: '',
-    name: 'gsh-instance-1-master',
-    hostInstallPath: '/srv/gsh/instance-1',
+    name: 'bsp-instance-1-master',
+    hostInstallPath: '/srv/bsp/instance-1',
     cmd: [
-      '/srv/gsh/instance-1/bin64/dontstarve_dedicated_server_nullrenderer_x64',
+      '/srv/bsp/instance-1/bin64/dontstarve_dedicated_server_nullrenderer_x64',
       '-cluster',
       'Cluster 1',
     ],
-    workingDir: '/srv/gsh/instance-1/bin64',
+    workingDir: '/srv/bsp/instance-1/bin64',
     env: {
-      LD_LIBRARY_PATH: '/srv/gsh/instance-1/bin64/lib64',
+      LD_LIBRARY_PATH: '/srv/bsp/instance-1/bin64/lib64',
     },
   }
 }
 
-const RESOURCE_ENV_KEYS = ['GSH_DST_CONTAINER_MEMORY_MB', 'GSH_DST_CONTAINER_CPU_QUOTA'] as const
+const RESOURCE_ENV_KEYS = ['BSP_DST_CONTAINER_MEMORY_MB', 'BSP_DST_CONTAINER_CPU_QUOTA'] as const
 const savedEnv = new Map<string, string | undefined>()
 
 afterEach(() => {
@@ -67,27 +67,27 @@ function clearResourceEnv() {
   }
 }
 
-const LAUNCHER = '/srv/gsh/runtime/launch.sh'
-const CONSOLE_LOG = '/srv/gsh/runtime/console-logs/shard.log'
+const LAUNCHER = '/srv/bsp/runtime/launch.sh'
+const CONSOLE_LOG = '/srv/bsp/runtime/console-logs/shard.log'
 
 describe('NativeSystemdRuntime serialization', () => {
   it('quotes launcher arguments and feeds stdin from a FIFO', () => {
-    const script = buildNativeLauncherScript(buildSpec(), '/srv/gsh/runtime/stdin.fifo')
+    const script = buildNativeLauncherScript(buildSpec(), '/srv/bsp/runtime/stdin.fifo')
     assert.match(script, /mkfifo -m 600/)
     assert.match(script, /'Cluster 1'/)
     assert.match(script, /<&3/)
   })
 
   /**
-   * 回归：原先分片输出走 journald，而面板以 gsh 用户跑在系统服务里、不在 systemd-journal
+   * 回归：原先分片输出走 journald，而面板以 bsp 用户跑在系统服务里、不在 systemd-journal
    * 组内，线上必然报「No journal files were opened due to insufficient permissions」，
    * 控制台一条游戏输出都看不到，排查只能靠 SSH。改为追加到面板自己可读的文件。
    */
   it('appends stdout and stderr to a file the panel can always read', () => {
     const unit = buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG)
     assert.match(unit, /Restart=on-failure/)
-    assert.match(unit, /StandardOutput=append:\/srv\/gsh\/runtime\/console-logs\/shard\.log/)
-    assert.match(unit, /StandardError=append:\/srv\/gsh\/runtime\/console-logs\/shard\.log/)
+    assert.match(unit, /StandardOutput=append:\/srv\/bsp\/runtime\/console-logs\/shard\.log/)
+    assert.match(unit, /StandardError=append:\/srv\/bsp\/runtime\/console-logs\/shard\.log/)
     assert.doesNotMatch(unit, /StandardOutput=journal/)
     assert.match(unit, /Environment="LD_LIBRARY_PATH=/)
     assert.match(unit, /WantedBy=default\.target/)
@@ -99,7 +99,7 @@ describe('NativeSystemdRuntime serialization', () => {
    * 让加载尖峰走回收/换页而不是被内核直接杀掉。
    */
   it('bounds the restart storm and softens the memory limit', () => {
-    setResourceEnv('GSH_DST_CONTAINER_MEMORY_MB', '2048')
+    setResourceEnv('BSP_DST_CONTAINER_MEMORY_MB', '2048')
     const unit = buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG)
     assert.match(unit, /StartLimitBurst=3/)
     assert.match(unit, /StartLimitIntervalSec=600/)
@@ -117,8 +117,8 @@ describe('NativeSystemdRuntime serialization', () => {
   })
 
   it('wires DST resource limits from the environment into the unit', () => {
-    setResourceEnv('GSH_DST_CONTAINER_MEMORY_MB', '1536')
-    setResourceEnv('GSH_DST_CONTAINER_CPU_QUOTA', '1.5')
+    setResourceEnv('BSP_DST_CONTAINER_MEMORY_MB', '1536')
+    setResourceEnv('BSP_DST_CONTAINER_CPU_QUOTA', '1.5')
     const unit = buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG)
     assert.match(unit, /MemoryMax=1610612736/)
     assert.match(unit, /CPUQuota=150\.00%/)
@@ -137,7 +137,7 @@ describe('NativeSystemdRuntime serialization', () => {
   // "path is not absolute" → `has a bad unit file setting`，Native 下实例一个都起不来。
   it('writes WorkingDirectory without quotes', () => {
     const unit = buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG)
-    assert.match(unit, /^WorkingDirectory=\/srv\/gsh\/instance-1\/bin64$/m)
+    assert.match(unit, /^WorkingDirectory=\/srv\/bsp\/instance-1\/bin64$/m)
     assert.doesNotMatch(unit, /WorkingDirectory="/)
   })
 
@@ -145,17 +145,17 @@ describe('NativeSystemdRuntime serialization', () => {
   // systemctl 只回一句 "has a bad unit file setting"，现场无法定位。
   it('escapes percent signs in the values systemd expands', () => {
     const spec = buildSpec()
-    spec.workingDir = '/srv/gsh/room%1/bin64'
-    spec.cmd = ['/srv/gsh/room%1/bin64/dontstarve_dedicated_server_nullrenderer_x64', '-cluster', 'Cluster_1']
-    const unit = buildNativeSystemdUnit(spec, '/srv/gsh/room%1/launch.sh', CONSOLE_LOG)
-    assert.match(unit, /^WorkingDirectory=\/srv\/gsh\/room%%1\/bin64$/m)
-    assert.match(unit, /ExecStart="\/srv\/gsh\/room%%1\/launch\.sh"/)
+    spec.workingDir = '/srv/bsp/room%1/bin64'
+    spec.cmd = ['/srv/bsp/room%1/bin64/dontstarve_dedicated_server_nullrenderer_x64', '-cluster', 'Cluster_1']
+    const unit = buildNativeSystemdUnit(spec, '/srv/bsp/room%1/launch.sh', CONSOLE_LOG)
+    assert.match(unit, /^WorkingDirectory=\/srv\/bsp\/room%%1\/bin64$/m)
+    assert.match(unit, /ExecStart="\/srv\/bsp\/room%%1\/launch\.sh"/)
     assert.doesNotMatch(unit, /room%1/)
   })
 
   it('clamps out-of-range resource limits instead of writing an invalid unit', () => {
-    setResourceEnv('GSH_DST_CONTAINER_MEMORY_MB', '1536')
-    setResourceEnv('GSH_DST_CONTAINER_CPU_QUOTA', '200')
+    setResourceEnv('BSP_DST_CONTAINER_MEMORY_MB', '1536')
+    setResourceEnv('BSP_DST_CONTAINER_CPU_QUOTA', '200')
     const unit = buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG)
     assert.match(unit, /MemoryMax=1610612736/)
     assert.match(unit, /CPUQuota=10000\.00%/)
@@ -168,19 +168,19 @@ describe('NativeSystemdRuntime serialization', () => {
 
   it('collects the evidence systemd hides behind a bad unit file setting', () => {
     const diagnostic = formatUnitLoadDiagnostic({
-      unitPath: '/srv/gsh/unit.service',
+      unitPath: '/srv/bsp/unit.service',
       unitContent: '[Service]\nWorkingDirectory="x"\n',
-      verifyOutput: '/srv/gsh/unit.service:2: Invalid setting\n',
+      verifyOutput: '/srv/bsp/unit.service:2: Invalid setting\n',
       statusOutput: 'Loaded: bad-setting\n',
     })
     assert.match(diagnostic, /systemd-analyze verify：/)
     assert.match(diagnostic, /Invalid setting/)
-    assert.match(diagnostic, /unit 文件内容（\/srv\/gsh\/unit\.service）/)
+    assert.match(diagnostic, /unit 文件内容（\/srv\/bsp\/unit\.service）/)
   })
 
   it('truncates oversized diagnostics', () => {
     const diagnostic = formatUnitLoadDiagnostic({
-      unitPath: '/srv/gsh/unit.service',
+      unitPath: '/srv/bsp/unit.service',
       unitContent: 'x'.repeat(5000),
     })
     assert.match(diagnostic, /已截断/)
@@ -326,7 +326,7 @@ describe('readFileTailLines', () => {
   })
 
   function writeLog(content: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-log-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-log-'))
     tempDirs.push(dir)
     const filePath = path.join(dir, 'shard.log')
     fs.writeFileSync(filePath, content)
@@ -339,7 +339,7 @@ describe('readFileTailLines', () => {
   })
 
   it('文件不存在时返回空数组而不是抛错', () => {
-    assert.deepEqual(readFileTailLines('/nonexistent/gsh/shard.log', 10), [])
+    assert.deepEqual(readFileTailLines('/nonexistent/bsp/shard.log', 10), [])
   })
 
   it('空文件返回空数组', () => {
@@ -362,7 +362,7 @@ describe('rotateConsoleLogFile', () => {
   })
 
   function writeLog(content: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-rotate-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-rotate-'))
     tempDirs.push(dir)
     const filePath = path.join(dir, 'shard.log')
     fs.writeFileSync(filePath, content)
@@ -380,7 +380,7 @@ describe('rotateConsoleLogFile', () => {
   })
 
   it('文件不存在时不抛错', () => {
-    rotateConsoleLogFile(path.join(os.tmpdir(), `gsh-missing-${Date.now()}`, 'shard.log'))
+    rotateConsoleLogFile(path.join(os.tmpdir(), `bsp-missing-${Date.now()}`, 'shard.log'))
   })
 
   it('空文件不产生 .prev.log', () => {
@@ -432,7 +432,7 @@ function parseUnitSections(unit: string): Record<string, Record<string, string>>
  */
 describe('生成的 unit 指令落在正确分区', () => {
   it('资源与重启限制都在 systemd 要求的 section 里', () => {
-    setResourceEnv('GSH_DST_CONTAINER_MEMORY_MB', '2048')
+    setResourceEnv('BSP_DST_CONTAINER_MEMORY_MB', '2048')
     const sections = parseUnitSections(buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG))
     for (const key of ['Description', 'StartLimitIntervalSec', 'StartLimitBurst']) {
       assert.ok(key in (sections.Unit ?? {}), `${key} 应写在 [Unit]`)
@@ -488,7 +488,7 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 8000): Promise<vo
 /**
  * 分片日志是面板控制台的唯一来源，也是「不用再 SSH 才能看到游戏输出」的全部依赖。
  *
- * 线上原先走 `journalctl --user-unit`，而面板以 gsh 用户跑在系统服务里、不在
+ * 线上原先走 `journalctl --user-unit`，而面板以 bsp 用户跑在系统服务里、不在
  * systemd-journal 组内，必然报权限不足——控制台一条游戏输出都没有。改成直接读
  * systemd 追加的日志文件后，这段跟随逻辑就成了关键路径，必须有测试兜住。
  */
@@ -502,14 +502,14 @@ describe('NativeSystemdRuntime.logs 读取分片日志文件', () => {
   })
 
   function setup() {
-    const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-native-logs-'))
+    const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-native-logs-'))
     tempDirs.push(runtimeDir)
     const runtime = new NativeSystemdRuntime({
       runtimeDir,
       unitDir: path.join(runtimeDir, 'units'),
     })
-    const ref: ContainerRef = { id: 'gsh-test-master.service', name: 'gsh-test-master' }
-    const logPath = path.join(runtimeDir, 'console-logs', 'gsh-test-master.log')
+    const ref: ContainerRef = { id: 'bsp-test-master.service', name: 'bsp-test-master' }
+    const logPath = path.join(runtimeDir, 'console-logs', 'bsp-test-master.log')
     fs.mkdirSync(path.dirname(logPath), { recursive: true })
     return { runtime, ref, logPath }
   }

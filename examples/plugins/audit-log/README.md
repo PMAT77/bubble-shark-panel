@@ -26,7 +26,7 @@
 ## 安装与启用
 
 ```bash
-cp -r examples/plugins/audit-log /var/lib/game-server-hub/plugins/
+cp -r examples/plugins/audit-log /var/lib/bubblesharkpanel/plugins/
 # 放入 plugin.signature.json（发布方提供），然后在左侧菜单「插件」启用
 ```
 
@@ -84,6 +84,6 @@ cp -r examples/plugins/audit-log /var/lib/game-server-hub/plugins/
 
 ## 面向开发者
 
-- 能力调用：`POST /capabilities/operations`，body `{ pluginId, account?, limit? }`，请求头 `x-gsh-plugin-token`；
+- 能力调用：`POST /capabilities/operations`，body `{ pluginId, account?, limit? }`，请求头 `x-bsp-plugin-token`；
 - 归档是**纯逻辑**（`runOnce(config, state)`），因此测试直接 import 它逐个覆盖格式与远端推送，而进程生命周期由宿主测试覆盖；
 - 网络异常被收敛成结构化错误（`status: 0`）而不是抛出：插件不该因为一次连不上就变成"崩溃"记录。

@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import fs from 'node:fs'
 import DockerClient from 'dockerode'
 import { resolveDockerConnectOptions } from '../docker-connect'
@@ -166,7 +167,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
 
   const appUpdateTimeoutMs = resolveSteamcmdAppUpdateTimeoutMs()
   pushLine(
-    `SteamCMD app_update 单次超时上限: ${formatSteamcmdTimeoutForLog(appUpdateTimeoutMs)}（GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS 可调；大体积游戏慢速下载需调高）`,
+    `SteamCMD app_update 单次超时上限: ${formatSteamcmdTimeoutForLog(appUpdateTimeoutMs)}（BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS 可调；大体积游戏慢速下载需调高）`,
   )
 
   const instanceId = input.cancelKey?.trim()
@@ -225,7 +226,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
         pushLine(line)
       }
       if (oomKilled) {
-        pushLine('SteamCMD 容器因内存硬上限 OOM 被终止（exit 137）；可在 panel.env 酌情调高 GSH_STEAMCMD_CONTAINER_MEMORY_MB，并避免与运行中实例同时安装')
+        pushLine('SteamCMD 容器因内存硬上限 OOM 被终止（exit 137）；可在 panel.env 酌情调高 BSP_STEAMCMD_CONTAINER_MEMORY_MB，并避免与运行中实例同时安装')
       }
     }
     catch {
@@ -367,10 +368,10 @@ function resolveSteamcmdMirrorsRaw(): string {
     return imageMirrors.join(',')
   }
   // 旧变量保留兼容
-  return (process.env.GSH_STEAMCMD_IMAGE_MIRRORS || '').trim()
+  return (readBrandEnv('BSP_STEAMCMD_IMAGE_MIRRORS') || '').trim()
 }
 
-/** 面板拉取目标（完整保留 panel.env 中的 GSH_STEAMCMD_IMAGE） */
+/** 面板拉取目标（完整保留 panel.env 中的 BSP_STEAMCMD_IMAGE） */
 export function resolvePanelSteamcmdPullRef(configuredImage?: string): string {
   const configured = (configuredImage ?? getServerContainerConfig().steamcmdImage).trim()
   return configured || `${OFFICIAL_UNIFIED_IMAGE_REPOSITORY}:latest`
@@ -378,7 +379,7 @@ export function resolvePanelSteamcmdPullRef(configuredImage?: string): string {
 
 /**
  * SteamCMD 拉取候选：
- * 1) 若配置 GSH_IMAGE_MIRRORS（旧 GSH_STEAMCMD_IMAGE_MIRRORS 保留兼容），按顺序优先尝试候选 registry；
+ * 1) 若配置 BSP_IMAGE_MIRRORS（旧 BSP_STEAMCMD_IMAGE_MIRRORS 保留兼容），按顺序优先尝试候选 registry；
  * 2) 最后尝试完整的已配置镜像引用。
  */
 export function buildSteamcmdImageCandidates(configuredImage?: string): string[] {

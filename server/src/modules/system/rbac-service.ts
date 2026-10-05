@@ -92,7 +92,7 @@ function isAdminAccountName(account: string): boolean {
  * 2. **被公开入口顶掉**——游客账号是共享的，任何访客都能用它的身份进来；
  *    如果一个运维账号被误配成游客角色，它就等于多了一个谁都能用的入口。
  *
- * 允许的目标是配置里的 `GSH_GUEST_LOGIN_ACCOUNT`（默认 `guest`），
+ * 允许的目标是配置里的 `BSP_GUEST_LOGIN_ACCOUNT`（默认 `guest`），
  * 且**与开关是否开启无关**：`SECURITY.md` 里"手工建一个只读账号挂游客角色"是既有用法，
  * 它挂的也是这个名字。
  */
@@ -103,7 +103,7 @@ function assertGuestRoleAssignable(account: string, roleKind: string | null | un
   if (isConfiguredGuestAccountName(account)) {
     return null
   }
-  return '内置游客角色只能分配给面板的游客账号（默认 guest，可用 GSH_GUEST_LOGIN_ACCOUNT 指定）。'
+  return '内置游客角色只能分配给面板的游客账号（默认 guest，可用 BSP_GUEST_LOGIN_ACCOUNT 指定）。'
     + '给运维账号分配只读能力请另建一个只读角色，否则这个账号会失去全部操作能力'
 }
 
@@ -389,7 +389,7 @@ export async function resetMemberPassword(
    * 攻击者第一件事就是给自己留一个能重置所有人密码的后门。所以它的密码只能由本人
    * 在「个人设置 → 修改密码」里改（要验旧密码）。忘了密码也不是死路：服务器上可以跑
    * `server/scripts/reset-admin-password.ts`，或用 `ADMIN_PASSWORD` 配合
-   * `GSH_SYNC_ADMIN_PASSWORD_FROM_ENV` 同步——这两条都要求能登录服务器本身。
+   * `BSP_SYNC_ADMIN_PASSWORD_FROM_ENV` 同步——这两条都要求能登录服务器本身。
    */
   if (isAdminAccountName(member.account)) {
     return { ok: false, message: '超级管理员账号的密码只能由本人在「个人设置 → 修改密码」里改' }

@@ -12,9 +12,9 @@ import {
 } from './steam-http.ts'
 
 const PROXY_KEYS = [
-  'GSH_STEAM_HTTPS_PROXY',
-  'GSH_STEAM_HTTP_PROXY',
-  'GSH_STEAM_NO_PROXY',
+  'BSP_STEAM_HTTPS_PROXY',
+  'BSP_STEAM_HTTP_PROXY',
+  'BSP_STEAM_NO_PROXY',
   'HTTPS_PROXY',
   'https_proxy',
   'HTTP_PROXY',
@@ -53,11 +53,11 @@ describe('resolveSteamProxyConfig', () => {
 
   it('prefers the project-specific variables over the generic ones', () => {
     const config = resolveSteamProxyConfig({
-      GSH_STEAM_HTTPS_PROXY: 'http://panel-proxy:7890',
+      BSP_STEAM_HTTPS_PROXY: 'http://panel-proxy:7890',
       HTTPS_PROXY: 'http://generic-proxy:8080',
     })
     assert.ok(config)
-    assert.equal(config.source, 'GSH_STEAM_HTTPS_PROXY')
+    assert.equal(config.source, 'BSP_STEAM_HTTPS_PROXY')
     assert.equal(new URL(config.url).host, 'panel-proxy:7890')
   })
 
@@ -68,22 +68,22 @@ describe('resolveSteamProxyConfig', () => {
   })
 
   it('accepts a bare host:port and assumes http', () => {
-    const config = resolveSteamProxyConfig({ GSH_STEAM_HTTPS_PROXY: '127.0.0.1:7890' })
+    const config = resolveSteamProxyConfig({ BSP_STEAM_HTTPS_PROXY: '127.0.0.1:7890' })
     assert.ok(config)
     assert.equal(config.url, 'http://127.0.0.1:7890/')
   })
 
   it('skips an unusable value and keeps looking', () => {
     const config = resolveSteamProxyConfig({
-      GSH_STEAM_HTTPS_PROXY: 'socks5://127.0.0.1:1080',
-      GSH_STEAM_HTTP_PROXY: 'http://fallback:7890',
+      BSP_STEAM_HTTPS_PROXY: 'socks5://127.0.0.1:1080',
+      BSP_STEAM_HTTP_PROXY: 'http://fallback:7890',
     })
     assert.ok(config)
-    assert.equal(config.source, 'GSH_STEAM_HTTP_PROXY')
+    assert.equal(config.source, 'BSP_STEAM_HTTP_PROXY')
   })
 
   it('always bypasses loopback and the docker host alias', () => {
-    const config = resolveSteamProxyConfig({ GSH_STEAM_HTTPS_PROXY: 'http://proxy:7890' })
+    const config = resolveSteamProxyConfig({ BSP_STEAM_HTTPS_PROXY: 'http://proxy:7890' })
     assert.ok(config)
     assert.ok(config.bypass.includes('127.0.0.1'))
     assert.ok(config.bypass.includes('localhost'))
@@ -92,8 +92,8 @@ describe('resolveSteamProxyConfig', () => {
 
   it('merges NO_PROXY entries and strips ports and wildcards', () => {
     const config = resolveSteamProxyConfig({
-      GSH_STEAM_HTTPS_PROXY: 'http://proxy:7890',
-      GSH_STEAM_NO_PROXY: '*.internal.example, other.example:8080 ,,',
+      BSP_STEAM_HTTPS_PROXY: 'http://proxy:7890',
+      BSP_STEAM_NO_PROXY: '*.internal.example, other.example:8080 ,,',
     })
     assert.ok(config)
     assert.ok(config.bypass.includes('internal.example'))
@@ -103,7 +103,7 @@ describe('resolveSteamProxyConfig', () => {
 
 describe('describeSteamProxy', () => {
   it('never leaks credentials', () => {
-    const config = resolveSteamProxyConfig({ GSH_STEAM_HTTPS_PROXY: 'http://user:secret@proxy:7890' })
+    const config = resolveSteamProxyConfig({ BSP_STEAM_HTTPS_PROXY: 'http://user:secret@proxy:7890' })
     const described = describeSteamProxy(config)
     assert.equal(described.enabled, true)
     assert.equal(described.host, 'proxy:7890')

@@ -142,7 +142,7 @@ export function formatSteamcmdAppUpdateFailureMessage(input: {
       `SteamCMD 安装 ${input.appId} 失败（Missing file permissions）。`,
       '通常为 Docker 卷挂载或安装目录权限问题：',
       '请检查 force_install_dir 是否可写、panel 是否正确解析 instances 卷挂载、',
-      '必要时在 panel.env 设置 GSH_STEAMCMD_RUN_USER=0:0 或 GSH_STEAMCMD_BIND_OPTS=rw,z。',
+      '必要时在 panel.env 设置 BSP_STEAMCMD_RUN_USER=0:0 或 BSP_STEAMCMD_BIND_OPTS=rw,z。',
       `SteamCMD 输出：${failureSnippet}`,
     ].join('')
   }
@@ -150,10 +150,10 @@ export function formatSteamcmdAppUpdateFailureMessage(input: {
   if (kind === 'timeout') {
     return [
       `SteamCMD 安装 ${input.appId} 失败（下载超时）。`,
-      '面板在单次 app_update 超过 GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS（默认 60 分钟）后终止了任务；',
+      '面板在单次 app_update 超过 BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS（默认 60 分钟）后终止了任务；',
       '已下载内容保留在 steamapps/downloading，重新安装会断点续传（共享内存不足与本次失败无关）。',
-      '建议：在 panel.env 调大 GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS（毫秒，例如 7200000），',
-      '并设置 GSH_STEAMCMD_DOWNLOAD_REGION=cn 提升下载速度。',
+      '建议：在 panel.env 调大 BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS（毫秒，例如 7200000），',
+      '并设置 BSP_STEAMCMD_DOWNLOAD_REGION=cn 提升下载速度。',
       `SteamCMD 输出：${failureSnippet}`,
     ].join('')
   }
@@ -162,7 +162,7 @@ export function formatSteamcmdAppUpdateFailureMessage(input: {
     return [
       `SteamCMD 安装 ${input.appId} 失败（网络或 Steam 服务不稳定）。`,
       '可能原因：访问 Steam CDN/API 超时、连续安装触发限速、Docker 出网抖动，或 Steam 返回瞬时错误（如 Missing configuration）。',
-      '建议：在 panel.env 设置 GSH_STEAMCMD_DOWNLOAD_REGION=cn；必要时配置 GSH_STEAMCMD_HTTPS_PROXY；',
+      '建议：在 panel.env 设置 BSP_STEAMCMD_DOWNLOAD_REGION=cn；必要时配置 BSP_STEAMCMD_HTTPS_PROXY；',
       '等待数分钟后点击「更新服务端」重试；在系统设置查看 SteamCMD 诊断；避免 dev:compose 与 dev:server 同时运行。',
       `SteamCMD 输出：${failureSnippet}`,
     ].join('')

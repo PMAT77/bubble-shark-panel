@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-process.env.GSH_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
+process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
 
 const { isSteamcmdAppUpdateQueued, withSteamcmdAppUpdateLock } = await import('./steamcmd-app-update-queue.ts')
 

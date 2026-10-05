@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../shared/brand-env'
 /**
  * M1 模块 04（Shard）手工回归脚本 — 对应 docs/M0-M1-REGRESSION.md §M1 Shard S1–S7
  * 用法: tsx server/scripts/m1-shard-regression.ts
@@ -9,7 +10,7 @@ const ACCOUNT = process.env.REGRESSION_ACCOUNT ?? 'superadmin'
 const PASSWORD = process.env.REGRESSION_PASSWORD ?? '123456'
 const INSTANCE_NAME = process.env.REGRESSION_INSTANCE_NAME ?? 'reg-m1-shard'
 const INSTANCE_ID_OVERRIDE = process.env.REGRESSION_INSTANCE_ID?.trim() ?? ''
-const PANEL_CONTAINER = process.env.GSH_PANEL_CONTAINER_NAME ?? 'game-server-hub-panel'
+const PANEL_CONTAINER = readBrandEnv('BSP_PANEL_CONTAINER_NAME') ?? 'bubblesharkpanel-panel'
 
 interface CaseResult {
   id: string
@@ -93,7 +94,7 @@ function dockerExec(cmd: string): string {
 
 function dockerPs(instanceId: string): Array<{ name: string, status: string }> {
   const out = execSync(
-    `docker ps -a --filter "name=gsh-${instanceId}" --format "{{.Names}}|{{.Status}}"`,
+    `docker ps -a --filter "name=bsp-${instanceId}" --format "{{.Names}}|{{.Status}}"`,
     { encoding: 'utf8' },
   ).trim()
   if (!out) {
@@ -106,7 +107,7 @@ function dockerPs(instanceId: string): Array<{ name: string, status: string }> {
 }
 
 function clusterRoot(instanceId: string): string {
-  return `/var/lib/game-server-hub/instances/${instanceId}/klei-storage/DoNotStarveTogether/Cluster_1`
+  return `/var/lib/bubblesharkpanel/instances/${instanceId}/klei-storage/DoNotStarveTogether/Cluster_1`
 }
 
 function listClusterDir(instanceId: string): string {
@@ -252,7 +253,7 @@ async function main() {
 
   // 完整安装须含 data/（DST 游戏资源）
   try {
-    dockerExec(`test -d /var/lib/game-server-hub/instances/${instanceId}/data`)
+    dockerExec(`test -d /var/lib/bubblesharkpanel/instances/${instanceId}/data`)
   }
   catch {
     fail('P0', '实例安装完整性', `实例 ${instanceId} 缺少 data/ 目录，无法启动 DST 容器；请换完整安装实例或 force 重装`)
@@ -391,8 +392,8 @@ async function main() {
   }
 
   // S6 — stop order caves before master
-  const masterName = `gsh-${instanceId}-master`
-  const cavesName = `gsh-${instanceId}-caves`
+  const masterName = `bsp-${instanceId}-master`
+  const cavesName = `bsp-${instanceId}-caves`
   const stopPromise = requestJson('POST', '/app/instance/stop', { token, body: { id: instanceId } })
   let cavesStoppedFirst = false
   const pollDeadline = Date.now() + 60000

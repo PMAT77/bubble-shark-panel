@@ -19,7 +19,7 @@ import { MAP_CHUNK_MARKER, MAP_CHUNK_SIZE, splitIntoChunks } from './terrain-rle
  * | `print` | **可用**（面板自己每 15 秒查在线人数走的就是它） |
  *
  * `io.write` 那条是最容易踩的：它看起来完全正常，"是函数"且不报错，但日志里一行都收不到。
- * 判据来自同一次会话的日志：`print("GSH_PLAYER_COUNT:...")` 有输出，
+ * 判据来自同一次会话的日志：`print("BSP_PLAYER_COUNT:...")` 有输出，
  * 而 `io.write("GSHMAPDONE:...")` 什么都没有。**所以脚本一律用 `print`。**
  *
  * 因此地形走控制台日志传回：RLE 压缩 + 定长分块 + 每块自带序号，面板按序号拼接

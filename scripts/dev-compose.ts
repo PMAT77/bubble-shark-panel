@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../shared/brand-env'
 /**
  * 开发 Compose 启动器：SteamCMD 前置拉取 → compose up → 就绪后打印可配置横幅
  */
@@ -36,13 +37,13 @@ const panelPort = process.env.PANEL_PORT?.trim() || readEnvFileVar('PANEL_PORT')
 const webPort = process.env.VITE_DEV_WEB_PORT?.trim() || readEnvFileVar('VITE_DEV_WEB_PORT') || '9527'
 const panelUrl = `http://127.0.0.1:${panelPort}`
 const webUrl = `http://127.0.0.1:${webPort}`
-const steamcmdImage = process.env.GSH_STEAMCMD_IMAGE?.trim() || 'ghcr.io/pmat77/game-server-hub:v0.14.0'
+const steamcmdImage = readBrandEnv('BSP_STEAMCMD_IMAGE')?.trim() || 'ghcr.io/pmat77/bubblesharkpanel:v0.15.0'
 const account = process.env.ADMIN_USERNAME?.trim() || 'superadmin'
 const password = process.env.ADMIN_PASSWORD ?? '123456'
 
 import { createDevComposeLogFilter, filterDevComposeLogLine } from './dev-compose-log-filter.ts'
 
-const verboseComposeLogs = process.env.GSH_DEV_COMPOSE_VERBOSE === '1'
+const verboseComposeLogs = readBrandEnv('BSP_DEV_COMPOSE_VERBOSE') === '1'
 const READY_TIMEOUT_MS = 180_000
 const POLL_INTERVAL_MS = 2_000
 const IMAGE_PULL_ATTEMPTS = 3
@@ -50,7 +51,7 @@ const IMAGE_PULL_RETRY_DELAY_MS = 3_000
 const DEV_BASE_IMAGES = ['node:22-bookworm-slim']
 // Docker Hub 基础镜像的拉取候选（逗号分隔 registry 主机名，拉取成功后 tag 回标准名）；
 // 设为空字符串可禁用候选、强制直连 Docker Hub。
-const DEV_PULL_MIRRORS = (process.env.GSH_DEV_PULL_MIRRORS ?? 'docker.m.daocloud.io,docker.1ms.run,dockerproxy.net')
+const DEV_PULL_MIRRORS = (readBrandEnv('BSP_DEV_PULL_MIRRORS') ?? 'docker.m.daocloud.io,docker.1ms.run,dockerproxy.net')
   .split(',')
   .map(item => item.trim().replace(/^https?:\/\//, '').replace(/\/+$/, ''))
   .filter(Boolean)
@@ -284,7 +285,7 @@ async function tryPrintReadyBanner(): Promise<boolean> {
       bannerPrinted = true
       renderBanner(loadBannerConfig())
       if (!verboseComposeLogs) {
-        console.log('[dev:compose] 详细日志: GSH_DEV_COMPOSE_VERBOSE=1 pnpm dev:compose')
+        console.log('[dev:compose] 详细日志: BSP_DEV_COMPOSE_VERBOSE=1 pnpm dev:compose')
       }
     }
   }

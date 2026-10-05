@@ -9,7 +9,7 @@ import { resolveClusterPaths } from './cluster-service'
 const tempDirs: string[] = []
 
 function createTempInstallDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-player-service-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-player-service-'))
   tempDirs.push(dir)
   return dir
 }

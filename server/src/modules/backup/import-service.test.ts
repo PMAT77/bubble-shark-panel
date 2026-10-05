@@ -114,9 +114,9 @@ function resolveClusterRoot(installPath: string): string {
 }
 
 before(async () => {
-  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-import-service-test-'))
-  process.env.GSH_BACKUPS_ROOT = path.join(workDir, 'backups')
-  process.env.GSH_INSTANCES_ROOT = path.join(workDir, 'instances')
+  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-import-service-test-'))
+  process.env.BSP_BACKUPS_ROOT = path.join(workDir, 'backups')
+  process.env.BSP_INSTANCES_ROOT = path.join(workDir, 'instances')
   sourceRoot = path.join(workDir, 'sources')
   fs.mkdirSync(sourceRoot, { recursive: true })
   // 导入后会把缺失内容的 Mod 排进下载队列：这里只验证入库与 Lua 状态，不真的下载
@@ -219,7 +219,7 @@ describe('save import execution', () => {
     const cavesIni = fs.readFileSync(path.join(clusterRoot, 'Caves', 'server.ini'), 'utf8')
     assert.match(cavesIni, /server_port = 11000/)
     // 面板元数据就位
-    const meta = JSON.parse(fs.readFileSync(path.join(clusterRoot, '.gsh-panel-config.json'), 'utf8'))
+    const meta = JSON.parse(fs.readFileSync(path.join(clusterRoot, '.bsp-panel-config.json'), 'utf8'))
     assert.ok(meta.roomSavedAt)
     assert.ok(meta.masterWorldSavedAt)
     // 导入前安全备份

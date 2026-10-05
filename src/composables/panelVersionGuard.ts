@@ -34,7 +34,7 @@ export interface PanelVersionMismatch {
 
 /**
  * 比对两侧版本。
- * 任一侧为空时返回 null（不判定）：开发构建、未设置 GSH_RELEASE_VERSION 的部署、
+ * 任一侧为空时返回 null（不判定）：开发构建、未设置 BSP_RELEASE_VERSION 的部署、
  * 以及拿不到 /health 的情况都不该弹提示——宁可不提示，也不能误报。
  */
 export function resolvePanelVersionMismatch(

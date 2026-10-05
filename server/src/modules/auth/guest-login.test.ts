@@ -36,7 +36,7 @@ interface ApiEnvelope<T> {
   data: T
 }
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-guest-login-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-guest-login-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 const GUEST_ACCOUNT = 'guest-preview'
@@ -74,14 +74,14 @@ describe('游客（只读预览）免密登录', () => {
      * 游客登录只在 Native + production 下生效，所以这里必须真的把环境摆成那样。
      * 顺带固定管理员账号：`adminUsername` 与游客账号名同名的用例要靠它做对照。
      */
-    for (const key of ['NODE_ENV', 'GSH_RUNTIME_MODE', 'GSH_GUEST_LOGIN_ENABLED', 'GSH_GUEST_LOGIN_ACCOUNT', 'ADMIN_USERNAME', 'ADMIN_PASSWORD']) {
+    for (const key of ['NODE_ENV', 'BSP_RUNTIME_MODE', 'BSP_GUEST_LOGIN_ENABLED', 'BSP_GUEST_LOGIN_ACCOUNT', 'ADMIN_USERNAME', 'ADMIN_PASSWORD']) {
       savedEnv[key] = process.env[key]
     }
     applyEnv({
       NODE_ENV: 'production',
-      GSH_RUNTIME_MODE: 'native',
-      GSH_GUEST_LOGIN_ENABLED: '1',
-      GSH_GUEST_LOGIN_ACCOUNT: GUEST_ACCOUNT,
+      BSP_RUNTIME_MODE: 'native',
+      BSP_GUEST_LOGIN_ENABLED: '1',
+      BSP_GUEST_LOGIN_ACCOUNT: GUEST_ACCOUNT,
       ADMIN_USERNAME,
       ADMIN_PASSWORD,
     })
@@ -119,7 +119,7 @@ describe('游客（只读预览）免密登录', () => {
   /**
    * 名称被别的账号占用时**不能接管**。
    *
-   * `GSH_GUEST_LOGIN_ACCOUNT` 默认是 `guest`，运维手上很容易正好有一个同名账号。
+   * `BSP_GUEST_LOGIN_ACCOUNT` 默认是 `guest`，运维手上很容易正好有一个同名账号。
    * 无条件接管会把它原本的角色与权限点整份改写成"只能看"，而且是在一次重启里静默发生的。
    * 正确行为是：什么都不做，让启动日志去告诉部署者改名字。
    */

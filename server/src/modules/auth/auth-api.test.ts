@@ -24,7 +24,7 @@ interface LoginData {
   refreshToken: string
 }
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-auth-api-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-auth-api-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 let app: FastifyInstance

@@ -9,10 +9,17 @@ import { formatSteamcmdTimeoutForLog } from '../../shared/config/steamcmd'
 import { resolveSteamcmdContainerMemoryLimits } from './steamcmd-container-resources'
 import { SteamcmdOutput } from './steamcmd-output'
 
-export const STEAMCMD_LABEL_MANAGED = 'gsh.managed'
+export const STEAMCMD_LABEL_MANAGED = 'bsp.managed'
 export const STEAMCMD_LABEL_MANAGED_VALUE = 'steamcmd-install'
-export const STEAMCMD_LABEL_JOB = 'gsh.steamcmd.job'
-export const STEAMCMD_LABEL_KIND = 'gsh.steamcmd.kind'
+export const STEAMCMD_LABEL_JOB = 'bsp.steamcmd.job'
+export const STEAMCMD_LABEL_KIND = 'bsp.steamcmd.kind'
+
+
+async function listManagedContainers(docker: Docker, options: { all?: boolean, filters: { label: string[] } }) {
+  const current = await docker.listContainers(options)
+  const legacy = await docker.listContainers({ ...options, filters: { label: options.filters.label.map(label => label.replace(/^bsp\./, 'gsh.')) } })
+  return [...new Map([...current, ...legacy].map(item => [item.Id, item])).values()]
+}
 
 const activeSteamcmdInstallContainers = new Map<string, Docker.Container>()
 const cancelledSteamcmdInstallKeys = new Set<string>()
@@ -66,14 +73,14 @@ function buildSteamcmdInstallContainerName(jobId?: string): string | undefined {
   }
   const safeId = jobId.trim().replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 20)
   const suffix = Date.now().toString(36).slice(-6)
-  return `gsh-steamcmd-${safeId || 'job'}-${suffix}`
+  return `bsp-steamcmd-${safeId || 'job'}-${suffix}`
 }
 
 /** 面板启动或热重载后：终止所有仍在运行的 SteamCMD 安装容器（内存任务已丢失） */
 export async function cleanupAllRunningSteamcmdInstallContainers(): Promise<number> {
   try {
     const docker = resolveDocker()
-    const running = await docker.listContainers({
+    const running = await listManagedContainers(docker, {
       filters: {
         label: [`${STEAMCMD_LABEL_MANAGED}=${STEAMCMD_LABEL_MANAGED_VALUE}`],
       },
@@ -105,7 +112,7 @@ export async function cleanupOrphanedSteamcmdInstallContainers(jobId?: string): 
   }
   try {
     const docker = resolveDocker()
-    const byLabel = await docker.listContainers({
+    const byLabel = await listManagedContainers(docker, {
       all: true,
       filters: {
         label: [
@@ -138,7 +145,7 @@ export async function cleanupOrphanedSteamcmdInstallContainers(jobId?: string): 
 export async function cleanupStoppedSteamcmdAppInfoContainers(): Promise<number> {
   try {
     const docker = resolveDocker()
-    const byLabel = await docker.listContainers({
+    const byLabel = await listManagedContainers(docker, {
       all: true,
       filters: {
         label: [
@@ -173,7 +180,7 @@ export async function isSteamcmdJobRunning(jobId: string): Promise<boolean> {
   }
   try {
     const docker = resolveDocker()
-    const containers = await docker.listContainers({
+    const containers = await listManagedContainers(docker, {
       filters: {
         label: [
           `${STEAMCMD_LABEL_MANAGED}=${STEAMCMD_LABEL_MANAGED_VALUE}`,

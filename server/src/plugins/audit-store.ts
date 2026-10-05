@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../shared/brand-env'
 import type { PluginAuditRecord } from '../../../shared/contracts/plugin'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -22,7 +23,7 @@ const MAX_RECORDS_PER_PLUGIN = 5_000
 export { summarizeAuditParams }
 
 export function resolvePluginAuditRoot(): string {
-  const configured = process.env.GSH_PLUGIN_AUDIT_ROOT?.trim()
+  const configured = readBrandEnv('BSP_PLUGIN_AUDIT_ROOT')?.trim()
   if (configured) {
     return path.resolve(configured)
   }

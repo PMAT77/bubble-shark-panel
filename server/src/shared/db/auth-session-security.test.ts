@@ -15,7 +15,7 @@ import {
   updateUserPassword,
 } from './index'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-auth-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-auth-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 function hashToken(token: string) {

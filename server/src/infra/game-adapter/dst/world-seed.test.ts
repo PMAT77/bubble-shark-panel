@@ -11,7 +11,7 @@ import {
   writeWorldSeed,
 } from './panel-config-meta'
 import {
-  GSH_WORLD_SEED_MOD_ID,
+  BSP_WORLD_SEED_MOD_ID,
   buildWorldSeedModInfoContent,
   buildWorldSeedModWorldgenMainContent,
   ensureWorldSeedModLayout,
@@ -25,7 +25,7 @@ import { resolveDstLegacyModDir } from './ugc-mod-install'
 const tempDirs: string[] = []
 
 function createInstallPath() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-world-seed-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-world-seed-'))
   tempDirs.push(dir)
   return dir
 }
@@ -84,7 +84,7 @@ describe('world-seed', () => {
     const installPath = createInstallPath()
     ensureWorldSeedModLayout(installPath, ['Master'], { master: '123456' })
 
-    const legacyDir = resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)
+    const legacyDir = resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)
     assert.match(fs.readFileSync(path.join(legacyDir, 'modinfo.lua'), 'utf8'), /GSH World Seed/)
     assert.match(fs.readFileSync(path.join(legacyDir, 'modworldgenmain.lua'), 'utf8'), /GLOBAL\.SEED = 123456/)
   })
@@ -92,7 +92,7 @@ describe('world-seed', () => {
   it('清掉种子后同时撤掉接入', () => {
     const installPath = createInstallPath()
     ensureWorldSeedModLayout(installPath, ['Master'], { master: '123456' })
-    const legacyDir = resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)
+    const legacyDir = resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)
     assert.equal(fs.existsSync(legacyDir), true)
 
     ensureWorldSeedModLayout(installPath, ['Master'], {})
@@ -109,7 +109,7 @@ describe('world-seed', () => {
     ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], { master: '123456', caves: '654321' })
 
     // 接入过去会让洞穴也用上地上世界的种子，比内置 Mod 不生效更糟
-    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)), false)
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)), false)
   })
 
   it('只给地上设了种子、洞穴却开着时同样不接入', () => {
@@ -120,7 +120,7 @@ describe('world-seed', () => {
 
     ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], { master: '123456' })
 
-    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)), false)
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)), false)
   })
 
   it('两个分片用同一个种子时接入', () => {
@@ -131,7 +131,7 @@ describe('world-seed', () => {
 
     ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], { master: '123456', caves: '123456' })
 
-    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)), true)
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)), true)
   })
 
   it('treats invalid seeds as unset and does not rewrite unchanged files', () => {
@@ -159,10 +159,10 @@ describe('world-seed', () => {
   })
 
   it('recognises the reserved mod id', () => {
-    assert.equal(isWorldSeedModId(GSH_WORLD_SEED_MOD_ID), true)
-    assert.equal(isWorldSeedModId(` ${GSH_WORLD_SEED_MOD_ID} `), true)
+    assert.equal(isWorldSeedModId(BSP_WORLD_SEED_MOD_ID), true)
+    assert.equal(isWorldSeedModId(` ${BSP_WORLD_SEED_MOD_ID} `), true)
     assert.equal(isWorldSeedModId('123456'), false)
-    assert.equal(toWorldSeedModName(), `workshop-${GSH_WORLD_SEED_MOD_ID}`)
+    assert.equal(toWorldSeedModName(), `workshop-${BSP_WORLD_SEED_MOD_ID}`)
     assert.match(buildWorldSeedModWorldgenMainContent('7'), /GLOBAL\.SEED = 7/)
   })
 
@@ -236,7 +236,7 @@ describe('world-seed', () => {
       'klei-storage',
       'DoNotStarveTogether',
       'Cluster_1',
-      '.gsh-panel-config.json',
+      '.bsp-panel-config.json',
     )
     fs.mkdirSync(path.dirname(metaPath), { recursive: true })
     fs.writeFileSync(metaPath, JSON.stringify({

@@ -19,7 +19,7 @@ import {
 } from './panel-update-native'
 
 function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-native-update-'))
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-native-update-'))
 }
 
 function writeStateFile(dir: string, content: string): void {
@@ -38,18 +38,18 @@ describe('buildNativeReleaseAssetName', () => {
 
 describe('buildNativeReleaseUrls', () => {
   it('tries accelerator proxies before the direct release URL', () => {
-    const urls = buildNativeReleaseUrls({ githubRepo: 'PMAT77/game-serve-hub', releaseTag: 'v0.4.5' })
+    const urls = buildNativeReleaseUrls({ githubRepo: 'PMAT77/bubble-shark-panel', releaseTag: 'v0.4.5' })
     assert.equal(urls.length, GITHUB_PROXY_SITES.length + 1)
     assert.equal(
       urls[0],
-      'https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/v0.4.5/game-server-hub-native-v0.4.5-linux-x64.tar.gz',
+      'https://gh-proxy.com/https://github.com/PMAT77/bubble-shark-panel/releases/download/v0.4.5/game-server-hub-native-v0.4.5-linux-x64.tar.gz',
     )
-    assert.match(urls[urls.length - 1] ?? '', /^https:\/\/github\.com\/PMAT77\/game-serve-hub\/releases\/download\/v0\.4\.5\//)
+    assert.match(urls[urls.length - 1] ?? '', /^https:\/\/github\.com\/PMAT77\/bubble-shark-panel\/releases\/download\/v0\.4\.5\//)
   })
 
-  it('uses the configured proxy alone when GSH_GITHUB_PROXY is set', () => {
+  it('uses the configured proxy alone when BSP_GITHUB_PROXY is set', () => {
     const urls = buildNativeReleaseUrls({
-      githubRepo: 'PMAT77/game-serve-hub',
+      githubRepo: 'PMAT77/bubble-shark-panel',
       releaseTag: 'v0.4.5',
       githubProxy: 'https://my-mirror.example.com/',
     })
@@ -183,7 +183,7 @@ describe('resolveNativeUpdateSupport', () => {
 
   it('reports unsupported when the executor itself is gone', () => {
     const dir = makeTempDir()
-    const unitFile = path.join(dir, 'game-server-hub-update.path')
+    const unitFile = path.join(dir, 'bubblesharkpanel-update.path')
     fs.writeFileSync(unitFile, '[Path]\n', 'utf8')
     try {
       const support = resolveNativeUpdateSupport(
@@ -200,8 +200,8 @@ describe('resolveNativeUpdateSupport', () => {
 
   it('is unsupported when the exchange directory does not exist yet', () => {
     const dir = makeTempDir()
-    const unitFile = path.join(dir, 'game-server-hub-update.path')
-    const helperFile = path.join(dir, 'gsh-native-update')
+    const unitFile = path.join(dir, 'bubblesharkpanel-update.path')
+    const helperFile = path.join(dir, 'bsp-native-update')
     fs.writeFileSync(unitFile, '[Path]\n', 'utf8')
     fs.writeFileSync(helperFile, '#!/usr/bin/env bash\n', 'utf8')
     try {
@@ -219,8 +219,8 @@ describe('resolveNativeUpdateSupport', () => {
 
   it('enables panel updates when the unit and executor exist and the directory is writable', () => {
     const dir = makeTempDir()
-    const unitFile = path.join(dir, 'game-server-hub-update.path')
-    const helperFile = path.join(dir, 'gsh-native-update')
+    const unitFile = path.join(dir, 'bubblesharkpanel-update.path')
+    const helperFile = path.join(dir, 'bsp-native-update')
     fs.writeFileSync(unitFile, '[Path]\n', 'utf8')
     fs.writeFileSync(helperFile, '#!/usr/bin/env bash\n', 'utf8')
     try {

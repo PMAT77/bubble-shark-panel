@@ -7,8 +7,8 @@ import {
 
 describe('resolveDstContainerResourceLimits', () => {
   afterEach(() => {
-    delete process.env.GSH_DST_CONTAINER_MEMORY_MB
-    delete process.env.GSH_DST_CONTAINER_CPU_QUOTA
+    delete process.env.BSP_DST_CONTAINER_MEMORY_MB
+    delete process.env.BSP_DST_CONTAINER_CPU_QUOTA
   })
 
   it('returns undefined when env unset', () => {
@@ -16,8 +16,8 @@ describe('resolveDstContainerResourceLimits', () => {
   })
 
   it('parses memory and cpu limits', () => {
-    process.env.GSH_DST_CONTAINER_MEMORY_MB = '2048'
-    process.env.GSH_DST_CONTAINER_CPU_QUOTA = '1.5'
+    process.env.BSP_DST_CONTAINER_MEMORY_MB = '2048'
+    process.env.BSP_DST_CONTAINER_CPU_QUOTA = '1.5'
     const limits = resolveDstContainerResourceLimits()
     assert.equal(limits?.memory, 2048 * 1024 * 1024)
     assert.equal(limits?.nanoCpus, 1_500_000_000)
@@ -26,7 +26,7 @@ describe('resolveDstContainerResourceLimits', () => {
   })
 
   it('treats zero as unlimited', () => {
-    process.env.GSH_DST_CONTAINER_MEMORY_MB = '0'
+    process.env.BSP_DST_CONTAINER_MEMORY_MB = '0'
     assert.equal(resolveDstContainerResourceLimits(), undefined)
   })
 })

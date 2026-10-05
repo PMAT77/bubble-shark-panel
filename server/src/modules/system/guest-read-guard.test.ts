@@ -36,7 +36,7 @@ interface ApiEnvelope<T> {
   data: T
 }
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-guest-read-guard-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-guest-read-guard-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 /** 造账号时统一用的口令：本文件只关心鉴权，不关心口令强度 */

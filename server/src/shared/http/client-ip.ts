@@ -63,7 +63,7 @@ function ipv4ToLong(value: string): number {
 /**
  * 解析客户端 IP：
  * - 默认返回 Fastify 的 request.ip（TCP 对端地址，不可伪造）。
- * - 仅当对端命中 GSH_TRUST_PROXY 配置的可信代理列表时，才采信
+ * - 仅当对端命中 BSP_TRUST_PROXY 配置的可信代理列表时，才采信
  *   X-Forwarded-For 的第一跳，防止伪造请求头绕过基于 IP 的限流。
  */
 export function resolveClientIp(request: Pick<FastifyRequest, 'ip' | 'headers'>, trustedProxies: string[]): string {

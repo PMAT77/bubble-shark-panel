@@ -45,14 +45,14 @@ describe('parseMeminfoValueKb', () => {
  */
 describe('用用户机器的真实内存数字判定启动是否放行', () => {
   function withPanelEnv(run: () => void) {
-    const keys = ['GSH_HOST_DST_PLANNING_MB', 'GSH_HOST_MEMORY_HEADROOM_MB', 'GSH_HOST_MIN_AVAILABLE_MB', 'GSH_DST_CONTAINER_MEMORY_MB']
+    const keys = ['BSP_HOST_DST_PLANNING_MB', 'BSP_HOST_MEMORY_HEADROOM_MB', 'BSP_HOST_MIN_AVAILABLE_MB', 'BSP_DST_CONTAINER_MEMORY_MB']
     const saved = new Map<string, string | undefined>()
     for (const key of keys) {
       saved.set(key, process.env[key])
       delete process.env[key]
     }
     // 与线上 panel.env 一致
-    process.env.GSH_HOST_DST_PLANNING_MB = '512'
+    process.env.BSP_HOST_DST_PLANNING_MB = '512'
     try {
       run()
     }
@@ -70,7 +70,7 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
 
   const machine = { availableMb: 3517, totalMb: 3915, swapFreeMb: 0, swapTotalMb: 0 }
 
-  it('没有 swap 时拒绝启动，并明确指向 gsh setup-swap', () => {
+  it('没有 swap 时拒绝启动，并明确指向 bsp setup-swap', () => {
     withPanelEnv(() => {
       const result = assessHostMemoryForHeavyOperation(
         'dst-container-start',
@@ -82,7 +82,7 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
         return
       }
       assert.equal(result.requiredMb, 3712)
-      assert.match(result.detail, /gsh setup-swap/)
+      assert.match(result.detail, /bsp setup-swap/)
       assert.match(result.detail, /关闭洞穴分片/)
       assert.match(result.detail, /减少订阅的 Mod/)
       // 前端靠 swapTotalMb 判定「系统有没有 swap」：总量为 0 才是「未配置」
@@ -102,17 +102,17 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
       if (result.ok) {
         return
       }
-      // 总量非 0 说明 swap 是配过的：此时 gsh setup-swap 会直接返回、什么都不做
+      // 总量非 0 说明 swap 是配过的：此时 bsp setup-swap 会直接返回、什么都不做
       assert.equal(result.data.swapTotalMb, 2048)
       assert.equal(result.data.swapFreeMb, 0)
       assert.match(result.detail, /缓存区已用满（共 2048 MiB）/)
       assert.match(result.detail, /扩缓存区/)
-      assert.match(result.detail, /GSH_SWAP_SIZE=4G gsh setup-swap/)
+      assert.match(result.detail, /BSP_SWAP_SIZE=4G bsp setup-swap/)
       assert.doesNotMatch(result.detail, /创建 2 GiB swapfile/)
     })
   })
 
-  it('执行 gsh setup-swap 加上 2 GiB swap 后，同样的配置被放行', () => {
+  it('执行 bsp setup-swap 加上 2 GiB swap 后，同样的配置被放行', () => {
     withPanelEnv(() => {
       const result = assessHostMemoryForHeavyOperation(
         'dst-container-start',
@@ -165,26 +165,26 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
 
 describe('resolveMinHostAvailableMbForOperation', () => {
   it('steamcmd requirement uses planning peak not docker cap', () => {
-    const prevMem = process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB
-    const prevHead = process.env.GSH_HOST_MEMORY_HEADROOM_MB
-    const prevMin = process.env.GSH_HOST_MIN_AVAILABLE_MB
-    const prevPlan = process.env.GSH_HOST_STEAMCMD_PLANNING_MB
-    delete process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB
-    delete process.env.GSH_HOST_MEMORY_HEADROOM_MB
-    delete process.env.GSH_HOST_MIN_AVAILABLE_MB
-    delete process.env.GSH_HOST_STEAMCMD_PLANNING_MB
+    const prevMem = process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB
+    const prevHead = process.env.BSP_HOST_MEMORY_HEADROOM_MB
+    const prevMin = process.env.BSP_HOST_MIN_AVAILABLE_MB
+    const prevPlan = process.env.BSP_HOST_STEAMCMD_PLANNING_MB
+    delete process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB
+    delete process.env.BSP_HOST_MEMORY_HEADROOM_MB
+    delete process.env.BSP_HOST_MIN_AVAILABLE_MB
+    delete process.env.BSP_HOST_STEAMCMD_PLANNING_MB
     const required = resolveMinHostAvailableMbForOperation('steamcmd-install')
     if (prevMem !== undefined) {
-      process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB = prevMem
+      process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB = prevMem
     }
     if (prevHead !== undefined) {
-      process.env.GSH_HOST_MEMORY_HEADROOM_MB = prevHead
+      process.env.BSP_HOST_MEMORY_HEADROOM_MB = prevHead
     }
     if (prevMin !== undefined) {
-      process.env.GSH_HOST_MIN_AVAILABLE_MB = prevMin
+      process.env.BSP_HOST_MIN_AVAILABLE_MB = prevMin
     }
     if (prevPlan !== undefined) {
-      process.env.GSH_HOST_STEAMCMD_PLANNING_MB = prevPlan
+      process.env.BSP_HOST_STEAMCMD_PLANNING_MB = prevPlan
     }
     assert.equal(required, 1280 + 512)
   })
@@ -206,11 +206,11 @@ describe('assessHostMemoryForHeavyOperation', () => {
 describe('DST 启动守卫按分片数与 Mod 数估算', () => {
   function withCleanEnv(run: () => void) {
     const keys = [
-      'GSH_HOST_DST_PLANNING_MB',
-      'GSH_HOST_MEMORY_HEADROOM_MB',
-      'GSH_HOST_MIN_AVAILABLE_MB',
-      'GSH_DST_CONTAINER_MEMORY_MB',
-      'GSH_DST_CONTAINER_CPU_QUOTA',
+      'BSP_HOST_DST_PLANNING_MB',
+      'BSP_HOST_MEMORY_HEADROOM_MB',
+      'BSP_HOST_MIN_AVAILABLE_MB',
+      'BSP_DST_CONTAINER_MEMORY_MB',
+      'BSP_DST_CONTAINER_CPU_QUOTA',
     ]
     const saved = new Map<string, string | undefined>()
     for (const key of keys) {
@@ -234,7 +234,7 @@ describe('DST 启动守卫按分片数与 Mod 数估算', () => {
 
   it('单分片无 Mod 时保持原来的下限', () => {
     withCleanEnv(() => {
-      process.env.GSH_HOST_DST_PLANNING_MB = '512'
+      process.env.BSP_HOST_DST_PLANNING_MB = '512'
       // 显式配置只作为下界：0 个 Mod 时就是 512 + 384 余量
       assert.equal(
         resolveMinHostAvailableMbForOperation('dst-container-start', { shardCount: 1, modCount: 0 }),
@@ -245,7 +245,7 @@ describe('DST 启动守卫按分片数与 Mod 数估算', () => {
 
   it('36 个 Mod 的双分片按真实规模要 3712 MiB，不再被放行', () => {
     withCleanEnv(() => {
-      process.env.GSH_HOST_DST_PLANNING_MB = '512'
+      process.env.BSP_HOST_DST_PLANNING_MB = '512'
       // 单分片峰值 512 + 32×36 = 1664；双分片 3328；再加 384 MiB 余量
       assert.equal(
         resolveMinHostAvailableMbForOperation('dst-container-start', { shardCount: 2, modCount: 36 }),
@@ -256,7 +256,7 @@ describe('DST 启动守卫按分片数与 Mod 数估算', () => {
 
   it('分片内存上限会钳住单分片估算', () => {
     withCleanEnv(() => {
-      process.env.GSH_DST_CONTAINER_MEMORY_MB = '1024'
+      process.env.BSP_DST_CONTAINER_MEMORY_MB = '1024'
       assert.equal(
         resolveMinHostAvailableMbForOperation('dst-container-start', { shardCount: 1, modCount: 36 }),
         1024 + 384,

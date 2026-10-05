@@ -18,7 +18,7 @@ async function main() {
   }
 
   const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-  const dbPath = process.env.DB_PATH?.trim() || path.join(serverRoot, 'data', 'game-server-hub.sqlite')
+  const dbPath = process.env.DB_PATH?.trim() || path.join(serverRoot, 'data', 'bubblesharkpanel.sqlite')
   const migrationsFolder = path.resolve(serverRoot, 'drizzle')
 
   await initDatabase(dbPath, migrationsFolder, {

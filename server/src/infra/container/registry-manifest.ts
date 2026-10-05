@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import {
   buildRegistryBlobUrl,
   buildRegistryManifestUrl,
@@ -141,10 +142,10 @@ function isManifestIndexContentType(contentType: string | null): boolean {
 function resolveRegistryAuthOptions(auth?: RegistryAuthOptions): RegistryAuthOptions {
   return {
     username: auth?.username?.trim()
-      || process.env.GSH_REGISTRY_USERNAME?.trim()
+      || readBrandEnv('BSP_REGISTRY_USERNAME')?.trim()
       || null,
     password: auth?.password?.trim()
-      || process.env.GSH_REGISTRY_PASSWORD?.trim()
+      || readBrandEnv('BSP_REGISTRY_PASSWORD')?.trim()
       || null,
   }
 }

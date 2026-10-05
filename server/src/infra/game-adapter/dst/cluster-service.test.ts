@@ -10,7 +10,7 @@ import { resolveCavesServerIniPath } from './shard-layout'
 const tempDirs: string[] = []
 
 function createTempInstallDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-cluster-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-cluster-'))
   tempDirs.push(dir)
   return dir
 }

@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -89,7 +90,7 @@ Get-NetAdapterStatistics | Select-Object Name,ReceivedBytes,SentBytes | ConvertT
 `.trim()
 
 function getPanelVersion() {
-  const envVersion = process.env.GSH_RELEASE_VERSION?.trim()
+  const envVersion = readBrandEnv('BSP_RELEASE_VERSION')?.trim()
   if (envVersion) {
     return envVersion
   }
@@ -355,7 +356,7 @@ function startSlowMetricsRefreshLoops() {
 }
 
 export function warmSystemMetricsCaches() {
-  if (process.env.GSH_UNIT_TEST === '1') {
+  if (readBrandEnv('BSP_UNIT_TEST') === '1') {
     return
   }
   getCachedPanelVersion()

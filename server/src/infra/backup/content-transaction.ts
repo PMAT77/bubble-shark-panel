@@ -5,7 +5,7 @@ import { writeFileAtomic } from '../game-adapter/dst/atomic-write'
 
 interface Replacement { target: string, prepared: string | null, backup: string, existed: boolean }
 interface Journal<T> { version: 1, state: 'pending' | 'committed', snapshot: T, replacements: Replacement[] }
-export const CONTENT_TRANSACTION_DIRECTORY = '.gsh-content-transaction'
+export const CONTENT_TRANSACTION_DIRECTORY = '.bsp-content-transaction'
 
 function exists(file: string): boolean {
   try { fs.lstatSync(file); return true }

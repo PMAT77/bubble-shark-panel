@@ -40,13 +40,13 @@ RUN pnpm run build && pnpm run build:server
 FROM node:22-bookworm-slim AS production
 ARG TZ=Asia/Shanghai
 ENV TZ=${TZ}
-ARG GSH_RELEASE_VERSION=dev
-ARG GSH_BUILD_SHA=unknown
+ARG BSP_RELEASE_VERSION=dev
+ARG BSP_BUILD_SHA=unknown
 ENV NODE_ENV=production
-ENV GSH_RELEASE_VERSION=${GSH_RELEASE_VERSION}
-ENV GSH_BUILD_SHA=${GSH_BUILD_SHA}
-LABEL org.opencontainers.image.version="${GSH_RELEASE_VERSION}"
-LABEL org.opencontainers.image.revision="${GSH_BUILD_SHA}"
+ENV BSP_RELEASE_VERSION=${BSP_RELEASE_VERSION}
+ENV BSP_BUILD_SHA=${BSP_BUILD_SHA}
+LABEL org.opencontainers.image.version="${BSP_RELEASE_VERSION}"
+LABEL org.opencontainers.image.revision="${BSP_BUILD_SHA}"
 WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
@@ -56,7 +56,7 @@ COPY server/drizzle ./server/drizzle
 EXPOSE 8888
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8888
-ENV DB_PATH=/app/data/game-server-hub.sqlite
+ENV DB_PATH=/app/data/bubblesharkpanel.sqlite
 ENV SERVER_LOG_DIR=/app/logs
 # 镜像内无 curl/wget，用 node 内置 fetch 探活 /health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

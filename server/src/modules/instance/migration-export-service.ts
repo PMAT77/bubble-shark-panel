@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import { randomUUID } from 'node:crypto'
 import { assertInstanceRuntimeStopped } from '../../infra/container/instance-stopped'
 import type { MigrationContentSummary, MigrationMod } from '../../../../shared/contracts/migration'
@@ -9,7 +10,6 @@ import { readModDependencies } from '../../infra/game-adapter/dst/mod-service'
 import { sha256File } from '../../infra/game-adapter/dst/mod-content'
 import fs from 'node:fs'
 import path from 'node:path'
-import process from 'node:process'
 import {
   buildMigrationReportText,
   inspectClusterForMigration,
@@ -49,7 +49,7 @@ export type MigrationExportResult = MigrationExportOutcome | { ok: false, messag
 
 /** 导出根目录：与数据库同级，随面板数据目录一起被备份或迁移 */
 export function resolveMigrationExportRoot(): string {
-  const configured = process.env.GSH_MIGRATION_EXPORT_ROOT?.trim()
+  const configured = readBrandEnv('BSP_MIGRATION_EXPORT_ROOT')?.trim()
   if (configured) {
     return path.resolve(configured)
   }

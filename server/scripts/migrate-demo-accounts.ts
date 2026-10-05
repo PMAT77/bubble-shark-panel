@@ -8,7 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const dbPath = path.join(repoRoot, 'server/data/game-server-hub.sqlite')
+const dbPath = path.join(repoRoot, 'server/data/bubblesharkpanel.sqlite')
 
 function hashPassword(password: string, salt = randomUUID()) {
   const derivedKey = scryptSync(password, salt, 64).toString('hex')

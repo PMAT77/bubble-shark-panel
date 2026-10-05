@@ -120,7 +120,7 @@ function ensureInstallDirectoryOwnership(installPath: string): string | undefine
 }
 
 /**
- * 为 SteamCMD 安装准备目录：Docker 赋予容器用户权限，Native 保持 gsh 用户所有权。
+ * 为 SteamCMD 安装准备目录：Docker 赋予容器用户权限，Native 保持 bsp 用户所有权。
  * 若目录内已有游戏文件，仅调整实例目录本身，避免递归 chmod 去掉二进制 +x。
  * 注意：这里刻意不清理半成品 Steam 目录——损坏状态由安装失败输出检测后
  * 在重试中清理（isSteamcmdCorruptStateOutput），无条件清理会破坏断点续传。

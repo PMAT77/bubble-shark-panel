@@ -1,3 +1,4 @@
+import { releaseBrandName } from '../../../../shared/release-brand'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ServerConfig } from '../../shared/config'
@@ -16,8 +17,8 @@ import type {
  * 面板进程以非特权用户运行，既写不了 `releases/`，也不能重启自己的 systemd 服务。
  * 因此这里把真正的安装动作交给安装器布置的特权执行器：
  *   面板写 `<UPDATE_DIR>/request`（单行 = 目标版本 tag）
- *     -> game-server-hub-update.path（systemd, root）触发
- *       -> game-server-hub-update.service 执行 scripts/gsh-native-update.sh
+ *     -> bubblesharkpanel-update.path（systemd, root）触发
+ *       -> bubblesharkpanel-update.service 执行 scripts/bsp-native-update.sh
  * 执行器会独立拉取官方 `.sha256` 校验面板预下载的包，因此面板无法借这条通道投递代码。
  * 本模块只提供纯函数与文件读写，不做任何特权操作。
  */
@@ -25,9 +26,9 @@ import type {
 export const NATIVE_UPDATE_REQUEST_FILENAME = 'request'
 export const NATIVE_UPDATE_STATE_FILENAME = 'state.json'
 /** 安装器写入的 path unit 路径：它的存在代表这套安装已具备面板内更新能力 */
-export const NATIVE_UPDATE_PATH_UNIT_FILE = '/etc/systemd/system/game-server-hub-update.path'
+export const NATIVE_UPDATE_PATH_UNIT_FILE = '/etc/systemd/system/bubblesharkpanel-update.path'
 /** 特权更新执行器路径（与 path unit 的 ExecStart 一致）；缺失时面板内更新一定跑不起来 */
-export const NATIVE_UPDATE_HELPER_FILE = '/usr/local/lib/game-server-hub/gsh-native-update'
+export const NATIVE_UPDATE_HELPER_FILE = '/usr/local/lib/bubblesharkpanel/bsp-native-update'
 /** 状态文件读取上限：它是 root 写的，但仍按不可信输入处理 */
 export const NATIVE_UPDATE_STATE_MAX_BYTES = 8 * 1024
 
@@ -71,12 +72,12 @@ export function isValidReleaseTag(tag: string): boolean {
 
 /** Native Release 压缩包名，与 `scripts/build-native-release.mjs` 的产物一致 */
 export function buildNativeReleaseAssetName(releaseTag: string): string {
-  return `game-server-hub-native-${releaseTag}-linux-x64.tar.gz`
+  return `${releaseBrandName(releaseTag)}-native-${releaseTag}-linux-x64.tar.gz`
 }
 
 /**
  * 候选下载地址：加速代理前缀 → 直连，与离线镜像包一致。
- * `GSH_GITHUB_PROXY` 设置时只用该代理 + 直连。
+ * `BSP_GITHUB_PROXY` 设置时只用该代理 + 直连。
  */
 export function buildNativeReleaseUrls(input: {
   githubRepo: string
@@ -130,8 +131,8 @@ export function resolveNativeUpdateSupport(
   // path unit 与执行器缺一不可：少了任何一个，写进去的请求都不会有人处理，
   // 与其让面板停在「更新中」，不如直接告诉用户重跑安装脚本。
   const requiredFiles = [
-    options.pathUnitFile ?? NATIVE_UPDATE_PATH_UNIT_FILE,
-    options.helperFile ?? NATIVE_UPDATE_HELPER_FILE,
+    options.pathUnitFile ?? (fs.existsSync(NATIVE_UPDATE_PATH_UNIT_FILE) ? NATIVE_UPDATE_PATH_UNIT_FILE : '/etc/systemd/system/game-server-hub-update.path'),
+    options.helperFile ?? (fs.existsSync(NATIVE_UPDATE_HELPER_FILE) ? NATIVE_UPDATE_HELPER_FILE : '/usr/local/lib/game-server-hub/gsh-native-update'),
   ]
   for (const file of requiredFiles) {
     try {
@@ -154,7 +155,7 @@ export function resolveNativeUpdateSupport(
 
 /**
  * 写更新请求：临时文件 + 原子改名，执行器只需读到「完整的一行 tag」。
- * 内容格式与 `scripts/gsh-native-update.sh` 的校验一一对应（单行、≤64 字节）。
+ * 内容格式与 `scripts/bsp-native-update.sh` 的校验一一对应（单行、≤64 字节）。
  */
 export function writeNativeUpdateRequest(dir: string, releaseTag: string): void {
   const tag = releaseTag.trim()

@@ -10,7 +10,7 @@ describe('filterDevComposeLogLine', () => {
   })
 
   it('formats key panel startup logs', () => {
-    const line = 'game-server-hub-panel  | {"level":30,"msg":"后端服务已启动: http://0.0.0.0:3000"}'
+    const line = 'bubblesharkpanel-panel  | {"level":30,"msg":"后端服务已启动: http://0.0.0.0:3000"}'
     assert.equal(filterDevComposeLogLine(line), '[panel] 后端服务已启动: http://0.0.0.0:3000')
   })
 

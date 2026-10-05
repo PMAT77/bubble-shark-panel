@@ -22,7 +22,9 @@ export function ensureDockerShardInterconnectConfig(installPath: string, instanc
   if (!fields.shardEnabled) {
     return false
   }
-  const masterIp = resolveDockerShardMasterIp(instanceId)
+  const canonicalName = resolveDockerShardMasterIp(instanceId)
+  const legacyName = canonicalName.replace(/^bsp-/, 'gsh-')
+  const masterIp = fields.masterIp === legacyName ? legacyName : canonicalName
   if (fields.bindIp === DOCKER_SHARD_BIND_IP && fields.masterIp === masterIp) {
     return false
   }

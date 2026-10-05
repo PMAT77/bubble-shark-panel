@@ -36,8 +36,8 @@ interface ApiEnvelope<T> {
   data: T
 }
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-summary-projection-'))
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-summary-projection-'))
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 const GRANTED_INSTANCE_ID = `inst-${randomUUID()}`

@@ -36,7 +36,7 @@ import { roles, systemSettings, userRoles, users } from './schema/index'
  *
  * ## 为什么需要 `system_settings` 里的指针
  *
- * 支持改账号名（`GSH_GUEST_LOGIN_ACCOUNT`）。改名后旧账号仍在库里，不能凭名字猜
+ * 支持改账号名（`BSP_GUEST_LOGIN_ACCOUNT`）。改名后旧账号仍在库里，不能凭名字猜
  * "哪个才是面板的游客账号"——所以签发会话前要能**只按指针**找到它：
  * 指针指向的账号还必须真的是游客角色，否则视为未就绪（不泄露账号状态细节）。
  */
@@ -168,13 +168,13 @@ export async function ensureGuestAccount(options: {
       /**
        * 同名账号**只有已经是游客角色**时才接管。
        *
-       * 这一点不是洁癖：`GSH_GUEST_LOGIN_ACCOUNT` 默认是 `guest`，如果运维手上正好有一个
+       * 这一点不是洁癖：`BSP_GUEST_LOGIN_ACCOUNT` 默认是 `guest`，如果运维手上正好有一个
        * 同名的真实账号，无条件接管会**把它的角色和权限点全部改写**——它原本是什么角色、
        * 能管哪些实例，都会变成"只能看"，而且是在一次重启里静默发生的。
        * 接管一个本来就是游客角色的账号则没有任何损失（它本来就是那个用途）。
        *
        * 名字被别的角色占着时什么都不做：不覆盖它，也不把它当游客账号用。
-       * 调用方会把 ready=false 写进启动日志，部署者看到后改 `GSH_GUEST_LOGIN_ACCOUNT` 即可。
+       * 调用方会把 ready=false 写进启动日志，部署者看到后改 `BSP_GUEST_LOGIN_ACCOUNT` 即可。
        */
       if (await findRoleKindByUserId(existingId) !== 'guest') {
         return { ...outcome, ready: false }

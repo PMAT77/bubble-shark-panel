@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,7 +10,7 @@ import { extractZipArchive } from '../../infra/backup/zip-extract'
 import { assertWorkshopId, findModDirectories, inspectContentTree } from '../../infra/game-adapter/dst/mod-content'
 import { prepareDstModContent } from '../../infra/game-adapter/dst/mod-content-install'
 import { readLocalModInfo, parseStoredModConfig } from '../../infra/game-adapter/dst/mod-config'
-import { GSH_WORLD_SEED_MOD_ID, isWorldSeedModId } from '../../infra/game-adapter/dst/world-seed'
+import { BSP_WORLD_SEED_MOD_ID, isWorldSeedModId } from '../../infra/game-adapter/dst/world-seed'
 import { writeFileAtomic } from '../../infra/game-adapter/dst/atomic-write'
 import { CONTENT_TRANSACTION_DIRECTORY } from '../../infra/backup/content-transaction'
 import { assertInstanceRuntimeStopped } from '../../infra/container/instance-stopped'
@@ -27,17 +28,17 @@ interface ImportRecord {
   archiveSha256?: string, items: ImportRecordItem[], state?: 'preview' | 'committing' | 'consumed'
 }
 const consuming = new Set<string>()
-export function resolveModImportRoot(): string { return path.resolve(process.env.GSH_MOD_IMPORT_ROOT || path.join(os.tmpdir(), 'gsh-mod-import')) }
+export function resolveModImportRoot(): string { return path.resolve(readBrandEnv('BSP_MOD_IMPORT_ROOT') || path.join(os.tmpdir(), 'bsp-mod-import')) }
 function positive(name: string, fallback: number): number {
-  const value = Number(process.env[name])
+  const value = Number(readBrandEnv(name))
   return Number.isSafeInteger(value) && value > 0 ? value : fallback
 }
 export function modImportLimits() {
   return {
-    maxArchiveBytes: positive('GSH_MOD_IMPORT_MAX_ARCHIVE_BYTES', resolveInstanceUploadMaxBytes()),
-    maxTotalUncompressedBytes: positive('GSH_MOD_IMPORT_MAX_EXTRACTED_BYTES', 1024 ** 3),
-    maxEntries: positive('GSH_MOD_IMPORT_MAX_FILES', 50_000),
-    maxDepth: positive('GSH_MOD_IMPORT_MAX_DEPTH', 32),
+    maxArchiveBytes: positive('BSP_MOD_IMPORT_MAX_ARCHIVE_BYTES', resolveInstanceUploadMaxBytes()),
+    maxTotalUncompressedBytes: positive('BSP_MOD_IMPORT_MAX_EXTRACTED_BYTES', 1024 ** 3),
+    maxEntries: positive('BSP_MOD_IMPORT_MAX_FILES', 50_000),
+    maxDepth: positive('BSP_MOD_IMPORT_MAX_DEPTH', 32),
   }
 }
 function directory(importId: string): string {
@@ -123,7 +124,7 @@ export async function inspectLocalMod(payload: Readable, instanceId: string, own
     const warnings = outside ? [`有 ${outside} 个文件位于 Mod 目录之外，不会安装`] : []
     saveRecord(root, record)
     const single = items.length === 1 ? items[0]! : null
-    return { importId: received.uploadId, items, reservedWorkshopIds: [GSH_WORLD_SEED_MOD_ID],
+    return { importId: received.uploadId, items, reservedWorkshopIds: [BSP_WORLD_SEED_MOD_ID],
       workshopId: single?.workshopId ?? null, idCandidates: single?.idCandidates ?? [], name: single?.name ?? null,
       version: single?.version ?? null, fileCount: archive.fileCount, sizeBytes: archive.sizeBytes,
       warnings: [...warnings, ...(single?.warnings ?? [])], existing: single?.existing ?? false }

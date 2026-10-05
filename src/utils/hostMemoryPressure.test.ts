@@ -19,8 +19,8 @@ import {
  * 内存不足通知：文案要短到一眼能看完，按钮要真的能跳。
  *
  * 三件事都在这里钉住：
- * 1. swap 的三种状态给三条不同的话——「没配」要建（`gsh setup-swap`），
- *    「配了但用满」要扩（那条命令会被 `gsh setup-swap` 直接跳过，照抄没用），
+ * 1. swap 的三种状态给三条不同的话——「没配」要建（`bsp setup-swap`），
+ *    「配了但用满」要扩（那条命令会被 `bsp setup-swap` 直接跳过，照抄没用），
  *    只有还有余量时才说「启动继续」。判据是 `swapTotalMb` 与 `swapFreeMb` 的组合；
  * 2. 「查看内存占用」点击后必须先销毁通知再导航，并且带 `<a href>` 兜底——此前是点击时才
  *    动态 import router 的写法，加载失败即静默中止，表现就是「点了没反应」。
@@ -127,7 +127,7 @@ describe('buildMonitorHref', () => {
   })
 
   it('history 模式带 base 前缀', () => {
-    assert.equal(buildMonitorHref('http://example.com/gsh/games/dst/rooms', '/gsh/'), '/gsh/console/monitor')
+    assert.equal(buildMonitorHref('http://example.com/bsp/games/dst/rooms', '/bsp/'), '/bsp/console/monitor')
     assert.equal(buildMonitorHref('http://example.com/games/dst/rooms', '/'), '/console/monitor')
   })
 })

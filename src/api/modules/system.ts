@@ -92,7 +92,7 @@ export default {
     `app/system/plugins/import/inspect?fileName=${encodeURIComponent(file.name)}`,
     file,
     {
-      headers: { 'Content-Type': 'application/x-gsh-plugin-package' },
+      headers: { 'Content-Type': 'application/x-bsp-plugin-package' },
       timeout: 0,
     },
   ) as Promise<{ data: PluginImportInspectResult }>,

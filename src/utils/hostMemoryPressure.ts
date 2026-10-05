@@ -8,10 +8,10 @@ export const HOST_MEMORY_PRESSURE_CODE = 'HOST_MEMORY_PRESSURE'
 
 export const HOST_MEMORY_PRESSURE_TITLE = '⚠ 主机可用内存不足'
 export const HOST_MEMORY_PRESSURE_NO_SWAP_HINT = '系统未配置缓存区，建议先执行：'
-export const HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND = 'sudo gsh setup-swap'
+export const HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND = 'sudo bsp setup-swap'
 /** swap 已配置但被用满：此时 setup-swap 会直接返回，必须换一条能真正生效的命令 */
 export const HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND
-  = 'sudo swapoff /swapfile-gsh && sudo rm -f /swapfile-gsh && sudo sed -i \'\\#^/swapfile-gsh #d\' /etc/fstab && sudo GSH_SWAP_SIZE=4G gsh setup-swap'
+  = 'sudo swapoff /swapfile-bsp && sudo rm -f /swapfile-bsp && sudo sed -i \'\\#^/swapfile-bsp #d\' /etc/fstab && sudo BSP_SWAP_SIZE=4G bsp setup-swap'
 export const HOST_MEMORY_PRESSURE_SWAP_READY_HINT = '系统已配置缓存区，启动继续。'
 export const HOST_MEMORY_PRESSURE_FOOTER = '如启动后仍出现内存不足，请关闭其他服务或增加内存。'
 
@@ -44,7 +44,7 @@ export type SwapPressureState = 'none' | 'exhausted' | 'ready'
 /**
  * swap 落点状态；与 server 侧 `resolveSwapState` 同一口径。
  *
- * 只看 `swapFreeMb` 会把「配了但被用满」当成「没配」：前者执行 `gsh setup-swap` 会被直接跳过
+ * 只看 `swapFreeMb` 会把「配了但被用满」当成「没配」：前者执行 `bsp setup-swap` 会被直接跳过
  * （脚本检测到已有 swap 就不动），照着提示跑一遍什么都不会变。
  * 缺 `swapTotalMb`（旧载荷）时退回按余量判断，方向与从前一致。
  */

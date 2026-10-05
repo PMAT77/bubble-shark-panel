@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../shared/brand-env'
 import type { Readable } from 'node:stream'
 import type { PluginCapability, PluginImportResult, PluginManifest } from '../../../shared/contracts/plugin'
 import type { ZipExtractLimits } from '../infra/backup/zip-extract'
@@ -65,7 +66,7 @@ export interface PluginPackageAnalysis {
 
 /** 导入体积上限（测试与小内存部署可用环境变量收紧，与存档导入同一套习惯） */
 export function resolvePluginPackageLimitBytes(): number {
-  const parsed = Number(process.env.GSH_PLUGIN_IMPORT_MAX_BYTES)
+  const parsed = Number(readBrandEnv('BSP_PLUGIN_IMPORT_MAX_BYTES'))
   return Number.isFinite(parsed) && parsed > 0 ? parsed : PLUGIN_PACKAGE_LIMIT_BYTES
 }
 

@@ -21,8 +21,8 @@ import { closeDatabase, initDatabase } from '../../shared/db/index'
  * 以及环境变量覆盖行为（个人联系方式可换，不改代码）。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-commercial-'))
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-commercial-'))
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 process.env.DB_PATH = dbFilePath
@@ -153,8 +153,8 @@ describe('commercial support routes', () => {
   })
 
   it('联系方式可用环境变量覆盖，且不需要改代码', async () => {
-    const original = process.env.GSH_COMMERCIAL_WECHAT
-    process.env.GSH_COMMERCIAL_WECHAT = 'test-wechat-id'
+    const original = process.env.BSP_COMMERCIAL_WECHAT
+    process.env.BSP_COMMERCIAL_WECHAT = 'test-wechat-id'
     try {
       const response = await app.inject({
         method: 'GET',
@@ -166,17 +166,17 @@ describe('commercial support routes', () => {
     }
     finally {
       if (original === undefined) {
-        delete process.env.GSH_COMMERCIAL_WECHAT
+        delete process.env.BSP_COMMERCIAL_WECHAT
       }
       else {
-        process.env.GSH_COMMERCIAL_WECHAT = original
+        process.env.BSP_COMMERCIAL_WECHAT = original
       }
     }
   })
 
   it('未设置环境变量时回落到仓库 README 里的默认联系方式', async () => {
-    const original = process.env.GSH_COMMERCIAL_WECHAT
-    delete process.env.GSH_COMMERCIAL_WECHAT
+    const original = process.env.BSP_COMMERCIAL_WECHAT
+    delete process.env.BSP_COMMERCIAL_WECHAT
     try {
       const response = await app.inject({
         method: 'GET',
@@ -185,11 +185,11 @@ describe('commercial support routes', () => {
       })
       const data = parseBody<{ contact: { wechat: string, repository: string } }>(response.body).data
       assert.equal(data.contact.wechat, 'PMAT77')
-      assert.match(data.contact.repository, /github\.com\/PMAT77\/game-serve-hub/)
+      assert.match(data.contact.repository, /github\.com\/PMAT77\/bubble-shark-panel/)
     }
     finally {
       if (original !== undefined) {
-        process.env.GSH_COMMERCIAL_WECHAT = original
+        process.env.BSP_COMMERCIAL_WECHAT = original
       }
     }
   })

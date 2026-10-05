@@ -51,7 +51,7 @@ export function registerPluginRoutes(app: FastifyInstance, getRuntime: () => Plu
    * 一个上传入口不值得拿启动风险去换。files 模块同样为此用了自己的内容类型。
    * 解析器只把流交给路由，落盘与校验都在 `receivePluginPackage` 里。
    */
-  app.addContentTypeParser('application/x-gsh-plugin-package', (_request, payload, done) => {
+  app.addContentTypeParser(['application/x-bsp-plugin-package', 'application/x-gsh-plugin-package'], (_request, payload, done) => {
     done(null, payload)
   })
 

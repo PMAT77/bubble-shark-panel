@@ -24,15 +24,15 @@ import { closeDatabase, initDatabase } from '../../shared/db/index'
  * 而且不能在任何位置留下残留目录——否则插件列表里会出现一个只能人工去删的条目。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-plugin-routes-'))
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-plugin-routes-'))
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const pluginsRoot = path.join(workDir, 'plugins')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 process.env.DB_PATH = dbFilePath
-process.env.GSH_PLUGINS_ROOT = pluginsRoot
+process.env.BSP_PLUGINS_ROOT = pluginsRoot
 // 导入上传的临时目录也落在用例自己的目录里，不污染系统临时目录（与存档导入测试同一套做法）
-process.env.GSH_SAVE_IMPORT_ROOT = path.join(workDir, 'save-import')
+process.env.BSP_SAVE_IMPORT_ROOT = path.join(workDir, 'save-import')
 
 interface ApiEnvelope<T> {
   status: 0 | 1
@@ -245,7 +245,7 @@ describe('plugin routes', () => {
     const inspectUnauthorized = await app.inject({
       method: 'POST',
       url: '/app/system/plugins/import/inspect',
-      headers: { 'content-type': 'application/x-gsh-plugin-package' },
+      headers: { 'content-type': 'application/x-bsp-plugin-package' },
       payload: archive,
     })
     assert.equal(parseBody<unknown>(inspectUnauthorized.body).status, 0, '未登录时应当拒绝')
@@ -253,7 +253,7 @@ describe('plugin routes', () => {
     const inspect = await app.inject({
       method: 'POST',
       url: '/app/system/plugins/import/inspect',
-      headers: { token, 'content-type': 'application/x-gsh-plugin-package' },
+      headers: { token, 'content-type': 'application/x-bsp-plugin-package' },
       payload: archive,
     })
     const inspected = parseBody<{ uploadId: string, analysis: { pluginId: string, name: string } }>(inspect.body)
@@ -313,7 +313,7 @@ describe('plugin routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/app/system/plugins/import/inspect',
-      headers: { token, 'content-type': 'application/x-gsh-plugin-package' },
+      headers: { token, 'content-type': 'application/x-bsp-plugin-package' },
       payload: archive,
     })
     expectBusinessError(response.body, /签名|公钥/)
@@ -324,7 +324,7 @@ describe('plugin routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/app/system/plugins/import/inspect',
-      headers: { token, 'content-type': 'application/x-gsh-plugin-package' },
+      headers: { token, 'content-type': 'application/x-bsp-plugin-package' },
       payload: Buffer.from('这不是一个压缩包'),
     })
     expectBusinessError(response.body, /解压|压缩包/)
@@ -337,7 +337,7 @@ describe('plugin routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/app/system/plugins/import/inspect',
-      headers: { token, 'content-type': 'application/x-gsh-plugin-package' },
+      headers: { token, 'content-type': 'application/x-bsp-plugin-package' },
       payload: archive,
     })
     expectBusinessError(response.body, /找不到 plugin\.json/)
@@ -361,7 +361,7 @@ describe('plugin routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/app/system/plugins/import/inspect',
-      headers: { token, 'content-type': 'application/x-gsh-plugin-package' },
+      headers: { token, 'content-type': 'application/x-bsp-plugin-package' },
       payload: archive,
     })
     expectBusinessError(response.body, /已经有/)
@@ -409,7 +409,7 @@ describe('plugin routes', () => {
     const inspect = await app.inject({
       method: 'POST',
       url: '/app/system/plugins/import/inspect',
-      headers: { token, 'content-type': 'application/x-gsh-plugin-package' },
+      headers: { token, 'content-type': 'application/x-bsp-plugin-package' },
       payload: archive,
     })
     const inspected = parseBody<{ uploadId: string }>(inspect.body)

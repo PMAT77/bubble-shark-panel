@@ -21,7 +21,7 @@ import { recoverMissedTasksOnBoot } from './scheduler'
  * 的纯函数测试，恢复逻辑本身没有覆盖。
  */
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-schedule-boot-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-schedule-boot-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 interface LogEntry {

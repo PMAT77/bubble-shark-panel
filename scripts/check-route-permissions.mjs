@@ -49,7 +49,7 @@ const ANONYMOUS_ROUTES = new Map([
   ['/app/account/login', '登录本身必须匿名'],
   ['/app/account/logout', '只吊销传入的令牌；无效令牌是无操作，没有可泄露或可破坏的东西'],
   ['/app/account/token/refresh', 'refresh token 本身就是凭据：access token 过期后必须还能换新的'],
-  ['/app/account/password/recover', '密码找回靠 GSH_PASSWORD_RECOVERY_TOKEN 与限流把关'],
+  ['/app/account/password/recover', '密码找回靠 BSP_PASSWORD_RECOVERY_TOKEN 与限流把关'],
   ['/app/account/password/recovery-status', '只回答"服务端是否配了在线找回口令"'],
   // 这两条是游客（只读预览）免密登录：
   // - login-options 只回答"本面板是否开放只读预览"与一个展示用账号名，不含任何凭证；

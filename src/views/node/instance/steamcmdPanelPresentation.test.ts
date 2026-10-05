@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import type { RuntimeEnvironmentInput } from './steamcmdPanelPresentation.ts'
 import { resolveRuntimeEnvironmentView } from './steamcmdPanelPresentation.ts'
 
-const UNIFIED_REF = 'ghcr.io/pmat77/game-server-hub:v0.4.2'
+const UNIFIED_REF = 'ghcr.io/pmat77/bubblesharkpanel:v0.4.2'
 
 function baseInput(overrides: Partial<RuntimeEnvironmentInput> = {}): RuntimeEnvironmentInput {
   return {
@@ -48,14 +48,14 @@ describe('resolveRuntimeEnvironmentView', () => {
     const input = baseInput({
       steamcmdInstalled: true,
       gameDstInstalled: false,
-      gameDstImage: 'ghcr.io/pmat77/game-server-hub:v0.3.10',
+      gameDstImage: 'ghcr.io/pmat77/bubblesharkpanel:v0.3.10',
     })
     const view = resolveRuntimeEnvironmentView(input)
 
     assert.equal(view.imageUnified, false)
     assert.deepEqual(view.imageRows, [
       { label: '安装镜像', value: UNIFIED_REF },
-      { label: '运行镜像', value: 'ghcr.io/pmat77/game-server-hub:v0.3.10' },
+      { label: '运行镜像', value: 'ghcr.io/pmat77/bubblesharkpanel:v0.3.10' },
     ])
     assert.deepEqual(tagsOf(input), ['Docker 可用', '安装镜像已就绪', '安装实例后自动准备'])
     assert.equal(view.secondaryPullVisible, true)
@@ -64,7 +64,7 @@ describe('resolveRuntimeEnvironmentView', () => {
   it('Docker 异构且运行镜像已就绪：不再需要第二个入口', () => {
     const input = baseInput({
       gameDstInstalled: true,
-      gameDstImage: 'ghcr.io/pmat77/game-server-hub:v0.3.10',
+      gameDstImage: 'ghcr.io/pmat77/bubblesharkpanel:v0.3.10',
     })
 
     assert.equal(resolveRuntimeEnvironmentView(input).secondaryPullVisible, false)
@@ -110,13 +110,13 @@ describe('resolveRuntimeEnvironmentView', () => {
   it('Native 模式：SteamCMD 路径单行、无运行镜像行与 Docker 标签', () => {
     const input = baseInput({
       isNativeMode: true,
-      steamcmdImage: '/opt/game-server-hub/runtime/steamcmd/steamcmd.sh',
+      steamcmdImage: '/opt/bubblesharkpanel/runtime/steamcmd/steamcmd.sh',
       gameDstImage: '',
     })
     const view = resolveRuntimeEnvironmentView(input)
 
     assert.equal(view.imageUnified, false)
-    assert.deepEqual(view.imageRows, [{ label: 'SteamCMD 路径', value: '/opt/game-server-hub/runtime/steamcmd/steamcmd.sh' }])
+    assert.deepEqual(view.imageRows, [{ label: 'SteamCMD 路径', value: '/opt/bubblesharkpanel/runtime/steamcmd/steamcmd.sh' }])
     assert.deepEqual(tagsOf(input), ['运行环境正常', 'SteamCMD 已就绪'])
     assert.equal(view.primaryActionLabel, '检查 SteamCMD')
     assert.equal(view.secondaryPullVisible, false)
@@ -166,7 +166,7 @@ describe('resolveRuntimeEnvironmentView', () => {
       ]
     }).join('\n')
 
-    for (const forbidden of ['PANEL_INSTANCES_DIR', '容器内', '数据卷', '统一镜像', '面板更新', 'GSH_', 'systemd', 'linger', 'user bus', 'Compose', 'panel.env']) {
+    for (const forbidden of ['PANEL_INSTANCES_DIR', '容器内', '数据卷', '统一镜像', '面板更新', 'BSP_', 'systemd', 'linger', 'user bus', 'Compose', 'panel.env']) {
       assert.equal(texts.includes(forbidden), false, `界面文案不应出现「${forbidden}」`)
     }
   })

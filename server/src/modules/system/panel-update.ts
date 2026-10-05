@@ -1,3 +1,5 @@
+import { releaseBrandName } from '../../../../shared/release-brand'
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyInstance } from 'fastify'
 import type DockerClient from 'dockerode'
 import fs from 'node:fs'
@@ -144,10 +146,10 @@ const DEFAULT_CHECK_INTERVAL_HOURS = 1
  * updater 容器运行时：需要 `docker` CLI + compose 插件。
  * v0.3.10 起统一镜像自带这两样，因此优先用「目标镜像 / 当前面板镜像」在本地直接跑，
  * 不再依赖从 Docker Hub 拉取官方 CLI 镜像；下面两个只是本地没有可用镜像时的兜底。
- * 用全限定引用，备选 registry（GSH_IMAGE_MIRRORS）才能拼出 <mirror>/library/docker:... 。
+ * 用全限定引用，备选 registry（BSP_IMAGE_MIRRORS）才能拼出 <mirror>/library/docker:... 。
  */
 const FALLBACK_UPDATER_IMAGES = ['docker.io/library/docker:27-cli', 'docker.io/library/docker:cli']
-const UPDATER_CONTAINER_NAME = 'game-server-hub-updater'
+const UPDATER_CONTAINER_NAME = 'bubblesharkpanel-updater'
 /** 目标镜像拉取的重试策略（与实例镜像拉取保持一致） */
 const TARGET_PULL_MAX_ATTEMPTS = 3
 const TARGET_PULL_RETRY_BASE_MS = 2_000
@@ -365,12 +367,12 @@ async function inspectLocalImageDigest(image: string): Promise<{
 
 async function fetchLatestGitHubRelease(repo: string): Promise<GitHubReleaseSummary | null> {
   try {
-    // 默认直连 api.github.com；国内服务器可配 GSH_GITHUB_API_BASE 指向兼容 GitHub API 的反代
+    // 默认直连 api.github.com；国内服务器可配 BSP_GITHUB_API_BASE 指向兼容 GitHub API 的反代
     const apiBase = (loadServerConfig().githubApiBase || 'https://api.github.com').replace(/\/+$/, '')
     const response = await fetch(`${apiBase}/repos/${repo}/releases/latest`, {
       headers: {
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'game-server-hub-panel-update',
+        'User-Agent': 'bubblesharkpanel-panel-update',
       },
       signal: AbortSignal.timeout(15_000),
     })
@@ -517,10 +519,10 @@ function buildManualUpdateCommand(stackPaths: StackPaths | null, releaseTag?: st
     const prefix = (proxy ? [proxy] : GITHUB_PROXY_SITES)[0].replace(/\/+$/, '')
     return [
       `# 下载不通时把下面 URL 换成直连：${directUrl}`,
-      `curl -fsSL "${prefix}/${directUrl}" | sudo env GSH_RELEASE_TAG=${targetTag} bash -s -- --mode native`,
+      `curl -fsSL "${prefix}/${directUrl}" | sudo env BSP_RELEASE_TAG=${targetTag} bash -s -- --mode native`,
     ].join('\n')
   }
-  const hostDir = stackPaths?.hostDir || config.stackDir || '/opt/game-server-hub'
+  const hostDir = stackPaths?.hostDir || config.stackDir || '/opt/bubblesharkpanel'
   const composeArgs = config.composeFiles.map(file => `-f ${file}`).join(' ')
   return [
     `cd ${hostDir}`,
@@ -863,7 +865,7 @@ export function buildOfflineImageCommand(githubRepo: string, releaseTag: string 
   if (!tag || !repo) {
     return null
   }
-  const asset = `game-server-hub-${tag}-docker-image.tar.gz`
+  const asset = `${releaseBrandName(tag)}-${tag}-docker-image.tar.gz`
   return [
     `wget https://github.com/${repo}/releases/download/${tag}/${asset}`,
     `gunzip -c ${asset} | docker load`,
@@ -884,6 +886,10 @@ export function buildUpdaterShellCommand(
   const resolvedTag = normalizeReleaseTag(releaseTag, parseImageRef(targetImage).tag)
   const pairs = [
     `PANEL_IMAGE=${targetImage}`,
+    `BSP_GAME_DST_IMAGE=${targetImage}`,
+    `BSP_STEAMCMD_IMAGE=${targetImage}`,
+    `BSP_RELEASE_VERSION=${resolvedTag}`,
+    // Existing Compose files still consume the legacy image keys.
     `GSH_GAME_DST_IMAGE=${targetImage}`,
     `GSH_STEAMCMD_IMAGE=${targetImage}`,
     `GSH_RELEASE_VERSION=${resolvedTag}`,
@@ -895,7 +901,7 @@ export function buildUpdaterShellCommand(
     'cd /stack',
     'backup="panel.env.bak.$(date +%Y%m%d%H%M%S)"',
     'cp panel.env "$backup"',
-    'echo "[gsh] panel.env 已备份到 $backup"',
+    'echo "[bsp] panel.env 已备份到 $backup"',
     `for pair in ${quotedPairs}; do`,
     '  key="${pair%%=*}"',
     '  if grep -q "^${key}=" panel.env; then',
@@ -905,10 +911,10 @@ export function buildUpdaterShellCommand(
     '  fi',
     'done',
     `if ! docker compose --env-file panel.env ${composeArgs} up -d panel; then`,
-    `  echo "[gsh] 重建面板失败，可回滚：${rollback}"`,
+    `  echo "[bsp] 重建面板失败，可回滚：${rollback}"`,
     '  exit 1',
     'fi',
-    'echo "[gsh] 面板重建完成"',
+    'echo "[bsp] 面板重建完成"',
   ].join('\n')
 }
 
@@ -1082,7 +1088,7 @@ async function startPanelComposeUpdater(input: {
   return container.id
 }
 
-const PORT_SYNC_CONTAINER_NAME = 'game-server-hub-port-sync'
+const PORT_SYNC_CONTAINER_NAME = 'bubblesharkpanel-port-sync'
 
 async function removeContainerIfExists(docker: DockerClient, name: string): Promise<void> {
   try {
@@ -1619,7 +1625,7 @@ async function downloadTargetImage(input: {
   }
 }
 
-/** 面板里的选择（数据库）优先于环境变量 GSH_PANEL_UPDATE_SOURCE；两者都不可用时用 auto */
+/** 面板里的选择（数据库）优先于环境变量 BSP_PANEL_UPDATE_SOURCE；两者都不可用时用 auto */
 export function pickPanelUpdateSource(
   dbValue: string | null | undefined,
   envValue: 'auto' | 'offline' | 'pull',
@@ -1711,7 +1717,7 @@ async function downloadTargetImageFromRelease(input: {
 /**
  * 离线包里的镜像引用由发布流程决定，可能与 PANEL_IMAGE 不同（自建仓库、自定义 tag）。
  * 用 load 前后本地镜像引用的差集确定这次导入了什么，再补一个指向目标引用的别名；
- * 不按仓库名去猜镜像引用 —— 仓库是 game-serve-hub，镜像却是 game-server-hub。
+ * 不按仓库名去猜镜像引用 —— 仓库是 BubbleSharkPanel，镜像却是 bubblesharkpanel。
  */
 async function adoptImportedImage(
   docker: DockerClient,
@@ -1847,7 +1853,7 @@ async function scheduleNextCheck(app: FastifyInstance) {
 }
 
 export function schedulePanelUpdateChecks(app: FastifyInstance) {
-  if (process.env.GSH_UNIT_TEST === '1') {
+  if (readBrandEnv('BSP_UNIT_TEST') === '1') {
     return
   }
   if (schedulerStarted) {

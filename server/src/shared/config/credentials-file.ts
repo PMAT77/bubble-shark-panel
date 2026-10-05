@@ -7,7 +7,7 @@ export const ADMIN_CREDENTIALS_FILENAME = 'admin-credentials.txt'
 /**
  * 环境变量中的管理员凭证本次启动的落库结果。
  * - created：数据库中原本没有该管理员，已用该凭证创建
- * - updated：开启了 GSH_SYNC_ADMIN_PASSWORD_FROM_ENV，已用该凭证覆盖既有密码
+ * - updated：开启了 BSP_SYNC_ADMIN_PASSWORD_FROM_ENV，已用该凭证覆盖既有密码
  * - skipped：管理员已存在且未开启同步，环境变量里的密码未写库
  * - absent：未提供管理员名或密码，未参与落库
  */
@@ -33,7 +33,7 @@ export function resolveAdminCredentialsFilePath(dbPath: string): string {
 export function writeAdminCredentialsFile(dbPath: string, username: string, password: string): string {
   const filePath = resolveAdminCredentialsFilePath(dbPath)
   fs.writeFileSync(filePath, [
-    '# Game Server Hub 初始管理员凭据',
+    '# BubbleShark Panel 初始管理员凭据',
     '# 首次登录修改密码后本文件即失效，可手动删除。',
     `ADMIN_USERNAME=${username}`,
     `ADMIN_PASSWORD=${password}`,

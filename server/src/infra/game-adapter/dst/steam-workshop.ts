@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../../shared/brand-env'
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -54,20 +55,20 @@ function normalizeBaseUrl(raw: string, fallback: string): string {
 }
 
 const STEAM_API_BASE_URL = normalizeBaseUrl(
-  process.env.GSH_STEAM_WEBAPI_BASE_URL ?? '',
+  readBrandEnv('BSP_STEAM_WEBAPI_BASE_URL') ?? '',
   'https://api.steampowered.com/',
 )
 const WORKSHOP_BROWSE_URL = normalizeBaseUrl(
-  process.env.GSH_STEAM_COMMUNITY_BASE_URL ?? '',
+  readBrandEnv('BSP_STEAM_COMMUNITY_BASE_URL') ?? '',
   'https://steamcommunity.com/',
 )
-const STEAM_WEBAPI_KEY = process.env.GSH_STEAM_WEBAPI_KEY?.trim() || ''
-const STEAM_RELAY_URL = process.env.GSH_STEAM_RELAY_URL?.trim() || ''
-const STEAM_RELAY_TOKEN = process.env.GSH_STEAM_RELAY_TOKEN?.trim() || ''
-const IS_UNIT_TEST = process.env.GSH_UNIT_TEST === '1'
-const FETCH_TIMEOUT_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_FETCH_TIMEOUT_MS', 12_000)
-const FETCH_RETRY_TIMES = readPositiveIntEnv('GSH_STEAM_WORKSHOP_FETCH_RETRY_TIMES', 2)
-const FETCH_RETRY_BASE_DELAY_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_FETCH_RETRY_BASE_DELAY_MS', 300)
+const STEAM_WEBAPI_KEY = readBrandEnv('BSP_STEAM_WEBAPI_KEY')?.trim() || ''
+const STEAM_RELAY_URL = readBrandEnv('BSP_STEAM_RELAY_URL')?.trim() || ''
+const STEAM_RELAY_TOKEN = readBrandEnv('BSP_STEAM_RELAY_TOKEN')?.trim() || ''
+const IS_UNIT_TEST = readBrandEnv('BSP_UNIT_TEST') === '1'
+const FETCH_TIMEOUT_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_FETCH_TIMEOUT_MS', 12_000)
+const FETCH_RETRY_TIMES = readPositiveIntEnv('BSP_STEAM_WORKSHOP_FETCH_RETRY_TIMES', 2)
+const FETCH_RETRY_BASE_DELAY_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_FETCH_RETRY_BASE_DELAY_MS', 300)
 /**
  * 按源拆分的超时。
  *
@@ -75,17 +76,17 @@ const FETCH_RETRY_BASE_DELAY_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_FETCH_R
  * 一个源失败之后，后面的源用 FAST_FAIL 超时且只试一次——被墙时「快速拿到一个能渲染的
  * 结果」比「多试几次」重要得多。
  */
-const OFFICIAL_TIMEOUT_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_OFFICIAL_TIMEOUT_MS', 5_000)
-const RELAY_TIMEOUT_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_RELAY_TIMEOUT_MS', 5_000)
-const FAST_FAIL_TIMEOUT_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_FAST_FAIL_TIMEOUT_MS', 3_500)
+const OFFICIAL_TIMEOUT_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_OFFICIAL_TIMEOUT_MS', 5_000)
+const RELAY_TIMEOUT_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_RELAY_TIMEOUT_MS', 5_000)
+const FAST_FAIL_TIMEOUT_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_FAST_FAIL_TIMEOUT_MS', 3_500)
 /** 单次列表拉取的总预算：耗尽即降到缓存/离线兜底，不再继续等上游 */
-const TOTAL_BUDGET_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_TOTAL_BUDGET_MS', 10_000)
+const TOTAL_BUDGET_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_TOTAL_BUDGET_MS', 10_000)
 const DEFAULT_PAGE_SIZE = 20
 const MAX_PAGE_SIZE = 50
 const DEFAULT_SORT: SteamModSort = 'trend'
 const DEFAULT_TREND_DAYS: SteamModTrendDays = 7
-const CACHE_TTL_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_CACHE_TTL_MS', 2 * 60 * 1000)
-const STALE_CACHE_TTL_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_STALE_TTL_MS', 30 * 60 * 1000)
+const CACHE_TTL_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_CACHE_TTL_MS', 2 * 60 * 1000)
+const STALE_CACHE_TTL_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_STALE_TTL_MS', 30 * 60 * 1000)
 /**
  * 离线缓存窗口：Steam 完全不可达时还能退回多久以前的那份列表。
  *
@@ -94,34 +95,34 @@ const STALE_CACHE_TTL_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_STALE_TTL_MS',
  * 面板照常把列表渲染出来并标注「离线数据」，而不是白屏。
  */
 const OFFLINE_CACHE_TTL_MS = readPositiveIntEnv(
-  'GSH_STEAM_WORKSHOP_OFFLINE_TTL_MS',
+  'BSP_STEAM_WORKSHOP_OFFLINE_TTL_MS',
   7 * 24 * 60 * 60 * 1000,
 )
-const WORKSHOP_DETAIL_CACHE_TTL_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_DETAIL_CACHE_TTL_MS', 5 * 60 * 1000)
-const WORKSHOP_RATING_CACHE_TTL_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_RATING_CACHE_TTL_MS', 10 * 60 * 1000)
+const WORKSHOP_DETAIL_CACHE_TTL_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_DETAIL_CACHE_TTL_MS', 5 * 60 * 1000)
+const WORKSHOP_RATING_CACHE_TTL_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_RATING_CACHE_TTL_MS', 10 * 60 * 1000)
 /** Mod 元数据（标题/缩略图/版本时间）缓存：版本检测与名称补全共用同一份响应 */
-const WORKSHOP_METADATA_CACHE_TTL_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_METADATA_CACHE_TTL_MS', 10 * 60 * 1000)
+const WORKSHOP_METADATA_CACHE_TTL_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_METADATA_CACHE_TTL_MS', 10 * 60 * 1000)
 /** GetPublishedFileDetails 单次请求的 ID 上限，超过则分批串行 */
-const WORKSHOP_METADATA_BATCH_SIZE = readPositiveIntEnv('GSH_STEAM_WORKSHOP_METADATA_BATCH_SIZE', 100)
+const WORKSHOP_METADATA_BATCH_SIZE = readPositiveIntEnv('BSP_STEAM_WORKSHOP_METADATA_BATCH_SIZE', 100)
 /** 单次调用的分批上限，防止异常大的清单把请求拖成几十次串行 */
-const WORKSHOP_METADATA_MAX_BATCHES = readPositiveIntEnv('GSH_STEAM_WORKSHOP_METADATA_MAX_BATCHES', 10)
-const RATE_LIMIT_WINDOW_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_RATE_LIMIT_WINDOW_MS', 1000)
+const WORKSHOP_METADATA_MAX_BATCHES = readPositiveIntEnv('BSP_STEAM_WORKSHOP_METADATA_MAX_BATCHES', 10)
+const RATE_LIMIT_WINDOW_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_RATE_LIMIT_WINDOW_MS', 1000)
 const RATE_LIMIT_PER_KEY = IS_UNIT_TEST
   ? 100_000
-  : readPositiveIntEnv('GSH_STEAM_WORKSHOP_RATE_LIMIT_PER_KEY', 2)
+  : readPositiveIntEnv('BSP_STEAM_WORKSHOP_RATE_LIMIT_PER_KEY', 2)
 const RATE_LIMIT_GLOBAL = IS_UNIT_TEST
   ? 100_000
-  : readPositiveIntEnv('GSH_STEAM_WORKSHOP_RATE_LIMIT_GLOBAL', 8)
+  : readPositiveIntEnv('BSP_STEAM_WORKSHOP_RATE_LIMIT_GLOBAL', 8)
 const CIRCUIT_BREAKER_FAIL_THRESHOLD = IS_UNIT_TEST
   ? 100_000
-  : readPositiveIntEnv('GSH_STEAM_WORKSHOP_CIRCUIT_FAIL_THRESHOLD', 6)
-const CIRCUIT_BREAKER_OPEN_MS = readPositiveIntEnv('GSH_STEAM_WORKSHOP_CIRCUIT_OPEN_MS', 30 * 1000)
-const SHOULD_DISABLE_DISK_CACHE = process.env.GSH_STEAM_WORKSHOP_DISABLE_DISK_CACHE === '1'
+  : readPositiveIntEnv('BSP_STEAM_WORKSHOP_CIRCUIT_FAIL_THRESHOLD', 6)
+const CIRCUIT_BREAKER_OPEN_MS = readPositiveIntEnv('BSP_STEAM_WORKSHOP_CIRCUIT_OPEN_MS', 30 * 1000)
+const SHOULD_DISABLE_DISK_CACHE = readBrandEnv('BSP_STEAM_WORKSHOP_DISABLE_DISK_CACHE') === '1'
   || process.env.NODE_ENV === 'test'
   || process.argv.includes('--test')
 const DISK_CACHE_FILE = SHOULD_DISABLE_DISK_CACHE
   ? ''
-  : process.env.GSH_STEAM_WORKSHOP_CACHE_FILE?.trim()
+  : readBrandEnv('BSP_STEAM_WORKSHOP_CACHE_FILE')?.trim()
       || path.resolve(process.cwd(), 'data', 'cache', 'steam-workshop-mod-cache.json')
 
 interface SteamModRawItem {
@@ -294,7 +295,7 @@ let diskCacheLoaded = false
 let diskPersistTimer: NodeJS.Timeout | null = null
 
 function readPositiveIntEnv(key: string, fallback: number): number {
-  const rawValue = process.env[key]
+  const rawValue = readBrandEnv(key)
   if (!rawValue) {
     return fallback
   }
@@ -766,7 +767,7 @@ function buildPowerShellWorkshopFetchScript(sourceUrl: string, timeoutMs = FETCH
   return [
     '$ProgressPreference = \'SilentlyContinue\'',
     '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12',
-    '$headers = @{ \'Accept-Language\' = \'zh-CN,zh;q=0.9,en;q=0.8\'; \'User-Agent\' = \'game-server-hub-mod-fetcher/1.0\' }',
+    '$headers = @{ \'Accept-Language\' = \'zh-CN,zh;q=0.9,en;q=0.8\'; \'User-Agent\' = \'bubblesharkpanel-mod-fetcher/1.0\' }',
     `(Invoke-WebRequest -UseBasicParsing -Uri '${escapedUrl}' -TimeoutSec ${timeoutSeconds} -Headers $headers).Content`,
   ].join('; ')
 }
@@ -1207,7 +1208,7 @@ async function fetchSteamPersonaName(steamId: string, deadline = Date.now() + TO
     const summaryResponse = await steamHttpRequest(summaryUrl.toString(), {
       headers: {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'User-Agent': 'game-server-hub-mod-fetcher/1.0',
+        'User-Agent': 'bubblesharkpanel-mod-fetcher/1.0',
       },
       timeoutMs: remainingTimeout(deadline, FETCH_TIMEOUT_MS),
     })
@@ -1227,7 +1228,7 @@ async function fetchSteamPersonaName(steamId: string, deadline = Date.now() + TO
       {
         headers: {
           'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-          'User-Agent': 'game-server-hub-mod-fetcher/1.0',
+          'User-Agent': 'bubblesharkpanel-mod-fetcher/1.0',
         },
         timeoutMs: remainingTimeout(deadline, FETCH_TIMEOUT_MS),
       },
@@ -1278,7 +1279,7 @@ async function performPublishedFileDetailsRequest(
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'game-server-hub-mod-fetcher/1.0',
+      'User-Agent': 'bubblesharkpanel-mod-fetcher/1.0',
       'Accept-Language': acceptLanguageForLocale(options?.locale ?? DEFAULT_MOD_CONTENT_LOCALE),
     }
     const response = await steamHttpRequest(url, {
@@ -1436,7 +1437,7 @@ async function fetchWorkshopHtmlByNative(sourceUrl: string, timeoutMs = FETCH_TI
     const response = await steamHttpRequest(sourceUrl, {
       headers: {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'User-Agent': 'game-server-hub-mod-fetcher/1.0',
+        'User-Agent': 'bubblesharkpanel-mod-fetcher/1.0',
       },
       timeoutMs,
     })
@@ -1467,7 +1468,7 @@ async function fetchJsonWithTimeout(
   const response = await steamHttpRequest(url, {
     headers: {
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'User-Agent': 'game-server-hub-mod-fetcher/1.0',
+      'User-Agent': 'bubblesharkpanel-mod-fetcher/1.0',
       ...headers,
     },
     timeoutMs,
@@ -1489,7 +1490,7 @@ async function fetchSteamWorkshopHtml(sourceUrl: string, timeoutMs = FETCH_TIMEO
     return await fetchWorkshopHtmlByNative(sourceUrl, timeoutMs)
   }
   catch (error) {
-    if (process.platform !== 'win32' || process.env.GSH_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK === '1') {
+    if (process.platform !== 'win32' || readBrandEnv('BSP_STEAM_WORKSHOP_DISABLE_POWERSHELL_FALLBACK') === '1') {
       throw error
     }
     if (isSteamWorkshopFetchError(error) && error.code === 'STEAM_RATE_LIMIT') {
@@ -1582,7 +1583,7 @@ function mapQueryFilesItems(items: SteamQueryFilesResponseItem[]): SteamModRawIt
 }
 
 async function fetchSteamDetailsMap(workshopIds: string[], deadline = Date.now() + TOTAL_BUDGET_MS): Promise<Map<string, SteamModRawItem>> {
-  const apiKey = process.env.GSH_STEAM_WEBAPI_KEY?.trim() || ''
+  const apiKey = readBrandEnv('BSP_STEAM_WEBAPI_KEY')?.trim() || ''
   if (!apiKey || workshopIds.length === 0) {
     return new Map()
   }
@@ -1628,7 +1629,7 @@ async function fetchWorkshopRatingsByGetDetails(workshopIds: string[], deadline 
   if (uniqueIds.length === 0) {
     return result
   }
-  const apiKey = process.env.GSH_STEAM_WEBAPI_KEY?.trim() || ''
+  const apiKey = readBrandEnv('BSP_STEAM_WEBAPI_KEY')?.trim() || ''
   if (!apiKey) {
     for (const workshopId of uniqueIds) {
       result.set(workshopId, null)
@@ -1655,7 +1656,7 @@ async function enrichWorkshopItemRatings(items: SteamModRawItem[], deadline = Da
   const missingIds = items
     .filter(item => item.rating === null)
     .map(item => item.workshopId)
-  const apiKey = process.env.GSH_STEAM_WEBAPI_KEY?.trim() || ''
+  const apiKey = readBrandEnv('BSP_STEAM_WEBAPI_KEY')?.trim() || ''
   if (missingIds.length === 0 || !apiKey) {
     return
   }
@@ -2181,7 +2182,7 @@ export async function fetchDstSteamWorkshopMods(input: {
 /** 面板启动后后台预热默认 Mod 市场列表（sort=trend, page=1） */
 export function scheduleWarmSteamWorkshopModCache(): void {
   if (IS_UNIT_TEST) return
-  if (process.env.GSH_STEAM_WORKSHOP_WARM_CACHE === '0') {
+  if (readBrandEnv('BSP_STEAM_WORKSHOP_WARM_CACHE') === '0') {
     return
   }
   loadDiskCacheOnce()
@@ -2364,7 +2365,7 @@ export async function fetchWorkshopRatings(workshopIds: string[]): Promise<Map<s
   if (missingIds.length === 0) {
     return result
   }
-  const apiKey = process.env.GSH_STEAM_WEBAPI_KEY?.trim() || ''
+  const apiKey = readBrandEnv('BSP_STEAM_WEBAPI_KEY')?.trim() || ''
   if (apiKey) {
     try {
       const fromGetDetails = await fetchWorkshopRatingsByGetDetails(missingIds)

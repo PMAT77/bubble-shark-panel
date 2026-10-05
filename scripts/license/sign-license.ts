@@ -3,15 +3,15 @@
  * 签发 Pro 授权许可（离线工具，私有环境执行）。
  *
  * 产出 `license.json`：客户把它放到面板数据目录（默认 `<数据目录>/license.json`），
- * 或用 `GSH_LICENSE_FILE` 指定路径。核心用内置公钥离线验签，**不需要联网**。
+ * 或用 `BSP_LICENSE_FILE` 指定路径。核心用内置公钥离线验签，**不需要联网**。
  *
  * 用法：
  *   pnpm exec tsx scripts/license/sign-license.ts \
- *     --key ~/.gsh-license-keys/license-private.gsh-key \
+ *     --key ~/.bsp-license-keys/license-private.bsp-key \
  *     --customer "某某社区" \
  *     --capabilities multi-node,audit-log,remote-backup \
  *     --days 365 \
- *     [--fingerprint gsh-xxxxxxxx] [--note "订单 2026-001"] [--out license.json]
+ *     [--fingerprint bsp-xxxxxxxx] [--note "订单 2026-001"] [--out license.json]
  *
  * 约定：
  * - `--days` 与 `--expires` 二选一，都不给则签发**永久**授权（面板会如实显示「永久」）；
@@ -58,7 +58,7 @@ function parseArgs(argv: string[]): Args {
       continue
     }
     if (arg === '--help' || arg === '-h') {
-      console.log('用法：pnpm exec tsx scripts/license/sign-license.ts --key <私钥> --customer <客户> --capabilities <能力清单> [--days N | --expires ISO] [--fingerprint gsh-xxx] [--note 备注] [--out license.json] [--force]')
+      console.log('用法：pnpm exec tsx scripts/license/sign-license.ts --key <私钥> --customer <客户> --capabilities <能力清单> [--days N | --expires ISO] [--fingerprint bsp-xxx] [--note 备注] [--out license.json] [--force]')
       console.log(`能力可选：${CAPABILITY_HINT}`)
       process.exit(0)
     }
@@ -156,5 +156,5 @@ if (args.note) {
   console.log(`  备注：${args.note}`)
 }
 console.log('')
-console.log('[sign] 交给客户：把该文件放到面板数据目录下的 license.json（或用 GSH_LICENSE_FILE 指定路径）。')
+console.log('[sign] 交给客户：把该文件放到面板数据目录下的 license.json（或用 BSP_LICENSE_FILE 指定路径）。')
 console.log('[sign] 提醒：许可不影响 Community 核心能力；到期或无效时正在运行的游戏实例不会被停止。')

@@ -23,7 +23,7 @@ interface LoginData {
   mustChangePassword?: boolean
 }
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-force-pwd-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-force-pwd-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 const NEW_PASSWORD = 'ForcePwd#2026'
 

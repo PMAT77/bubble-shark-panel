@@ -14,7 +14,7 @@ import {
   upsertInstanceMod,
 } from './index'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-mod-version-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-mod-version-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 /** Mod 版本时间入库：迁移新增三列后，读写两侧的列名必须对得上 */

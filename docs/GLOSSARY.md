@@ -11,19 +11,19 @@
 | **分片（Shard）** | 实例内部的独立世界进程。DST 有 **地上（Master）** 与 **洞穴（Caves）** 两个分片，各占一组 UDP 端口与一份内存 |
 | **集群（Cluster）** | DST 对"一个服务器的全部世界"的称呼，对应面板里的一个实例；集群配置指 `cluster.ini` 中的房间与网络设置 |
 | **Docker 模式** | 面板与游戏都跑在容器里，由 Docker Compose 编排 |
-| **Native systemd 模式** | 不依赖 Docker：面板是系统级 systemd 服务，游戏分片是 `gsh` 用户的 systemd 用户服务 |
-| **`gsh` CLI** | 安装在宿主机的命令行工具，只管面板栈（`status` / `logs` / `restart` / `update` / `doctor` / `setup-swap`），不管理游戏实例 |
-| **`panel.env`** | 面板的环境变量文件，生产安装后在 `/opt/game-server-hub/panel.env`；模板见仓库根目录 `panel.env.example` |
-| **linger** | systemd 特性：`loginctl enable-linger gsh` 让 `gsh` 的用户服务在无人登录时继续运行 |
+| **Native systemd 模式** | 不依赖 Docker：面板是系统级 systemd 服务，游戏分片是 `bsp` 用户的 systemd 用户服务 |
+| **`bsp` CLI** | 安装在宿主机的命令行工具，只管面板栈（`status` / `logs` / `restart` / `update` / `doctor` / `setup-swap`），不管理游戏实例 |
+| **`panel.env`** | 面板的环境变量文件，生产安装后在 `/opt/bubblesharkpanel/panel.env`；模板见仓库根目录 `panel.env.example` |
+| **linger** | systemd 特性：`loginctl enable-linger bsp` 让 `bsp` 的用户服务在无人登录时继续运行 |
 | **运行时（Runtime）/ 适配器（Adapter）** | 代码分层概念：运行时指管理游戏进程的抽象接口，适配器是它的具体实现（Docker、systemd） |
 
 ## 镜像与分发
 
 | 术语 | 含义 |
 | --- | --- |
-| **统一镜像** | v0.2.0 起把面板、DST 运行库与 SteamCMD 合并成的单个镜像 `ghcr.io/pmat77/game-server-hub` |
+| **统一镜像** | v0.2.0 起把面板、DST 运行库与 SteamCMD 合并成的单个镜像 `ghcr.io/pmat77/bubblesharkpanel` |
 | **tag 与 digest** | tag（如 `v0.4.2`）是可读的版本标签，digest 是镜像内容的不可变指纹；部署与排查以 digest 为准 |
-| **离线镜像包** | 每个 Release 附带的 `game-server-hub-<tag>-docker-image.tar.gz`（含同名 `.sha256`），用 `docker load -i` 导入，供 GHCR 不可达时使用 |
+| **离线镜像包** | 每个 Release 附带的 `bubblesharkpanel-<tag>-docker-image.tar.gz`（含同名 `.sha256`），用 `docker load -i` 导入，供 GHCR 不可达时使用 |
 | **安装器** | `scripts/install.linux.sh`，负责系统预检、装 Docker/SteamCMD、写入 `panel.env`、拉取镜像并启动面板 |
 | **网络档位** | 安装器的 `--network auto\|cn\|global`，决定软件源与下载加速策略；`cn` 会临时切换国内软件源并在失败时还原 |
 

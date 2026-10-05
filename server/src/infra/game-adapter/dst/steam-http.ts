@@ -45,15 +45,15 @@ export interface SteamProxyConfig {
 
 /** 代理相关的环境变量，按优先级排列 */
 const PROXY_ENV_KEYS = [
-  'GSH_STEAM_HTTPS_PROXY',
-  'GSH_STEAM_HTTP_PROXY',
+  'BSP_STEAM_HTTPS_PROXY',
+  'BSP_STEAM_HTTP_PROXY',
   'HTTPS_PROXY',
   'https_proxy',
   'HTTP_PROXY',
   'http_proxy',
 ] as const
 
-const NO_PROXY_ENV_KEYS = ['GSH_STEAM_NO_PROXY', 'NO_PROXY', 'no_proxy'] as const
+const NO_PROXY_ENV_KEYS = ['BSP_STEAM_NO_PROXY', 'NO_PROXY', 'no_proxy'] as const
 
 /** 无论配没配 NO_PROXY 都要绕过的本地地址，避免把面板自身/同机服务导进代理 */
 const ALWAYS_BYPASS = ['localhost', '127.0.0.1', '::1', '0.0.0.0', 'host.docker.internal']

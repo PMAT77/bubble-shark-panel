@@ -16,7 +16,7 @@ describe('buildDstOnlinePlayerCountCommand', () => {
   it('uses AllPlayers and embeds query token', () => {
     const command = buildDstOnlinePlayerCountCommand('a1b2c3d4')
     assert.match(command, /#AllPlayers/)
-    assert.match(command, /GSH_PLAYER_COUNT:a1b2c3d4:/)
+    assert.match(command, /BSP_PLAYER_COUNT:a1b2c3d4:/)
     assert.doesNotMatch(command, /GetClientTable/)
   })
 })
@@ -63,9 +63,9 @@ describe('parseDstOnlinePlayerCountLine', () => {
 describe('buildDstOnlinePlayersCommand', () => {
   it('emits the begin, item and end markers with the query token', () => {
     const command = buildDstOnlinePlayersCommand('a1b2c3d4')
-    assert.match(command, /GSH_PLAYER_LIST_BEGIN:a1b2c3d4:/)
-    assert.match(command, /GSH_PLAYER_LIST_ITEM:a1b2c3d4:/)
-    assert.match(command, /GSH_PLAYER_LIST_END:a1b2c3d4/)
+    assert.match(command, /BSP_PLAYER_LIST_BEGIN:a1b2c3d4:/)
+    assert.match(command, /BSP_PLAYER_LIST_ITEM:a1b2c3d4:/)
+    assert.match(command, /BSP_PLAYER_LIST_END:a1b2c3d4/)
     assert.match(command, /pairs\(AllPlayers\)/)
   })
 

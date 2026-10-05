@@ -35,7 +35,7 @@ export async function inspectContentTree(root: string, options: { requireModInfo
   const walk = (dir: string, depth: number) => {
     if (depth > (options.maxDepth ?? 32)) throw new Error('内容目录深度超过上限')
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === '.gsh-legacy-copy.json') continue
+      if (entry.name === '.bsp-legacy-copy.json') continue
       if (options.ignoreSteamArchives && depth === 0 && /^\d+_legacy\.bin$/.test(entry.name)) continue
       if (entry.name.includes('\\') || /^[A-Za-z]:/.test(entry.name)) throw new Error('内容含非法文件名')
       if (++entries > (options.maxEntries ?? 100_000)) throw new Error('内容条目数超过上限')

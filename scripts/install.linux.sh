@@ -2,20 +2,83 @@
 
 set -Eeuo pipefail
 
+# Accept legacy process settings without overriding an explicitly supplied BSP key.
+for legacy_key in ${!GSH_@}; do
+  brand_key="BSP_${legacy_key#GSH_}"
+  if [[ ! -v "$brand_key" ]]; then
+    printf -v "$brand_key" '%s' "${!legacy_key}"
+    export "$brand_key"
+  fi
+done
+unset legacy_key brand_key
+
 # -----------------------------------------------------------------------------
 # 安装脚本默认参数与运行时路径
 # -----------------------------------------------------------------------------
+# Preserve installed deployment identity and paths; never infer a target between two installations.
+PANEL_INSTALL_DIR="${PANEL_INSTALL_DIR:-${BSP_INSTALL_DIR:-${BSP_STACK_DIR:-}}}"
+LEGACY_DEPLOYMENT=0
+if [[ -z "${PANEL_INSTALL_DIR:-}" ]]; then
+  if [[ -f /opt/game-server-hub/panel.env && -f /opt/bubblesharkpanel/panel.env ]]; then
+    printf '%s\n' 'Both installations exist; set PANEL_INSTALL_DIR explicitly.' >&2
+    exit 1
+  fi
+  if [[ -f /opt/game-server-hub/panel.env ]]; then PANEL_INSTALL_DIR=/opt/game-server-hub; fi
+fi
+if [[ -f "${PANEL_INSTALL_DIR:-/opt/bubblesharkpanel}/panel.env" ]]; then
+  existing_env="${PANEL_INSTALL_DIR:-/opt/bubblesharkpanel}/panel.env"
+  if grep -Eq '^(GSH_|DB_PATH=.*game-server-hub)' "$existing_env"; then LEGACY_DEPLOYMENT=1; fi
+  # Read values as data, never source user-owned panel.env as root.
+  while IFS= read -r existing_line; do
+    if [[ "$existing_line" =~ ^(BSP_|GSH_)[A-Z0-9_]+= ]]; then
+      existing_key="${existing_line%%=*}"
+      brand_key="BSP_${existing_key#*_}"
+      # Process settings win; prefer BSP in the file regardless of line order.
+      if [[ ! -v "$brand_key" ]]; then
+        canonical_line="$(grep -E "^${brand_key}=" "$existing_env" | tail -n 1 || true)"
+        existing_value="${canonical_line:-$existing_line}"
+        printf -v "$brand_key" '%s' "${existing_value#*=}"
+        export "$brand_key"
+      fi
+    fi
+  done < "$existing_env"
+  for existing_key in PANEL_DATA_DIR PANEL_LOG_DIR PANEL_INSTANCES_DIR PANEL_BACKUPS_DIR DB_PATH; do
+    existing_value="$(grep -E "^${existing_key}=" "$existing_env" | tail -n 1 || true)"
+    if [[ ! -v "$existing_key" && -n "$existing_value" ]]; then printf -v "$existing_key" '%s' "${existing_value#*=}"; export "$existing_key"; fi
+  done
+fi
+if [[ -n "${DB_PATH:-}" && "$DB_PATH" == /* && "$DB_PATH" != /app/* && -z "${PANEL_DATA_DIR:-}" ]]; then PANEL_DATA_DIR="$(dirname "$DB_PATH")"; fi
+if [[ "$LEGACY_DEPLOYMENT" == 1 ]]; then
+  PANEL_DATA_DIR="${PANEL_DATA_DIR:-/var/lib/game-server-hub}"
+  PANEL_LOG_DIR="${PANEL_LOG_DIR:-/var/log/game-server-hub}"
+  BSP_NATIVE_USER="${BSP_NATIVE_USER:-gsh}"
+  BSP_NATIVE_GROUP="${BSP_NATIVE_GROUP:-gsh}"
+  BSP_NATIVE_SERVICE="${BSP_NATIVE_SERVICE:-game-server-hub.service}"
+  BSP_NATIVE_UPDATE_SERVICE="${BSP_NATIVE_UPDATE_SERVICE:-game-server-hub-update.service}"
+  BSP_NATIVE_UPDATE_PATH="${BSP_NATIVE_UPDATE_PATH:-game-server-hub-update.path}"
+  BSP_NATIVE_UPDATE_HELPER="${BSP_NATIVE_UPDATE_HELPER:-/usr/local/lib/game-server-hub/gsh-native-update}"
+  BSP_PANEL_CONTAINER_NAME="${BSP_PANEL_CONTAINER_NAME:-game-server-hub-panel}"
+  BSP_SWAP_FILE="${BSP_SWAP_FILE:-/swapfile-gsh}"
+  BSP_RESOURCE_PREFIX="${BSP_RESOURCE_PREFIX:-gsh}"
+  DB_PATH="${DB_PATH:-${PANEL_DATA_DIR}/game-server-hub.sqlite}"
+fi
+if [[ -n "${DB_PATH:-}" && "$DB_PATH" == /* && "$DB_PATH" != /app/* && -z "${PANEL_DATA_DIR:-}" ]]; then PANEL_DATA_DIR="$(dirname "$DB_PATH")"; fi
+PANEL_DB_FILENAME="${DB_PATH:-}"
+PANEL_DB_FILENAME="${PANEL_DB_FILENAME##*/}"
+PANEL_DB_FILENAME="${PANEL_DB_FILENAME:-bubblesharkpanel.sqlite}"
+PANEL_NATIVE_SERVICE="${BSP_NATIVE_SERVICE:-bubblesharkpanel.service}"
+
 SCRIPT_NAME="$(basename "$0")" # 当前脚本名称（用于日志展示）。
-GSH_RELEASE_TAG="${GSH_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.14.0}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
+BSP_RELEASE_TAG="${BSP_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.15.0}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
 INSTALLER_REPO_RAW="${INSTALLER_REPO_RAW:-}" # 兼容旧变量：指定单一安装资源源（为空时使用 INSTALLER_REPO_MIRRORS）。
-# GitHub 资源加速代理（前缀拼接型）：安装资源与 Native 包共用；GSH_GITHUB_PROXY 可强制指定单一节点。
+# GitHub 资源加速代理（前缀拼接型）：安装资源与 Native 包共用；BSP_GITHUB_PROXY 可强制指定单一节点。
 GITHUB_PROXY_SITES="${GITHUB_PROXY_SITES:-https://gh-proxy.com/,https://ghfast.top/,https://ghproxy.com/}"
-GSH_GITHUB_PROXY="${GSH_GITHUB_PROXY:-}" # 强制指定 GitHub 加速代理（如 https://gh-proxy.com/）；为空则走镜像池自动回退。
+BSP_GITHUB_PROXY="${BSP_GITHUB_PROXY:-}" # 强制指定 GitHub 加速代理（如 https://gh-proxy.com/）；为空则走镜像池自动回退。
 INSTALLER_REPO_MIRRORS="${INSTALLER_REPO_MIRRORS:-}" # 安装资源镜像池；为空时由 init_installer_repo_pool 按代理清单生成。
 # 校验对象是镜像源提供的 git blob 原始字节（LF）；改动 compose 后必须同步更新此处。
 # 历史 pin eb30aeae... 与 v0.1.4 tag 内 compose blob（a34665e2...）不匹配，导致严格校验必然失败。
-INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-ca256889090f8d024bfd8adefa87c98ec3a2346f1e45c8a8d037fc92e03231f0}"
-INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML:-525eaf74e17df33887fe47248f414c0de3e6cd94a8d20e072ab5d66284c760ae}"
+INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-dd0db90eb7dd992960e813208b326e4277f9bd51fe1c0d3ba8935d60ac9502f2}"
+INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML:-2ca65c80ee02cfb08e3aec26ae17dabb38296e825147a43896bc7daf1cb07d65}"
 # Debian 12 等发行版源不含 Compose v2 时，从 docker/compose GitHub Release 自动补装 CLI 插件。
 # 摘要与官方 .sha256 / checksums.txt 资产双源核对；升级插件版本时需同步替换版本号与两个摘要。
 COMPOSE_PLUGIN_VERSION="v2.39.2"
@@ -23,20 +86,20 @@ COMPOSE_PLUGIN_SHA256_X86_64="a55a8cd4ef103aac282812554e531aac8df7e914a287ee81e1
 COMPOSE_PLUGIN_SHA256_AARCH64="54488fffb60782f3c8787a48b95ed15f49f5a3a85f4105304bd46db5edd9db61"
 COMPOSE_PLUGIN_INSTALL_PATH="/usr/local/lib/docker/cli-plugins/docker-compose"
 COMPOSE_PLUGIN_MAX_TIME_SECONDS="${COMPOSE_PLUGIN_MAX_TIME_SECONDS:-1800}"
-INSTALL_MODE="${GSH_INSTALL_MODE:-auto}" # auto | docker | native
-NETWORK_PROFILE="${GSH_NETWORK_PROFILE:-auto}" # auto | cn | global
+INSTALL_MODE="${BSP_INSTALL_MODE:-auto}" # auto | docker | native
+NETWORK_PROFILE="${BSP_NETWORK_PROFILE:-auto}" # auto | cn | global
 RESOLVED_INSTALL_MODE=""
 RESOLVED_NETWORK_PROFILE=""
 MIN_FREE_DISK_MB=4096 # 最小可用磁盘空间阈值（MB）。
 HOST_MEMORY_WARN_MIN_MB=3800 # 总内存低于此值（约 4GiB）时输出 WARN。
 HOST_MEMORY_TIER_SMALL_MAX_MB=5120 # < 此值视为 small 预设。
 HOST_MEMORY_TIER_MEDIUM_MAX_MB=8192 # < 此值视为 medium 预设。
-GSH_PANEL_ENV_PRESET="${GSH_PANEL_ENV_PRESET:-auto}" # auto | small | medium | large | none
+BSP_PANEL_ENV_PRESET="${BSP_PANEL_ENV_PRESET:-auto}" # auto | small | medium | large | none
 # 小内存机安装时自动创建缓存区文件（1=开启，默认）。面板容器不以 root 运行，创建缓存区需要 root，
-# 所以留给用户的不该是「装完再自己 SSH 执行一次」，而是在这里做掉；--no-swap 或 GSH_SWAP_ON_INSTALL=0 关闭。
-GSH_SWAP_ON_INSTALL="${GSH_SWAP_ON_INSTALL:-1}"
+# 所以留给用户的不该是「装完再自己 SSH 执行一次」，而是在这里做掉；--no-swap 或 BSP_SWAP_ON_INSTALL=0 关闭。
+BSP_SWAP_ON_INSTALL="${BSP_SWAP_ON_INSTALL:-1}"
 # 自动创建 swap 的总内存阈值（MiB），与 HOST_MEMORY_TIER_SMALL_MAX_MB 同档：< 5 GiB 视为小内存机。
-GSH_SWAP_AUTO_THRESHOLD_MB="${GSH_SWAP_AUTO_THRESHOLD_MB:-${HOST_MEMORY_TIER_SMALL_MAX_MB}}"
+BSP_SWAP_AUTO_THRESHOLD_MB="${BSP_SWAP_AUTO_THRESHOLD_MB:-${HOST_MEMORY_TIER_SMALL_MAX_MB}}"
 # 自动创建 swap 的结果（供 print_summary 分支）：none | active | created | skipped | failed
 AUTO_SWAP_STATE="none"
 AUTO_SWAP_TARGET_MB=0
@@ -56,7 +119,7 @@ USE_CN_DEBIAN_MIRROR="${USE_CN_DEBIAN_MIRROR:-0}" # Debian 是否优先尝试国
 DEBIAN_MIRROR_URL="${DEBIAN_MIRROR_URL:-https://mirrors.tuna.tsinghua.edu.cn/debian}" # Debian 主仓库镜像。
 DEBIAN_SECURITY_MIRROR_URL="${DEBIAN_SECURITY_MIRROR_URL:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}" # Debian 安全仓库镜像。
 UBUNTU_MIRROR_URL="${UBUNTU_MIRROR_URL:-https://mirrors.tuna.tsinghua.edu.cn/ubuntu}" # Ubuntu 主仓库与安全更新镜像。
-APT_SOURCES_BACKUP_DIR="/tmp/gsh-apt-sources-backup"
+APT_SOURCES_BACKUP_DIR="/tmp/bsp-apt-sources-backup"
 
 # DST 默认 UDP 端口（与 cluster.ini / server.ini 默认值一致）
 DST_GAME_PORT="${DST_GAME_PORT:-10999}"
@@ -67,24 +130,28 @@ DST_CAVES_GAME_PORT="${DST_CAVES_GAME_PORT:-11000}"
 DST_CAVES_AUTH_PORT="${DST_CAVES_AUTH_PORT:-8768}"
 DST_CAVES_MASTER_PORT="${DST_CAVES_MASTER_PORT:-12348}"
 
-PANEL_NAME="${PANEL_NAME:-game-server-hub}" # 面板逻辑名称（可被环境变量覆盖）。
+PANEL_NAME="${PANEL_NAME:-bubblesharkpanel}" # 面板逻辑名称（可被环境变量覆盖）。
 PANEL_PORT="${PANEL_PORT:-9527}" # 面板对外暴露端口（默认使用高位端口以降低备案拦截影响）。
 PANEL_PROTOCOL="${PANEL_PROTOCOL:-http}" # 访问协议（用于生成访问 URL）。
 INSTALL_STEAMCMD_IMAGE="${INSTALL_STEAMCMD_IMAGE:-1}" # 安装阶段是否预拉 SteamCMD 镜像（默认拉取，安装完成后可直接创建实例）。
 # v0.2.0 起三镜像合一：面板/DST/SteamCMD 共用同一统一镜像引用（仅 GHCR 官方源；
-# 国内拉取失败时优先使用 Release 离线镜像包，或在 panel.env 配置 GSH_IMAGE_MIRRORS 自选镜像代理）。
+# 国内拉取失败时优先使用 Release 离线镜像包，或在 panel.env 配置 BSP_IMAGE_MIRRORS 自选镜像代理）。
 PANEL_IMAGE_OVERRIDE="${PANEL_IMAGE:-}" # 完整面板镜像引用；设置后直接采用（不再拼接 GHCR 引用）。
-PANEL_INSTALL_DIR="${PANEL_INSTALL_DIR:-/opt/game-server-hub}" # 安装目录（放置 env/compose）。
-PANEL_DATA_DIR="${PANEL_DATA_DIR:-/var/lib/game-server-hub}" # 面板持久化数据目录。
-PANEL_LOG_DIR="${PANEL_LOG_DIR:-/var/log/game-server-hub}" # 面板日志与安装状态目录。
+PANEL_INSTALL_DIR="${PANEL_INSTALL_DIR:-/opt/bubblesharkpanel}" # 安装目录（放置 env/compose）。
+PANEL_DATA_DIR="${PANEL_DATA_DIR:-/var/lib/bubblesharkpanel}" # 面板持久化数据目录。
+PANEL_LOG_DIR="${PANEL_LOG_DIR:-/var/log/bubblesharkpanel}" # 面板日志与安装状态目录。
+if [[ "${BSP_RUNTIME_MODE:-}" == native ]]; then
+  PANEL_INSTANCES_DIR="${PANEL_INSTANCES_DIR:-${BSP_INSTANCES_ROOT:-}}"
+  PANEL_BACKUPS_DIR="${PANEL_BACKUPS_DIR:-${BSP_BACKUPS_ROOT:-}}"
+fi
 PANEL_INSTANCES_DIR="${PANEL_INSTANCES_DIR:-${PANEL_DATA_DIR}/instances}" # 游戏实例数据目录。
 PANEL_BACKUPS_DIR="${PANEL_BACKUPS_DIR:-${PANEL_DATA_DIR}/backups}" # 备份目录。
 PANEL_BIND_COMPOSE_FILE="${PANEL_INSTALL_DIR}/docker-compose.bind.yml"
-PANEL_IMAGE_TAG="${PANEL_IMAGE_TAG:-${GSH_RELEASE_TAG}}" # 容器镜像标签；默认与安装资源锁定同一个 Release。
+PANEL_IMAGE_TAG="${PANEL_IMAGE_TAG:-${BSP_RELEASE_TAG}}" # 容器镜像标签；默认与安装资源锁定同一个 Release。
 # v0.2.0 三键同值（统一镜像）；完整引用由 finalize_image_refs 按 registry 生成，panel.env 保留三个变量以兼容面板配置读取与历史脚本。
 PANEL_IMAGE="" # 统一镜像完整引用（由 finalize_image_refs 填充；PANEL_IMAGE_OVERRIDE 设置时直接采用）。
-GSH_GAME_DST_IMAGE=""
-GSH_STEAMCMD_IMAGE=""
+BSP_GAME_DST_IMAGE=""
+BSP_STEAMCMD_IMAGE=""
 INSTALL_STEAMCMD_PULL_IMAGE=""
 PANEL_ENV_FILE="${PANEL_INSTALL_DIR}/panel.env" # 运行时环境变量文件路径。
 PANEL_COMPOSE_FILE="${PANEL_INSTALL_DIR}/docker-compose.yml" # Docker Compose 文件路径。
@@ -92,24 +159,24 @@ STATUS_FILE="${PANEL_LOG_DIR}/install.status" # 安装状态追踪文件路径�
 DIAGNOSTICS_FILE="${PANEL_LOG_DIR}/install.diagnostics.log" # 失败时生成的脱敏诊断报告。
 PANEL_HEALTHCHECK_TIMEOUT_SECONDS="${PANEL_HEALTHCHECK_TIMEOUT_SECONDS:-90}" # 启动后健康检查总超时。
 PANEL_HEALTHCHECK_INTERVAL_SECONDS="${PANEL_HEALTHCHECK_INTERVAL_SECONDS:-3}" # 健康检查轮询间隔。
-NATIVE_SERVICE_USER="${GSH_NATIVE_USER:-gsh}"
-NATIVE_SERVICE_GROUP="${GSH_NATIVE_GROUP:-gsh}"
-NATIVE_USER_HOME="${GSH_NATIVE_USER_HOME:-${PANEL_DATA_DIR}/home}"
-NATIVE_RELEASE_ROOT="${GSH_NATIVE_RELEASE_ROOT:-${PANEL_INSTALL_DIR}/releases}"
+NATIVE_SERVICE_USER="${BSP_NATIVE_USER:-bsp}"
+NATIVE_SERVICE_GROUP="${BSP_NATIVE_GROUP:-bsp}"
+NATIVE_USER_HOME="${BSP_NATIVE_USER_HOME:-${PANEL_DATA_DIR}/home}"
+NATIVE_RELEASE_ROOT="${BSP_NATIVE_RELEASE_ROOT:-${PANEL_INSTALL_DIR}/releases}"
 NATIVE_CURRENT_LINK="${PANEL_INSTALL_DIR}/current"
-NATIVE_RELEASE_NAME="game-server-hub-native-${GSH_RELEASE_TAG}-linux-x64"
-NATIVE_RELEASE_ARCHIVE="${GSH_NATIVE_RELEASE_ARCHIVE:-}"
-NATIVE_RELEASE_MIRRORS="${GSH_NATIVE_RELEASE_MIRRORS:-}" # 为空时由 init_installer_repo_pool 生成（直连 + 加速代理）。https://github.com/PMAT77/game-serve-hub/releases/download/${GSH_RELEASE_TAG},https://ghproxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/${GSH_RELEASE_TAG}}"
-NATIVE_STEAMCMD_DIR="${GSH_NATIVE_STEAMCMD_DIR:-${PANEL_INSTALL_DIR}/runtime/steamcmd}"
-NATIVE_STEAMCMD_PATH="${NATIVE_STEAMCMD_DIR}/steamcmd.sh"
-NATIVE_STEAMCMD_URL="${GSH_NATIVE_STEAMCMD_URL:-https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz}"
-NATIVE_SYSTEMD_UNIT="/etc/systemd/system/game-server-hub.service"
+NATIVE_RELEASE_NAME="bubblesharkpanel-native-${BSP_RELEASE_TAG}-linux-x64"
+NATIVE_RELEASE_ARCHIVE="${BSP_NATIVE_RELEASE_ARCHIVE:-}"
+NATIVE_RELEASE_MIRRORS="${BSP_NATIVE_RELEASE_MIRRORS:-}" # 为空时由 init_installer_repo_pool 生成（直连 + 加速代理）。https://github.com/PMAT77/bubble-shark-panel/releases/download/${BSP_RELEASE_TAG},https://ghproxy.com/https://github.com/PMAT77/bubble-shark-panel/releases/download/${BSP_RELEASE_TAG}}"
+NATIVE_STEAMCMD_DIR="${BSP_NATIVE_STEAMCMD_DIR:-${PANEL_INSTALL_DIR}/runtime/steamcmd}"
+NATIVE_STEAMCMD_PATH="${BSP_NATIVE_STEAMCMD_PATH:-${NATIVE_STEAMCMD_DIR}/steamcmd.sh}"
+NATIVE_STEAMCMD_URL="${BSP_NATIVE_STEAMCMD_URL:-https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz}"
+NATIVE_SYSTEMD_UNIT="/etc/systemd/system/${PANEL_NATIVE_SERVICE}"
 # Native 面板内更新：面板（非特权用户）只在 NATIVE_UPDATE_DIR 写请求文件，
-# 由 root 侧 oneshot 服务执行真正的安装动作（见 scripts/gsh-native-update.sh）。
-NATIVE_UPDATE_DIR="${GSH_NATIVE_UPDATE_DIR:-${PANEL_DATA_DIR}/panel-update}"
-NATIVE_UPDATE_HELPER_PATH="/usr/local/lib/game-server-hub/gsh-native-update"
-NATIVE_UPDATE_SERVICE="game-server-hub-update.service"
-NATIVE_UPDATE_PATH_UNIT="game-server-hub-update.path"
+# 由 root 侧 oneshot 服务执行真正的安装动作（见 scripts/bsp-native-update.sh）。
+NATIVE_UPDATE_DIR="${BSP_NATIVE_UPDATE_DIR:-${PANEL_DATA_DIR}/panel-update}"
+NATIVE_UPDATE_HELPER_PATH="${BSP_NATIVE_UPDATE_HELPER:-/usr/local/lib/bubblesharkpanel/bsp-native-update}"
+NATIVE_UPDATE_SERVICE="${BSP_NATIVE_UPDATE_SERVICE:-bubblesharkpanel-update.service}"
+NATIVE_UPDATE_PATH_UNIT="${BSP_NATIVE_UPDATE_PATH:-bubblesharkpanel-update.path}"
 NATIVE_UPDATE_SERVICE_UNIT="/etc/systemd/system/${NATIVE_UPDATE_SERVICE}"
 NATIVE_UPDATE_PATH_UNIT_FILE="/etc/systemd/system/${NATIVE_UPDATE_PATH_UNIT}"
 NATIVE_RELEASE_REPLACED=0
@@ -126,8 +193,8 @@ PANEL_ACCESS_URL="" # 最终写入 panel.env 的对外访问 URL（PANEL_PUBLIC_
 PANEL_LAN_URL="" # 本机地址对应的访问 URL（只在内网可达，摘要中与对外地址并列展示）。
 PANEL_PUBLIC_IP_SOURCE="" # 对外地址来源：user|interface|cloud_metadata|ip_echo|lan。
 PANEL_DETECTED_PUBLIC_IP="" # 自动探测到的对外 IPv4。
-GSH_PANEL_AUTO_PUBLIC_IP="${GSH_PANEL_AUTO_PUBLIC_IP:-1}" # 是否允许探测对外 IP（0/false/off/no 关闭）。
-GSH_PANEL_PUBLIC_IP_BUDGET_SECONDS="${GSH_PANEL_PUBLIC_IP_BUDGET_SECONDS:-3}" # 对外地址探测的总耗时预算（秒）。
+BSP_PANEL_AUTO_PUBLIC_IP="${BSP_PANEL_AUTO_PUBLIC_IP:-1}" # 是否允许探测对外 IP（0/false/off/no 关闭）。
+BSP_PANEL_PUBLIC_IP_BUDGET_SECONDS="${BSP_PANEL_PUBLIC_IP_BUDGET_SECONDS:-3}" # 对外地址探测的总耗时预算（秒）。
 # 探测源与 server 侧 server/src/infra/game-adapter/dst/connect-host.ts 保持一致：
 # 云平台元数据可信度最高（云厂商的公网 IP 必然映射到本机），出站回显拿到的可能只是出口地址。
 # GCP/Azure 的元数据端点需要额外请求头，这里不纳入；那类环境用 PANEL_PUBLIC_URL 显式指定。
@@ -166,7 +233,7 @@ SYSTEMCTL_AVAILABLE=0
 STEAM_CDN_REACHABLE=0
 HOST_IPV4=""
 # 镜像获取偏好：auto（按网络档决定）| offline（强制 Release 离线包）| native（强制 GHCR 直拉）。
-GSH_IMAGE_SOURCE="${GSH_IMAGE_SOURCE:-auto}"
+BSP_IMAGE_SOURCE="${BSP_IMAGE_SOURCE:-auto}"
 GHCR_LAYER_PROBE_MAX_SECONDS="${GHCR_LAYER_PROBE_MAX_SECONDS:-20}" # 层数据探测单次请求上限（秒）。
 DOCKER_PULL_STALL_SECONDS="${DOCKER_PULL_STALL_SECONDS:-90}" # 直拉时多久没有进度就判定停滞（秒）。
 RELEASE_OFFLINE_IMAGE_PATH="" # Release 离线镜像包落盘路径（自动兜底或手动指定时设置）。
@@ -248,7 +315,7 @@ probe_ghcr_layer_access() {
   GHCR_LAYER_ACCESSIBLE=0
   GHCR_LAYER_PROBE_SECONDS=-1
 
-  local repository="pmat77/game-server-hub" token digest started elapsed
+  local repository="pmat77/bubblesharkpanel" token digest started elapsed
   local max_seconds="${GHCR_LAYER_PROBE_MAX_SECONDS}"
   local manifest_url="https://ghcr.io/v2/${repository}/manifests/${PANEL_IMAGE_TAG}"
   local accept='Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'
@@ -343,14 +410,14 @@ resolve_image_route() {
     return
   fi
   # 本地已有目标镜像：后面会跳过拉取，路线无关紧要。
-  if [[ "${GSH_FORCE_IMAGE_PULL:-0}" != "1" ]] \
+  if [[ "${BSP_FORCE_IMAGE_PULL:-0}" != "1" ]] \
     && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
     IMAGE_ROUTE="offline-present"
     return
   fi
 
   local prefer
-  case "${GSH_IMAGE_SOURCE}" in
+  case "${BSP_IMAGE_SOURCE}" in
     offline)
       prefer="offline"
       ;;
@@ -366,7 +433,7 @@ resolve_image_route() {
       fi
       ;;
     *)
-      abort "Invalid GSH_IMAGE_SOURCE '${GSH_IMAGE_SOURCE}'. Expected auto, offline or native."
+      abort "Invalid BSP_IMAGE_SOURCE '${BSP_IMAGE_SOURCE}'. Expected auto, offline or native."
       ;;
   esac
 
@@ -398,7 +465,7 @@ run_as_root() {
 }
 
 try_as_root() {
-  if [[ "${GSH_DIAGNOSTICS_UNPRIVILEGED:-0}" == "1" ]]; then
+  if [[ "${BSP_DIAGNOSTICS_UNPRIVILEGED:-0}" == "1" ]]; then
     "$@"
   elif [[ "${EUID}" -eq 0 ]]; then
     "$@"
@@ -413,8 +480,10 @@ try_as_root() {
 read_env_value() {
   local file="$1"
   local key="$2"
-  local command=(awk -v "target=${key}" '
-    index($0, target "=") == 1 {
+  local legacy_key="${key/BSP_/GSH_}"
+  local command=(awk -v "target=${key}" -v "legacy=${legacy_key}" '
+    index($0, legacy "=") == 1 && !found { value = substr($0, length(legacy) + 2) }
+    index($0, target "=") == 1 { found = 1;
       value = substr($0, length(target) + 2)
     }
     END {
@@ -493,7 +562,7 @@ resolve_existing_install_mode() {
     return 1
   fi
   local existing_mode
-  existing_mode="$(read_env_value "${PANEL_ENV_FILE}" "GSH_RUNTIME_MODE")"
+  existing_mode="$(read_env_value "${PANEL_ENV_FILE}" "BSP_RUNTIME_MODE")"
   printf '%s' "${existing_mode:-docker}"
 }
 
@@ -515,9 +584,9 @@ backup_existing_install_state() {
   fi
 
   timestamp="$(date +%Y%m%d%H%M%S)"
-  UPGRADE_STATE_BACKUP_DIR="${PANEL_BACKUPS_DIR}/panel-upgrades/${timestamp}-${GSH_RELEASE_TAG}"
-  UPGRADE_DATABASE_BACKUP="${UPGRADE_STATE_BACKUP_DIR}/game-server-hub.sqlite"
-  database_path="${PANEL_DATA_DIR}/game-server-hub.sqlite"
+  UPGRADE_STATE_BACKUP_DIR="${PANEL_BACKUPS_DIR}/panel-upgrades/${timestamp}-${BSP_RELEASE_TAG}"
+  UPGRADE_DATABASE_BACKUP="${UPGRADE_STATE_BACKUP_DIR}/bubblesharkpanel.sqlite"
+  database_path="${PANEL_DATA_DIR}/${PANEL_DB_FILENAME}"
   run_as_root mkdir -p "${UPGRADE_STATE_BACKUP_DIR}"
 
   if try_as_root test -f "${PANEL_ENV_FILE}"; then
@@ -539,7 +608,7 @@ backup_existing_install_state() {
 }
 
 restore_existing_install_state() {
-  local database_path="${PANEL_DATA_DIR}/game-server-hub.sqlite"
+  local database_path="${PANEL_DATA_DIR}/${PANEL_DB_FILENAME}"
   if [[ -z "${UPGRADE_STATE_BACKUP_DIR}" ]] || ! try_as_root test -d "${UPGRADE_STATE_BACKUP_DIR}"; then
     return
   fi
@@ -648,19 +717,19 @@ collect_install_diagnostics() {
     printf 'stage=%s\n' "${CURRENT_STAGE}"
     printf 'exit_code=%s\n' "${exit_code}"
     printf 'line=%s\n' "${line_number}"
-    printf 'release=%s\n' "${GSH_RELEASE_TAG}"
+    printf 'release=%s\n' "${BSP_RELEASE_TAG}"
     printf 'install_mode=%s\n' "${RESOLVED_INSTALL_MODE:-${INSTALL_MODE}}"
     printf 'network_profile=%s\n' "${RESOLVED_NETWORK_PROFILE:-${NETWORK_PROFILE}}"
     printf 'panel_image=%s\n' "${PANEL_IMAGE}"
-    printf 'dst_image=%s\n' "${GSH_GAME_DST_IMAGE}"
-    printf 'steamcmd_image=%s\n' "${GSH_STEAMCMD_IMAGE}"
+    printf 'dst_image=%s\n' "${BSP_GAME_DST_IMAGE}"
+    printf 'steamcmd_image=%s\n' "${BSP_STEAMCMD_IMAGE}"
     printf 'distro=%s\n' "${DISTRO_ID:-unknown}"
     printf 'architecture=%s\n' "$(uname -m 2>/dev/null || printf unknown)"
     printf '\n[disk]\n'
     df -h "${PANEL_INSTALL_DIR}" 2>&1 || true
     printf '\n[memory]\n'
     free -m 2>&1 || true
-    if [[ "${GSH_DIAGNOSTICS_SKIP_DOCKER:-0}" != "1" ]] && command -v docker >/dev/null 2>&1; then
+    if [[ "${BSP_DIAGNOSTICS_SKIP_DOCKER:-0}" != "1" ]] && command -v docker >/dev/null 2>&1; then
       printf '\n[docker-version]\n'
       docker version 2>&1 || true
       if [[ -f "${PANEL_ENV_FILE}" && -f "${PANEL_COMPOSE_FILE}" && -f "${PANEL_BIND_COMPOSE_FILE}" ]]; then
@@ -670,9 +739,9 @@ collect_install_diagnostics() {
     fi
     if [[ "${RESOLVED_INSTALL_MODE:-}" == "native" ]] && command -v systemctl >/dev/null 2>&1; then
       printf '\n[native-service]\n'
-      try_as_root systemctl status game-server-hub.service --no-pager 2>&1 || true
+      try_as_root systemctl status ${PANEL_NATIVE_SERVICE} --no-pager 2>&1 || true
       printf '\n[native-journal]\n'
-      try_as_root journalctl -u game-server-hub.service -n 80 --no-pager 2>&1 || true
+      try_as_root journalctl -u ${PANEL_NATIVE_SERVICE} -n 80 --no-pager 2>&1 || true
     fi
   } >"${report}"
 
@@ -758,14 +827,14 @@ append_installer_repo_source() {
   INSTALLER_REPO_POOL+=("${source}")
 }
 
-# 生成 GitHub 资源候选列表（逗号分隔）：加速代理前缀 → 直连。GSH_GITHUB_PROXY 设置时仅走该代理 + 直连。
+# 生成 GitHub 资源候选列表（逗号分隔）：加速代理前缀 → 直连。BSP_GITHUB_PROXY 设置时仅走该代理 + 直连。
 build_github_url_variants() {
   local direct_url="$1"
   local proxy site
   local -a parts=()
 
-  if [[ -n "${GSH_GITHUB_PROXY}" ]]; then
-    proxy="${GSH_GITHUB_PROXY%/}"
+  if [[ -n "${BSP_GITHUB_PROXY}" ]]; then
+    proxy="${BSP_GITHUB_PROXY%/}"
     parts+=("${proxy}/${direct_url}")
   else
     local old_ifs="${IFS}"
@@ -792,7 +861,7 @@ init_installer_repo_pool() {
   fi
 
   if [[ -z "${INSTALLER_REPO_MIRRORS}" ]]; then
-    INSTALLER_REPO_MIRRORS="https://cdn.jsdelivr.net/gh/PMAT77/game-serve-hub@${GSH_RELEASE_TAG},$(build_github_url_variants "https://raw.githubusercontent.com/PMAT77/game-serve-hub/${GSH_RELEASE_TAG}")"
+    INSTALLER_REPO_MIRRORS="https://cdn.jsdelivr.net/gh/PMAT77/bubble-shark-panel@${BSP_RELEASE_TAG},$(build_github_url_variants "https://raw.githubusercontent.com/PMAT77/bubble-shark-panel/${BSP_RELEASE_TAG}")"
   fi
 
   if [[ -n "${INSTALLER_REPO_RAW}" ]]; then
@@ -875,8 +944,8 @@ verify_installer_asset_checksum() {
   fi
 
   if ! expected_sum="$(resolve_installer_asset_sha256 "${relative_path}")" || [[ -z "${expected_sum}" ]]; then
-    # 未登记摘要的资源（如 scripts/gsh.sh）只告警放行。把「没有内置摘要」当成校验失败，
-    # 会让这些资源在所有镜像源上都被判成下载失败并被静默跳过（gsh CLI 因此永远装不上）。
+    # 未登记摘要的资源（如 scripts/bsp.sh）只告警放行。把「没有内置摘要」当成校验失败，
+    # 会让这些资源在所有镜像源上都被判成下载失败并被静默跳过（bsp CLI 因此永远装不上）。
     log_warn "No embedded checksum for installer asset, skipping verification: ${relative_path}"
     return 0
   fi
@@ -905,24 +974,24 @@ write_builtin_panel_env_preset_asset() {
       content="$(cat <<'EOF'
 # GSH 内存预设：small（总内存约 4 GiB，< 5 GiB）
 # 合并到 panel.env 后重启 panel。勿与 dev 压力测试用的大上限（如 5120）混用。
-GSH_STEAMCMD_CONTAINER_MEMORY_MB=1536
-GSH_STEAMCMD_CONTAINER_MEMORY_SWAP_MB=1536
-GSH_DST_CONTAINER_MEMORY_MB=1536
-GSH_HOST_STEAMCMD_PLANNING_MB=1280
-GSH_HOST_MEMORY_HEADROOM_MB=384
-GSH_HOST_DST_PLANNING_MB=512
+BSP_STEAMCMD_CONTAINER_MEMORY_MB=1536
+BSP_STEAMCMD_CONTAINER_MEMORY_SWAP_MB=1536
+BSP_DST_CONTAINER_MEMORY_MB=1536
+BSP_HOST_STEAMCMD_PLANNING_MB=1280
+BSP_HOST_MEMORY_HEADROOM_MB=384
+BSP_HOST_DST_PLANNING_MB=512
 EOF
 )"
       ;;
     medium.env)
       content="$(cat <<'EOF'
 # GSH 内存预设：medium（总内存约 6 GiB，5 GiB–8 GiB）
-GSH_STEAMCMD_CONTAINER_MEMORY_MB=2048
-GSH_STEAMCMD_CONTAINER_MEMORY_SWAP_MB=2048
-GSH_DST_CONTAINER_MEMORY_MB=1536
-GSH_HOST_STEAMCMD_PLANNING_MB=1280
-GSH_HOST_MEMORY_HEADROOM_MB=512
-GSH_HOST_DST_PLANNING_MB=768
+BSP_STEAMCMD_CONTAINER_MEMORY_MB=2048
+BSP_STEAMCMD_CONTAINER_MEMORY_SWAP_MB=2048
+BSP_DST_CONTAINER_MEMORY_MB=1536
+BSP_HOST_STEAMCMD_PLANNING_MB=1280
+BSP_HOST_MEMORY_HEADROOM_MB=512
+BSP_HOST_DST_PLANNING_MB=768
 EOF
 )"
       ;;
@@ -930,9 +999,9 @@ EOF
       content="$(cat <<'EOF'
 # GSH 内存预设：large（总内存 ≥ 8 GiB）
 # 高配默认不设子容器硬上限，由 DST/SteamCMD 按需使用；若需防止单容器失控可取消注释：
-# GSH_STEAMCMD_CONTAINER_MEMORY_MB=4096
-# GSH_DST_CONTAINER_MEMORY_MB=8192
-GSH_HOST_MEMORY_HEADROOM_MB=512
+# BSP_STEAMCMD_CONTAINER_MEMORY_MB=4096
+# BSP_DST_CONTAINER_MEMORY_MB=8192
+BSP_HOST_MEMORY_HEADROOM_MB=512
 EOF
 )"
       ;;
@@ -951,19 +1020,19 @@ EOF
 
 ## 用法
 
-**安装脚本自动档位**（默认 `GSH_PANEL_ENV_PRESET=auto`）：
+**安装脚本自动档位**（默认 `BSP_PANEL_ENV_PRESET=auto`）：
 
 ```bash
 sudo bash ./scripts/install.linux.sh
-# 显式指定：sudo GSH_PANEL_ENV_PRESET=small bash ./scripts/install.linux.sh
+# 显式指定：sudo BSP_PANEL_ENV_PRESET=small bash ./scripts/install.linux.sh
 ```
 
 **已安装后手动合并**（保留现有 `panel.env`，追加预设行）：
 
 ```bash
-sudo bash -c 'cat /opt/game-server-hub/config/panel.env.presets/small.env >> /opt/game-server-hub/panel.env'
+sudo bash -c 'cat /opt/bubblesharkpanel/config/panel.env.presets/small.env >> /opt/bubblesharkpanel/panel.env'
 # 安装脚本会将预设同步到 PANEL_INSTALL_DIR/config/panel.env.presets/
-cd /opt/game-server-hub
+cd /opt/bubblesharkpanel
 sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose.bind.yml up -d
 ```
 
@@ -990,19 +1059,19 @@ check_ghcr_reachability() {
 finalize_image_refs() {
   if [[ -n "${PANEL_IMAGE_OVERRIDE}" ]]; then
     PANEL_IMAGE="${PANEL_IMAGE_OVERRIDE}"
-    GSH_GAME_DST_IMAGE="${PANEL_IMAGE_OVERRIDE}"
-    GSH_STEAMCMD_IMAGE="${PANEL_IMAGE_OVERRIDE}"
+    BSP_GAME_DST_IMAGE="${PANEL_IMAGE_OVERRIDE}"
+    BSP_STEAMCMD_IMAGE="${PANEL_IMAGE_OVERRIDE}"
     INSTALL_STEAMCMD_PULL_IMAGE="${PANEL_IMAGE_OVERRIDE}"
     log_info "Image override in effect: ${PANEL_IMAGE}"
     return
   fi
-  PANEL_IMAGE="ghcr.io/pmat77/game-server-hub:${PANEL_IMAGE_TAG}"
-  GSH_GAME_DST_IMAGE="${PANEL_IMAGE}"
-  GSH_STEAMCMD_IMAGE="${PANEL_IMAGE}"
+  PANEL_IMAGE="ghcr.io/pmat77/bubblesharkpanel:${PANEL_IMAGE_TAG}"
+  BSP_GAME_DST_IMAGE="${PANEL_IMAGE}"
+  BSP_STEAMCMD_IMAGE="${PANEL_IMAGE}"
   INSTALL_STEAMCMD_PULL_IMAGE="${PANEL_IMAGE}"
   log_info "Panel image: ${PANEL_IMAGE}"
-  log_info "DST image: ${GSH_GAME_DST_IMAGE}"
-  log_info "SteamCMD image: ${GSH_STEAMCMD_IMAGE}"
+  log_info "DST image: ${BSP_GAME_DST_IMAGE}"
+  log_info "SteamCMD image: ${BSP_STEAMCMD_IMAGE}"
 }
 
 # 基于实际连通性选择网络档位，不通过 IP 地理接口收集服务器位置。
@@ -1439,15 +1508,15 @@ download_native_release_archive() {
     cp "${NATIVE_RELEASE_ARCHIVE}" "${archive_dest}"
     if [[ -f "${NATIVE_RELEASE_ARCHIVE}.sha256" ]]; then
       cp "${NATIVE_RELEASE_ARCHIVE}.sha256" "${checksum_dest}"
-    elif [[ -n "${GSH_NATIVE_RELEASE_SHA256:-}" ]]; then
-      printf '%s  %s\n' "${GSH_NATIVE_RELEASE_SHA256}" "${archive_filename}" > "${checksum_dest}"
+    elif [[ -n "${BSP_NATIVE_RELEASE_SHA256:-}" ]]; then
+      printf '%s  %s\n' "${BSP_NATIVE_RELEASE_SHA256}" "${archive_filename}" > "${checksum_dest}"
     else
-      log_error "Local Native archive requires a sibling .sha256 file or GSH_NATIVE_RELEASE_SHA256."
+      log_error "Local Native archive requires a sibling .sha256 file or BSP_NATIVE_RELEASE_SHA256."
       return 1
     fi
   else
     if [[ -z "${NATIVE_RELEASE_MIRRORS}" ]]; then
-      NATIVE_RELEASE_MIRRORS="$(build_github_url_variants "https://github.com/PMAT77/game-serve-hub/releases/download/${GSH_RELEASE_TAG}")"
+      NATIVE_RELEASE_MIRRORS="$(build_github_url_variants "https://github.com/PMAT77/bubble-shark-panel/releases/download/${BSP_RELEASE_TAG}")"
       log_info "Native release mirrors: ${NATIVE_RELEASE_MIRRORS}"
     fi
     local raw_sources=()
@@ -1495,23 +1564,23 @@ install_native_release() {
 
   download_native_release_archive "${archive_path}" "${checksum_path}" || {
     rm -rf "${temp_dir}"
-    abort "Native Release download failed. Verify the ${GSH_RELEASE_TAG} GitHub Release assets or set GSH_NATIVE_RELEASE_ARCHIVE."
+    abort "Native Release download failed. Verify the ${BSP_RELEASE_TAG} GitHub Release assets or set BSP_NATIVE_RELEASE_ARCHIVE."
   }
   tar -xzf "${archive_path}" -C "${temp_dir}"
   extracted_root="${temp_dir}/${NATIVE_RELEASE_NAME}"
-  if [[ ! -x "${extracted_root}/bin/game-server-hub" || ! -f "${extracted_root}/release.json" ]]; then
+  if [[ ! -x "${extracted_root}/bin/bubblesharkpanel" || ! -f "${extracted_root}/release.json" ]]; then
     rm -rf "${temp_dir}"
     abort "Native Release is incomplete: launcher or release.json is missing."
   fi
 
-  target_dir="${NATIVE_RELEASE_ROOT}/${GSH_RELEASE_TAG}"
+  target_dir="${NATIVE_RELEASE_ROOT}/${BSP_RELEASE_TAG}"
   run_as_root mkdir -p "${NATIVE_RELEASE_ROOT}"
   if [[ -L "${NATIVE_CURRENT_LINK}" ]]; then
     NATIVE_PREVIOUS_RELEASE="$(readlink -f "${NATIVE_CURRENT_LINK}" || true)"
   fi
   if run_as_root test -e "${target_dir}"; then
     # 只保留最近一份让位副本，反复重装不至于把磁盘堆满
-    run_as_root find "${NATIVE_RELEASE_ROOT}" -maxdepth 1 -type d -name "${GSH_RELEASE_TAG}.replaced.*" -exec rm -rf {} + 2>/dev/null || true
+    run_as_root find "${NATIVE_RELEASE_ROOT}" -maxdepth 1 -type d -name "${BSP_RELEASE_TAG}.replaced.*" -exec rm -rf {} + 2>/dev/null || true
     replaced_dir="${target_dir}.replaced.$(date +%Y%m%d%H%M%S)"
     run_as_root mv "${target_dir}" "${replaced_dir}"
     # 同版本重装时 previous 与 target 是同一个路径，而该路径的内容刚被挪到 replaced_dir。
@@ -1523,7 +1592,7 @@ install_native_release() {
   run_as_root mv "${extracted_root}" "${target_dir}"
   run_as_root chown -R root:"${NATIVE_SERVICE_GROUP}" "${target_dir}"
   run_as_root chmod -R a-w "${target_dir}"
-  run_as_root chmod 0755 "${target_dir}/bin/game-server-hub"
+  run_as_root chmod 0755 "${target_dir}/bin/bubblesharkpanel"
   run_as_root ln -sfn "${target_dir}" "${NATIVE_CURRENT_LINK}.new"
   run_as_root mv -Tf "${NATIVE_CURRENT_LINK}.new" "${NATIVE_CURRENT_LINK}"
   # 升级/重装换了 current 链接，但已在运行的服务进程仍指向旧代码：deploy_native_panel
@@ -1583,17 +1652,21 @@ prepare_native_panel_env() {
     run_as_root cp -p "${PANEL_ENV_FILE}" "${PANEL_ENV_FILE}.backup.$(date +%Y%m%d%H%M%S)"
     upsert_env_values "${PANEL_ENV_FILE}" \
       "NODE_ENV=production" \
-      "GSH_EDITION=community" \
-      "GSH_RUNTIME_MODE=native" \
-      "GSH_INSTANCES_ROOT=${PANEL_INSTANCES_DIR}" \
-      "GSH_BACKUPS_ROOT=${PANEL_BACKUPS_DIR}" \
-      "GSH_NATIVE_RUNTIME_DIR=${PANEL_DATA_DIR}/runtime" \
-      "GSH_NATIVE_STEAMCMD_PATH=${NATIVE_STEAMCMD_PATH}" \
-      "GSH_NATIVE_SYSTEMD_UNIT_DIR=${NATIVE_USER_HOME}/.config/systemd/user" \
-      "GSH_NATIVE_USER=${NATIVE_SERVICE_USER}" \
-      "GSH_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}" \
-      "GSH_GITHUB_REPO=PMAT77/game-serve-hub" \
-      "GSH_RELEASE_VERSION=${GSH_RELEASE_TAG}"
+      "BSP_EDITION=community" \
+      "BSP_RESOURCE_PREFIX=${BSP_RESOURCE_PREFIX:-bsp}" \
+      "BSP_PANEL_DB_FILENAME=${PANEL_DB_FILENAME}" \
+      "BSP_PANEL_CONTAINER_NAME=${BSP_PANEL_CONTAINER_NAME:-bubblesharkpanel-panel}" \
+      "BSP_NATIVE_SERVICE=${PANEL_NATIVE_SERVICE}" \
+      "BSP_RUNTIME_MODE=native" \
+      "BSP_INSTANCES_ROOT=${PANEL_INSTANCES_DIR}" \
+      "BSP_BACKUPS_ROOT=${PANEL_BACKUPS_DIR}" \
+      "BSP_NATIVE_RUNTIME_DIR=${BSP_NATIVE_RUNTIME_DIR:-${PANEL_DATA_DIR}/runtime}" \
+      "BSP_NATIVE_STEAMCMD_PATH=${NATIVE_STEAMCMD_PATH}" \
+      "BSP_NATIVE_SYSTEMD_UNIT_DIR=${NATIVE_USER_HOME}/.config/systemd/user" \
+      "BSP_NATIVE_USER=${NATIVE_SERVICE_USER}" \
+      "BSP_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}" \
+      "BSP_GITHUB_REPO=PMAT77/bubble-shark-panel" \
+      "BSP_RELEASE_VERSION=${BSP_RELEASE_TAG}"
     log_info "Preserved existing Native panel.env and updated release/runtime keys."
   else
     detect_host_ip
@@ -1608,26 +1681,30 @@ prepare_native_panel_env() {
         "NODE_ENV=production" \
         "SERVER_HOST=0.0.0.0" \
         "SERVER_PORT=${PANEL_PORT}" \
-        "DB_PATH=${PANEL_DATA_DIR}/game-server-hub.sqlite" \
+        "DB_PATH=${PANEL_DATA_DIR}/${PANEL_DB_FILENAME}" \
         "SERVER_LOG_DIR=${PANEL_LOG_DIR}" \
         "# PANEL_PUBLIC_URL：$(panel_public_ip_source_label "${PANEL_PUBLIC_IP_SOURCE}")；换域名/反向代理请直接编辑本行" \
         "PANEL_PUBLIC_URL=${PANEL_ACCESS_URL}" \
         "ADMIN_USERNAME=${ADMIN_USERNAME}" \
         "ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
         "FORCE_PASSWORD_CHANGE=1" \
-        "GSH_EDITION=community" \
-        "GSH_RUNTIME_MODE=native" \
-        "GSH_INSTANCES_ROOT=${PANEL_INSTANCES_DIR}" \
-        "GSH_BACKUPS_ROOT=${PANEL_BACKUPS_DIR}" \
-        "GSH_NATIVE_RUNTIME_DIR=${PANEL_DATA_DIR}/runtime" \
-        "GSH_NATIVE_STEAMCMD_PATH=${NATIVE_STEAMCMD_PATH}" \
-        "GSH_NATIVE_SYSTEMD_UNIT_DIR=${NATIVE_USER_HOME}/.config/systemd/user" \
-        "GSH_NATIVE_USER=${NATIVE_SERVICE_USER}" \
-        "GSH_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}" \
-        "GSH_STEAMCMD_DOWNLOAD_REGION=${steamcmd_region}" \
-        "GSH_STEAMCMD_INSTALL_MAX_ATTEMPTS=${steamcmd_attempts}" \
-        "GSH_GITHUB_REPO=PMAT77/game-serve-hub" \
-        "GSH_RELEASE_VERSION=${GSH_RELEASE_TAG}" \
+        "BSP_EDITION=community" \
+      "BSP_RESOURCE_PREFIX=${BSP_RESOURCE_PREFIX:-bsp}" \
+      "BSP_PANEL_DB_FILENAME=${PANEL_DB_FILENAME}" \
+      "BSP_PANEL_CONTAINER_NAME=${BSP_PANEL_CONTAINER_NAME:-bubblesharkpanel-panel}" \
+      "BSP_NATIVE_SERVICE=${PANEL_NATIVE_SERVICE}" \
+        "BSP_RUNTIME_MODE=native" \
+        "BSP_INSTANCES_ROOT=${PANEL_INSTANCES_DIR}" \
+        "BSP_BACKUPS_ROOT=${PANEL_BACKUPS_DIR}" \
+        "BSP_NATIVE_RUNTIME_DIR=${BSP_NATIVE_RUNTIME_DIR:-${PANEL_DATA_DIR}/runtime}" \
+        "BSP_NATIVE_STEAMCMD_PATH=${NATIVE_STEAMCMD_PATH}" \
+        "BSP_NATIVE_SYSTEMD_UNIT_DIR=${NATIVE_USER_HOME}/.config/systemd/user" \
+        "BSP_NATIVE_USER=${NATIVE_SERVICE_USER}" \
+        "BSP_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}" \
+        "BSP_STEAMCMD_DOWNLOAD_REGION=${steamcmd_region}" \
+        "BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS=${steamcmd_attempts}" \
+        "BSP_GITHUB_REPO=PMAT77/bubble-shark-panel" \
+        "BSP_RELEASE_VERSION=${BSP_RELEASE_TAG}" \
         "TZ=UTC"
     } > "${panel_env_tmp}"
     run_as_root install -m 0640 -o root -g "${NATIVE_SERVICE_GROUP}" "${panel_env_tmp}" "${PANEL_ENV_FILE}"
@@ -1649,7 +1726,7 @@ prepare_native_panel_env() {
 
   run_as_root bash -c "cat > \"${NATIVE_SYSTEMD_UNIT}\" <<EOF
 [Unit]
-Description=Game Server Hub (Native)
+Description=BubbleShark Panel (Native)
 After=network-online.target user@${native_uid}.service
 Wants=network-online.target
 Requires=user@${native_uid}.service
@@ -1663,7 +1740,7 @@ EnvironmentFile=${PANEL_ENV_FILE}
 Environment=HOME=${NATIVE_USER_HOME}
 Environment=XDG_RUNTIME_DIR=/run/user/${native_uid}
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${native_uid}/bus
-ExecStart=${NATIVE_CURRENT_LINK}/bin/game-server-hub
+ExecStart=${NATIVE_CURRENT_LINK}/bin/bubblesharkpanel
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -1786,35 +1863,35 @@ Options:
   --check            Print the preflight report and exit without changing the system
   --open-panel-port  Open panel TCP port (${PANEL_PORT}) via ufw/firewalld
   --open-dst-ports   Open default DST UDP ports for master (${DST_GAME_PORT}, ${DST_AUTH_PORT}, ${DST_MASTER_PORT}) and caves (${DST_CAVES_GAME_PORT}, ${DST_CAVES_AUTH_PORT}, ${DST_CAVES_MASTER_PORT}) via ufw/firewalld
-  --no-swap          Do not create a swapfile on small-RAM hosts (same as GSH_SWAP_ON_INSTALL=0)
+  --no-swap          Do not create a swapfile on small-RAM hosts (same as BSP_SWAP_ON_INSTALL=0)
   -h, --help         Show this help
 
 Environment (optional):
-  GSH_INSTALL_MODE=MODE          Same as --mode
-  GSH_NETWORK_PROFILE=PROFILE    Same as --network
-  PANEL_PUBLIC_URL=URL          Explicit public panel URL (e.g. https://gsh.example.com); skips IP probing
+  BSP_INSTALL_MODE=MODE          Same as --mode
+  BSP_NETWORK_PROFILE=PROFILE    Same as --network
+  PANEL_PUBLIC_URL=URL          Explicit public panel URL (e.g. https://bsp.example.com); skips IP probing
   PANEL_HOST=IP                 Explicit panel host/IP; also skips IP probing
-  GSH_PANEL_AUTO_PUBLIC_IP=0    Disable public IP probing (default: cloud metadata, then outbound IP echo)
-  GSH_PANEL_PUBLIC_IP_BUDGET_SECONDS=3  Total budget for the public IP probing above
+  BSP_PANEL_AUTO_PUBLIC_IP=0    Disable public IP probing (default: cloud metadata, then outbound IP echo)
+  BSP_PANEL_PUBLIC_IP_BUDGET_SECONDS=3  Total budget for the public IP probing above
   INSTALL_STEAMCMD_IMAGE=0      Skip SteamCMD pre-pull (default: pre-pull so the panel is ready to create instances)
   PANEL_IMAGE=REF               Full unified image reference (tag or digest); overrides the GHCR default
-  GSH_GAME_DST_IMAGE=REF        Kept for compatibility; defaults to PANEL_IMAGE (v0.2.0 unified image)
-  GSH_STEAMCMD_IMAGE=REF        Kept for compatibility; defaults to PANEL_IMAGE (v0.2.0 unified image)
-  GSH_GITHUB_PROXY=URL          Force one GitHub accelerator (e.g. https://gh-proxy.com/)
-  GSH_IMAGE_SOURCE=MODE         Runtime image source: auto (default), offline (always use the
+  BSP_GAME_DST_IMAGE=REF        Kept for compatibility; defaults to PANEL_IMAGE (v0.2.0 unified image)
+  BSP_STEAMCMD_IMAGE=REF        Kept for compatibility; defaults to PANEL_IMAGE (v0.2.0 unified image)
+  BSP_GITHUB_PROXY=URL          Force one GitHub accelerator (e.g. https://gh-proxy.com/)
+  BSP_IMAGE_SOURCE=MODE         Runtime image source: auto (default), offline (always use the
                                 Release image archive), native (always pull from GHCR)
-  GSH_FORCE_IMAGE_PULL=1        Pull even when the image already exists locally
+  BSP_FORCE_IMAGE_PULL=1        Pull even when the image already exists locally
   HIDE_ADMIN_PASSWORD=1         Do not print the initial admin password in the install summary
   DOCKER_PULL_STALL_SECONDS=90  Give up a GHCR pull after this many seconds without progress
   PANEL_HEALTHCHECK_TIMEOUT_SECONDS=90  Maximum wait for panel /health after startup
   PANEL_HEALTHCHECK_INTERVAL_SECONDS=3  Panel /health polling interval
   USE_CN_DEBIAN_MIRROR=1        Enable CN Debian/Ubuntu mirror
-  GSH_NATIVE_RELEASE_ARCHIVE=PATH  Install a local Native Release archive
-  GSH_NATIVE_UPDATE_DIR=PATH    Native panel-update exchange directory (default: <data dir>/panel-update)
-  GSH_SWAP_ON_INSTALL=0         Do not create a swapfile automatically on small-RAM hosts (default: 1)
-  GSH_SWAP_SIZE=4G              Swapfile size when one is created (default: 2G, or 4G below ${HOST_MEMORY_WARN_MIN_MB} MB)
-  GSH_SWAP_FILE=PATH            Swapfile path (default: /swapfile-gsh)
-  GSH_SWAP_AUTO_THRESHOLD_MB=5120  Total RAM below which the swapfile is created (default: ${HOST_MEMORY_TIER_SMALL_MAX_MB})
+  BSP_NATIVE_RELEASE_ARCHIVE=PATH  Install a local Native Release archive
+  BSP_NATIVE_UPDATE_DIR=PATH    Native panel-update exchange directory (default: <data dir>/panel-update)
+  BSP_SWAP_ON_INSTALL=0         Do not create a swapfile automatically on small-RAM hosts (default: 1)
+  BSP_SWAP_SIZE=4G              Swapfile size when one is created (default: 2G, or 4G below ${HOST_MEMORY_WARN_MIN_MB} MB)
+  BSP_SWAP_FILE=PATH            Swapfile path (default: /swapfile-bsp)
+  BSP_SWAP_AUTO_THRESHOLD_MB=5120  Total RAM below which the swapfile is created (default: ${HOST_MEMORY_TIER_SMALL_MAX_MB})
   STRICT_INSTALLER_ASSET_CHECKSUM=0  Skip embedded checksum verification (not recommended)
   v0.2.0 unified image: one docker pull provides the panel, DST runtime libraries and SteamCMD.
 
@@ -1977,13 +2054,13 @@ probe_public_ipv4_from_urls() {
 
 # 探测对外可用的 IPv4；命中时设置 PANEL_PUBLIC_IP_SOURCE 与 PANEL_DETECTED_PUBLIC_IP 并返回 0。
 detect_public_access_ip() {
-  local budget="${GSH_PANEL_PUBLIC_IP_BUDGET_SECONDS}"
+  local budget="${BSP_PANEL_PUBLIC_IP_BUDGET_SECONDS}"
   local metadata_timeout=1
   local echo_timeout=2
   local deadline detected
 
   if [[ ! "${budget}" =~ ^[0-9]+$ ]] || (( budget <= 0 )); then
-    log_warn "Ignoring invalid GSH_PANEL_PUBLIC_IP_BUDGET_SECONDS=${GSH_PANEL_PUBLIC_IP_BUDGET_SECONDS}; using 3s."
+    log_warn "Ignoring invalid BSP_PANEL_PUBLIC_IP_BUDGET_SECONDS=${BSP_PANEL_PUBLIC_IP_BUDGET_SECONDS}; using 3s."
     budget=3
   fi
   if (( echo_timeout > budget )); then
@@ -2029,7 +2106,7 @@ resolve_panel_access_urls() {
     PANEL_PUBLIC_IP_SOURCE="interface"
     return
   fi
-  if env_flag_is_off "${GSH_PANEL_AUTO_PUBLIC_IP}"; then
+  if env_flag_is_off "${BSP_PANEL_AUTO_PUBLIC_IP}"; then
     PANEL_ACCESS_URL="${PANEL_LAN_URL}"
     PANEL_PUBLIC_IP_SOURCE="lan"
     return
@@ -2094,7 +2171,7 @@ read_host_mem_total_mb() {
 # 按总内存解析 panel.env 预设名（auto 时自动分档）。
 resolve_panel_env_preset_name() {
   local total_mb="$1"
-  local preset="${GSH_PANEL_ENV_PRESET}"
+  local preset="${BSP_PANEL_ENV_PRESET}"
 
   case "${preset}" in
     none|off|disable)
@@ -2108,7 +2185,7 @@ resolve_panel_env_preset_name() {
     auto|"")
       ;;
     *)
-      log_warn "Unknown GSH_PANEL_ENV_PRESET=${preset}, fallback to auto."
+      log_warn "Unknown BSP_PANEL_ENV_PRESET=${preset}, fallback to auto."
       ;;
   esac
 
@@ -2143,16 +2220,16 @@ warn_host_memory_tier() {
 
   if [[ "${total_mb}" -lt "${HOST_MEMORY_WARN_MIN_MB}" ]]; then
     log_warn "Host RAM is below ~4 GiB. Recommended: single surface shard, few mods, avoid caves. See docs/MEMORY.md."
-    log_warn "Single instance + caves + many mods may OOM. Consider upgrading to 6-8 GiB, use preset: config/panel.env.presets/small.env, and run: gsh setup-swap"
-    write_status "preflight" "warn" "Low host RAM ${total_mb} MB; see docs/MEMORY.md and gsh setup-swap"
+    log_warn "Single instance + caves + many mods may OOM. Consider upgrading to 6-8 GiB, use preset: config/panel.env.presets/small.env, and run: bsp setup-swap"
+    write_status "preflight" "warn" "Low host RAM ${total_mb} MB; see docs/MEMORY.md and bsp setup-swap"
   elif [[ "${total_mb}" -lt "${HOST_MEMORY_TIER_SMALL_MAX_MB}" ]]; then
-    log_warn "Host RAM tier is small (<5 GiB). Caves and heavy mod sets increase OOM risk. See docs/MEMORY.md; consider: gsh setup-swap"
+    log_warn "Host RAM tier is small (<5 GiB). Caves and heavy mod sets increase OOM risk. See docs/MEMORY.md; consider: bsp setup-swap"
     write_status "preflight" "warn" "Host RAM tier small (${total_mb} MB)"
   fi
 }
 
 # ---------- 安装时自动配置 swap（小内存机） ----------
-# 创建缓存区需要 root，而面板在 Docker 模式是非特权容器、在 Native 模式以 gsh 用户运行 systemd，
+# 创建缓存区需要 root，而面板在 Docker 模式是非特权容器、在 Native 模式以 bsp 用户运行 systemd，
 # 面板自己做不到这件事（这是有意的安全设计）。安装器本来就是 root，顺手做掉能消掉一整类
 # 「实例显示运行中、大厅却搜不到」的隐性故障。
 
@@ -2173,31 +2250,31 @@ resolve_auto_swap_size_mb() {
   fi
 }
 
-# 真正执行创建：优先复用仓库里的 gsh.sh（与 gsh setup-swap 完全同一份实现，避免两处漂移），
-# gsh.sh 不在本地时退回已部署的 gsh CLI（curl | bash 安装路线）。
+# 真正执行创建：优先复用仓库里的 bsp.sh（与 bsp setup-swap 完全同一份实现，避免两处漂移），
+# bsp.sh 不在本地时退回已部署的 bsp CLI（curl | bash 安装路线）。
 invoke_swap_setup() {
   local size_mb="$1"
   local script_dir candidate
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  candidate="${script_dir}/gsh.sh"
+  candidate="${script_dir}/bsp.sh"
   if [[ -f "${candidate}" ]]; then
     (
-      GSH_GSH_LIB_ONLY=1
-      GSH_SWAP_SIZE="${size_mb}M"
-      # shellcheck source=scripts/gsh.sh
+      BSP_BSP_LIB_ONLY=1
+      BSP_SWAP_SIZE="${size_mb}M"
+      # shellcheck source=scripts/bsp.sh
       source "${candidate}"
       cmd_setup_swap
     )
     return $?
   fi
 
-  if command -v gsh >/dev/null 2>&1; then
-    GSH_SWAP_SIZE="${size_mb}M" gsh setup-swap
+  if command -v bsp >/dev/null 2>&1; then
+    BSP_SWAP_SIZE="${size_mb}M" bsp setup-swap
     return $?
   fi
 
-  log_warn "gsh.sh (or the gsh CLI) is unavailable; skipping the automatic swapfile."
+  log_warn "bsp.sh (or the bsp CLI) is unavailable; skipping the automatic swapfile."
   return 1
 }
 
@@ -2205,10 +2282,10 @@ invoke_swap_setup() {
 ensure_small_host_swap() {
   local total_mb size_mb swap_file free_disk_mb
 
-  if [[ "${GSH_SWAP_ON_INSTALL}" == "0" || "${GSH_SWAP_ON_INSTALL}" == "off" || "${GSH_SWAP_ON_INSTALL}" == "false" ]]; then
+  if [[ "${BSP_SWAP_ON_INSTALL}" == "0" || "${BSP_SWAP_ON_INSTALL}" == "off" || "${BSP_SWAP_ON_INSTALL}" == "false" ]]; then
     AUTO_SWAP_STATE="skipped"
     AUTO_SWAP_SKIPPED_REASON="disabled"
-    log_info "Automatic swap setup disabled (GSH_SWAP_ON_INSTALL=${GSH_SWAP_ON_INSTALL})."
+    log_info "Automatic swap setup disabled (BSP_SWAP_ON_INSTALL=${BSP_SWAP_ON_INSTALL})."
     return 0
   fi
 
@@ -2220,10 +2297,10 @@ ensure_small_host_swap() {
     return 0
   fi
 
-  if [[ "${total_mb}" -ge "${GSH_SWAP_AUTO_THRESHOLD_MB}" ]]; then
+  if [[ "${total_mb}" -ge "${BSP_SWAP_AUTO_THRESHOLD_MB}" ]]; then
     AUTO_SWAP_STATE="skipped"
     AUTO_SWAP_SKIPPED_REASON="memory-ok"
-    log_info "Host RAM ${total_mb} MB >= ${GSH_SWAP_AUTO_THRESHOLD_MB} MB; no swapfile needed."
+    log_info "Host RAM ${total_mb} MB >= ${BSP_SWAP_AUTO_THRESHOLD_MB} MB; no swapfile needed."
     return 0
   fi
 
@@ -2236,7 +2313,7 @@ ensure_small_host_swap() {
 
   size_mb="$(resolve_auto_swap_size_mb "${total_mb}")"
   AUTO_SWAP_TARGET_MB="${size_mb}"
-  swap_file="${GSH_SWAP_FILE:-/swapfile-gsh}"
+  swap_file="${BSP_SWAP_FILE:-/swapfile-bsp}"
 
   # 没地方放 swapfile 时不要写出一个半途而废的配置：明确告警，让用户自行决定。
   free_disk_mb="$(df -Pm / | awk 'NR == 2 { print $4 }')"
@@ -2244,7 +2321,7 @@ ensure_small_host_swap() {
     AUTO_SWAP_STATE="skipped"
     AUTO_SWAP_SKIPPED_REASON="disk"
     log_warn "Root filesystem has ${free_disk_mb} MB free; a ${size_mb} MiB swapfile does not fit. Skipping automatic swap."
-    log_warn "Free some space and run: sudo gsh setup-swap"
+    log_warn "Free some space and run: sudo bsp setup-swap"
     return 0
   fi
 
@@ -2252,7 +2329,7 @@ ensure_small_host_swap() {
   if [[ "$(id -u)" -ne 0 ]]; then
     AUTO_SWAP_STATE="skipped"
     AUTO_SWAP_SKIPPED_REASON="not-root"
-    log_warn "Not running as root; skipping the automatic swapfile. Run: sudo gsh setup-swap"
+    log_warn "Not running as root; skipping the automatic swapfile. Run: sudo bsp setup-swap"
     return 0
   fi
 
@@ -2264,7 +2341,7 @@ ensure_small_host_swap() {
   fi
 
   AUTO_SWAP_STATE="failed"
-  log_warn "Automatic swapfile setup failed; the installer continues. Run manually: sudo gsh setup-swap"
+  log_warn "Automatic swapfile setup failed; the installer continues. Run manually: sudo bsp setup-swap"
   return 0
 }
 
@@ -2295,7 +2372,7 @@ append_panel_env_preset() {
   local script_dir preset_file
 
   if [[ "${preset_name}" == "none" ]]; then
-    log_info "GSH_PANEL_ENV_PRESET=none, skip merging panel.env preset."
+    log_info "BSP_PANEL_ENV_PRESET=none, skip merging panel.env preset."
     return
   fi
 
@@ -2309,7 +2386,7 @@ append_panel_env_preset() {
     return
   fi
 
-  run_as_root bash -c "printf '\n# --- merged by install.linux.sh (GSH_PANEL_ENV_PRESET=%s) ---\n' \"${preset_name}\" >> \"${PANEL_ENV_FILE}\""
+  run_as_root bash -c "printf '\n# --- merged by install.linux.sh (BSP_PANEL_ENV_PRESET=%s) ---\n' \"${preset_name}\" >> \"${PANEL_ENV_FILE}\""
   run_as_root bash -c "cat \"${preset_file}\" >> \"${PANEL_ENV_FILE}\""
   log_info "Merged panel.env preset: ${preset_name} (${preset_file})"
   write_status "deploy" "ok" "Merged panel.env preset ${preset_name}"
@@ -2367,7 +2444,7 @@ preflight_checks() {
 
   append_install_report ""
   append_install_report "前置体检报告"
-  append_install_report "  时间：$(date '+%Y-%m-%d %H:%M:%S')    安装器版本：${GSH_RELEASE_TAG}"
+  append_install_report "  时间：$(date '+%Y-%m-%d %H:%M:%S')    安装器版本：${BSP_RELEASE_TAG}"
   append_install_report "  机器：${DISTRO_ID:-unknown} ${DISTRO_CODENAME:-}（${arch}）"
   append_install_report ""
 
@@ -2397,15 +2474,15 @@ preflight_checks() {
 
   # 缓存区现状 + 本次安装会不会顺手创建：--check 在这里之后就会退出，所以这一项只是陈述。
   local swap_auto_threshold_mb swap_target_mb
-  swap_auto_threshold_mb="${GSH_SWAP_AUTO_THRESHOLD_MB}"
+  swap_auto_threshold_mb="${BSP_SWAP_AUTO_THRESHOLD_MB}"
   [[ "${swap_auto_threshold_mb}" =~ ^[0-9]+$ ]] || swap_auto_threshold_mb="${HOST_MEMORY_TIER_SMALL_MAX_MB}"
   if ! command -v swapon >/dev/null 2>&1; then
     report_item 1 "缓存区" "无法检测（缺少 swapon，属于 util-linux 包）"
   elif has_active_swap; then
     report_item 0 "缓存区" "已配置；安装阶段不再改动它（swapon --show 可看详情）"
-  elif [[ "${GSH_SWAP_ON_INSTALL}" == "0" || "${GSH_SWAP_ON_INSTALL}" == "off" || "${GSH_SWAP_ON_INSTALL}" == "false" ]]; then
-    report_item 1 "缓存区" "未配置；已按 GSH_SWAP_ON_INSTALL=${GSH_SWAP_ON_INSTALL} 关闭自动创建"
-    PREFLIGHT_NEXT_STEP="安装完成后执行 sudo gsh setup-swap：分片加载整套 Mod 时会短时冲高内存。"
+  elif [[ "${BSP_SWAP_ON_INSTALL}" == "0" || "${BSP_SWAP_ON_INSTALL}" == "off" || "${BSP_SWAP_ON_INSTALL}" == "false" ]]; then
+    report_item 1 "缓存区" "未配置；已按 BSP_SWAP_ON_INSTALL=${BSP_SWAP_ON_INSTALL} 关闭自动创建"
+    PREFLIGHT_NEXT_STEP="安装完成后执行 sudo bsp setup-swap：分片加载整套 Mod 时会短时冲高内存。"
   elif [[ "${host_mem_total_mb}" -gt 0 && "${host_mem_total_mb}" -lt "${swap_auto_threshold_mb}" ]]; then
     swap_target_mb="$(resolve_auto_swap_size_mb "${host_mem_total_mb}")"
     report_item 1 "缓存区" "未配置；安装阶段会创建 ${swap_target_mb} MiB 缓存区文件（重启后仍生效，--no-swap 可关闭）"
@@ -2569,8 +2646,8 @@ prepare_panel_files() {
 
   if [[ "${is_upgrade}" -eq 1 ]]; then
     local old_dst_image old_steamcmd_image
-    old_dst_image="$(read_env_value "${PANEL_ENV_FILE}" "GSH_GAME_DST_IMAGE")"
-    old_steamcmd_image="$(read_env_value "${PANEL_ENV_FILE}" "GSH_STEAMCMD_IMAGE")"
+    old_dst_image="$(read_env_value "${PANEL_ENV_FILE}" "BSP_GAME_DST_IMAGE")"
+    old_steamcmd_image="$(read_env_value "${PANEL_ENV_FILE}" "BSP_STEAMCMD_IMAGE")"
     if [[ -n "${old_dst_image}" && "${old_dst_image}" != "${PANEL_IMAGE}" ]]; then
       log_info "Detected legacy three-image layout (dst: ${old_dst_image}). Migrating to the v0.2.0 unified image (panel + DST + SteamCMD in one)."
     fi
@@ -2589,14 +2666,18 @@ prepare_panel_files() {
       "PANEL_BACKUPS_DIR=${PANEL_BACKUPS_DIR}"
     upsert_env_values "${PANEL_ENV_FILE}" \
       "PANEL_IMAGE=${PANEL_IMAGE}" \
-      "GSH_EDITION=community" \
-      "GSH_RUNTIME_MODE=docker" \
-      "GSH_GAME_DST_IMAGE=${GSH_GAME_DST_IMAGE}" \
-      "GSH_STEAMCMD_IMAGE=${GSH_STEAMCMD_IMAGE}" \
-      "GSH_STACK_DIR=${PANEL_INSTALL_DIR}" \
-      "GSH_COMPOSE_FILES=docker-compose.yml:docker-compose.bind.yml" \
-      "GSH_GITHUB_REPO=PMAT77/game-serve-hub" \
-      "GSH_RELEASE_VERSION=${GSH_RELEASE_TAG}"
+      "BSP_EDITION=community" \
+      "BSP_RESOURCE_PREFIX=${BSP_RESOURCE_PREFIX:-bsp}" \
+      "BSP_PANEL_DB_FILENAME=${PANEL_DB_FILENAME}" \
+      "BSP_PANEL_CONTAINER_NAME=${BSP_PANEL_CONTAINER_NAME:-bubblesharkpanel-panel}" \
+      "BSP_NATIVE_SERVICE=${PANEL_NATIVE_SERVICE}" \
+      "BSP_RUNTIME_MODE=docker" \
+      "BSP_GAME_DST_IMAGE=${BSP_GAME_DST_IMAGE}" \
+      "BSP_STEAMCMD_IMAGE=${BSP_STEAMCMD_IMAGE}" \
+      "BSP_STACK_DIR=${PANEL_INSTALL_DIR}" \
+      "BSP_COMPOSE_FILES=docker-compose.yml:docker-compose.bind.yml" \
+      "BSP_GITHUB_REPO=PMAT77/bubble-shark-panel" \
+      "BSP_RELEASE_VERSION=${BSP_RELEASE_TAG}"
     log_info "Preserved existing Docker panel.env and updated release/image keys."
   else
     generate_admin_credentials
@@ -2616,20 +2697,24 @@ prepare_panel_files() {
         "ADMIN_USERNAME=${ADMIN_USERNAME}" \
         "ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
         "FORCE_PASSWORD_CHANGE=1" \
-        "GSH_EDITION=community" \
-        "GSH_RUNTIME_MODE=docker" \
+        "BSP_EDITION=community" \
+      "BSP_RESOURCE_PREFIX=${BSP_RESOURCE_PREFIX:-bsp}" \
+      "BSP_PANEL_DB_FILENAME=${PANEL_DB_FILENAME}" \
+      "BSP_PANEL_CONTAINER_NAME=${BSP_PANEL_CONTAINER_NAME:-bubblesharkpanel-panel}" \
+      "BSP_NATIVE_SERVICE=${PANEL_NATIVE_SERVICE}" \
+        "BSP_RUNTIME_MODE=docker" \
         "DOCKER_HOST=unix:///var/run/docker.sock" \
-        "GSH_GAME_DST_IMAGE=${GSH_GAME_DST_IMAGE}" \
-        "GSH_STEAMCMD_IMAGE=${GSH_STEAMCMD_IMAGE}" \
-        "GSH_STEAMCMD_DOWNLOAD_REGION=${steamcmd_region}" \
-        "GSH_STEAMCMD_INSTALL_MAX_ATTEMPTS=${steamcmd_attempts}" \
-        "# GSH_STEAMCMD_INSTALL_RETRY_DELAYS_MS=5000,10000,15000,20000,25000,30000,35000" \
+        "BSP_GAME_DST_IMAGE=${BSP_GAME_DST_IMAGE}" \
+        "BSP_STEAMCMD_IMAGE=${BSP_STEAMCMD_IMAGE}" \
+        "BSP_STEAMCMD_DOWNLOAD_REGION=${steamcmd_region}" \
+        "BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS=${steamcmd_attempts}" \
+        "# BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS=5000,10000,15000,20000,25000,30000,35000" \
         "# STEAMCMD_USERNAME=" \
         "# STEAMCMD_PASSWORD=" \
-        "GSH_STACK_DIR=${PANEL_INSTALL_DIR}" \
-        "GSH_COMPOSE_FILES=docker-compose.yml:docker-compose.bind.yml" \
-        "GSH_GITHUB_REPO=PMAT77/game-serve-hub" \
-        "GSH_RELEASE_VERSION=${GSH_RELEASE_TAG}" \
+        "BSP_STACK_DIR=${PANEL_INSTALL_DIR}" \
+        "BSP_COMPOSE_FILES=docker-compose.yml:docker-compose.bind.yml" \
+        "BSP_GITHUB_REPO=PMAT77/bubble-shark-panel" \
+        "BSP_RELEASE_VERSION=${BSP_RELEASE_TAG}" \
         "TZ=UTC"
     } > "${panel_env_tmp}"
     run_as_root install -m 0600 -o root "${panel_env_tmp}" "${PANEL_ENV_FILE}"
@@ -2653,12 +2738,12 @@ rollback_install() {
   write_status "rollback" "start" "Rolling back failed deployment"
   if [[ "${RESOLVED_INSTALL_MODE}" == "native" ]]; then
     log_warn "Native deployment failed, stopping the panel service..."
-    run_as_root systemctl stop game-server-hub.service >/dev/null 2>&1 || true
+    run_as_root systemctl stop ${PANEL_NATIVE_SERVICE} >/dev/null 2>&1 || true
     restore_existing_install_state
     if [[ -n "${NATIVE_PREVIOUS_RELEASE}" && -d "${NATIVE_PREVIOUS_RELEASE}" ]]; then
       run_as_root ln -sfn "${NATIVE_PREVIOUS_RELEASE}" "${NATIVE_CURRENT_LINK}.rollback"
       run_as_root mv -Tf "${NATIVE_CURRENT_LINK}.rollback" "${NATIVE_CURRENT_LINK}"
-      run_as_root systemctl start game-server-hub.service >/dev/null 2>&1 || true
+      run_as_root systemctl start ${PANEL_NATIVE_SERVICE} >/dev/null 2>&1 || true
     fi
   else
     log_warn "Deployment failed, rolling back container stack..."
@@ -2690,7 +2775,7 @@ pull_install_steamcmd_image() {
 pull_runtime_images() {
   # 离线镜像包导入后本地已有该 tag；v* tag 不可变，无需重复拉取。
   # 否则弱网环境（GHCR 的镜像层域名常不可达）会在这一步中止整个安装。
-  if [[ "${GSH_FORCE_IMAGE_PULL:-0}" != "1" ]] \
+  if [[ "${BSP_FORCE_IMAGE_PULL:-0}" != "1" ]] \
     && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
     log_info "Runtime image already present locally, skipping pull: ${PANEL_IMAGE}"
     return 0
@@ -2713,7 +2798,7 @@ pull_runtime_images() {
         log_warn "  - ${tag_ref}"
       fi
     done <<< "${local_tag_refs}"
-    log_warn "若上面就是你要的版本，用 GSH_RELEASE_TAG=<对应的版本 tag> 重跑本安装器即可跳过下载。"
+    log_warn "若上面就是你要的版本，用 BSP_RELEASE_TAG=<对应的版本 tag> 重跑本安装器即可跳过下载。"
   fi
 
   if [[ "${IMAGE_ROUTE}" == "ghcr" ]]; then
@@ -2724,9 +2809,9 @@ pull_runtime_images() {
     log_error "Failed to pull runtime image: ${PANEL_IMAGE}"
     log_error "GHCR 的镜像层域名（pkg-containers.githubusercontent.com）在国内常不可达，表现为 TLS handshake timeout 或长时间 Waiting。"
     log_error "请改用 Release 离线镜像包：下载 $(release_offline_image_filename)（同目录有 .sha256），再用 docker load -i 导入，然后重跑本安装器（镜像已在本地，会自动跳过拉取）。"
-    log_error "离线包下载页：https://github.com/PMAT77/game-serve-hub/releases/tag/${GSH_RELEASE_TAG}"
+    log_error "离线包下载页：https://github.com/PMAT77/bubble-shark-panel/releases/tag/${BSP_RELEASE_TAG}"
     log_error "完整步骤见仓库 docs/install-docker.md 的「安装（国内服务器）」。"
-    log_error "如需强制重新拉取，可设置 GSH_FORCE_IMAGE_PULL=1；想固定走直拉可设置 GSH_IMAGE_SOURCE=native。"
+    log_error "如需强制重新拉取，可设置 BSP_FORCE_IMAGE_PULL=1；想固定走直拉可设置 BSP_IMAGE_SOURCE=native。"
     return 1
   fi
 }
@@ -2759,7 +2844,7 @@ pull_with_stall_detection() {
 
 run_pull_attempt_with_stall_detection() {
   local pull_log pull_pid waited last_size current_size stall_seconds
-  pull_log="$(run_as_root mktemp /tmp/gsh-pull-XXXXXX)"
+  pull_log="$(run_as_root mktemp /tmp/bsp-pull-XXXXXX)"
   waited=0
   stall_seconds=0
 
@@ -2804,7 +2889,7 @@ run_pull_attempt_with_stall_detection() {
 
 # Release 离线镜像包名（与 .github/workflows/docker-publish.yml 的资产名保持一致）。
 release_offline_image_filename() {
-  printf '%s' "game-server-hub-${GSH_RELEASE_TAG}-docker-image.tar.gz"
+  printf '%s' "bubblesharkpanel-${BSP_RELEASE_TAG}-docker-image.tar.gz"
 }
 
 # 下载并校验离线镜像包。
@@ -2815,7 +2900,7 @@ release_offline_image_filename() {
 download_release_offline_image() {
   local filename asset_url sha_url target_dir target_path proxy source attempt actual expected
   filename="$(release_offline_image_filename)"
-  asset_url="https://github.com/PMAT77/game-serve-hub/releases/download/${GSH_RELEASE_TAG}/${filename}"
+  asset_url="https://github.com/PMAT77/bubble-shark-panel/releases/download/${BSP_RELEASE_TAG}/${filename}"
   sha_url="${asset_url}.sha256"
   target_dir="${PANEL_INSTALL_DIR}/offline"
   if ! run_as_root mkdir -p "${target_dir}"; then
@@ -2860,12 +2945,12 @@ download_release_offline_image() {
   return 1
 }
 
-# 导入离线镜像包；镜像存在时不再重复导入（GSH_FORCE_IMAGE_PULL=1 时强制重新导入）。
+# 导入离线镜像包；镜像存在时不再重复导入（BSP_FORCE_IMAGE_PULL=1 时强制重新导入）。
 import_release_offline_image() {
   if [[ -z "${RELEASE_OFFLINE_IMAGE_PATH}" ]]; then
     return 1
   fi
-  if [[ "${GSH_FORCE_IMAGE_PULL:-0}" != "1" ]] && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
+  if [[ "${BSP_FORCE_IMAGE_PULL:-0}" != "1" ]] && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
     log_info "本地已有 ${PANEL_IMAGE}，跳过导入离线镜像包"
     OFFLINE_IMAGE_IMPORTED=1
     return 0
@@ -2876,7 +2961,7 @@ import_release_offline_image() {
     return 1
   fi
   if ! run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
-    log_error "离线镜像包导入后仍找不到 ${PANEL_IMAGE}：包与安装器版本可能不一致（安装器 ${GSH_RELEASE_TAG}）。"
+    log_error "离线镜像包导入后仍找不到 ${PANEL_IMAGE}：包与安装器版本可能不一致（安装器 ${BSP_RELEASE_TAG}）。"
     return 1
   fi
   OFFLINE_IMAGE_IMPORTED=1
@@ -2897,14 +2982,14 @@ ensure_panel_image_available() {
     return 0
   fi
   # 本地已有目标镜像：pull_runtime_images 本来就会跳过拉取，无需再判断网络。
-  if [[ "${GSH_FORCE_IMAGE_PULL:-0}" != "1" ]] && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
+  if [[ "${BSP_FORCE_IMAGE_PULL:-0}" != "1" ]] && run_as_root docker image inspect "${PANEL_IMAGE}" >/dev/null 2>&1; then
     return 0
   fi
   if [[ "${OFFLINE_IMAGE_ROUTE}" -ne 1 ]]; then
     return 0
   fi
 
-  log_info "本次走 Release 离线镜像包（走加速代理，带 .sha256 校验；可用 GSH_IMAGE_SOURCE=native 强制直拉）。"
+  log_info "本次走 Release 离线镜像包（走加速代理，带 .sha256 校验；可用 BSP_IMAGE_SOURCE=native 强制直拉）。"
   if download_release_offline_image && import_release_offline_image; then
     return 0
   fi
@@ -2917,7 +3002,7 @@ ensure_panel_image_available() {
   fi
 
   log_error "离线镜像包下载或导入失败，且 GHCR 的层数据不可达（预检 ${GHCR_LAYER_PROBE_SECONDS}s/-1 未通过）。"
-  log_error "手动下载：https://github.com/PMAT77/game-serve-hub/releases/tag/${GSH_RELEASE_TAG}"
+  log_error "手动下载：https://github.com/PMAT77/bubble-shark-panel/releases/tag/${BSP_RELEASE_TAG}"
   log_error "文件名：$(release_offline_image_filename)（同目录有 .sha256），下载后校验并 docker load -i 导入，再重跑本安装器。"
   return 1
 }
@@ -2978,12 +3063,12 @@ deploy_native_panel() {
   write_status "configuration" "ok" "Native configuration prepared"
 
   begin_stage "startup" "Starting Native panel service"
-  run_as_root systemctl enable --now game-server-hub.service
+  run_as_root systemctl enable --now ${PANEL_NATIVE_SERVICE}
   if [[ "${NATIVE_RELEASE_REPLACED}" -eq 1 ]]; then
     # enable --now 对已在运行的服务是空操作，而升级换的是 current 符号链接：
     # 不重启的话面板进程仍跑旧版本，升级看似成功但界面还是旧版。
-    run_as_root systemctl try-restart game-server-hub.service
-    log_info "Restarted the panel service to load ${GSH_RELEASE_TAG}."
+    run_as_root systemctl try-restart ${PANEL_NATIVE_SERVICE}
+    log_info "Restarted the panel service to load ${BSP_RELEASE_TAG}."
   fi
   write_status "startup" "ok" "Native panel service started"
 
@@ -2992,40 +3077,42 @@ deploy_native_panel() {
   write_status "health" "ok" "Native panel health endpoint is ready"
 }
 
-# 部署 gsh CLI 到 /usr/local/bin（优先本地仓库，其次镜像池下载）。
+# 部署 bsp CLI 到 /usr/local/bin（优先本地仓库，其次镜像池下载）。
 install_gsh_cli() {
   local script_dir src tmp
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  src="${script_dir}/../scripts/gsh.sh"
+  src="${script_dir}/../scripts/bsp.sh"
   if [[ ! -f "${src}" ]]; then
     tmp="$(mktemp)"
-    if download_installer_asset "scripts/gsh.sh" "${tmp}"; then
+    if download_installer_asset "scripts/bsp.sh" "${tmp}"; then
       src="${tmp}"
     else
-      log_warn "gsh.sh not available locally or from mirrors; skip CLI install."
+      log_warn "bsp.sh not available locally or from mirrors; skip CLI install."
       return 0
     fi
   fi
-  run_as_root install -m 0755 "${src}" /usr/local/bin/gsh
-  log_info "Installed panel CLI: /usr/local/bin/gsh (try: gsh doctor)"
+  run_as_root install -m 0755 "${src}" /usr/local/bin/bsp
+  run_as_root ln -sfn bsp /usr/local/bin/gsh
+  log_info "Installed panel CLI: /usr/local/bin/bsp (try: bsp doctor)"
 }
 
 # 面板内更新（Native）的触发单元：面板只写请求文件，真正的安装动作由 root 的 oneshot 服务执行。
 native_update_service_unit() {
   cat <<EOF
 [Unit]
-Description=Game Server Hub panel update (Native release install)
+Description=BubbleShark Panel panel update (Native release install)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-# 把安装期确定下来的真实路径注入执行器：panel.env 里没有这些键（GSH_STACK_DIR 是 Docker 分支的键），
+# 把安装期确定下来的真实路径注入执行器：panel.env 里没有这些键（BSP_STACK_DIR 是 Docker 分支的键），
 # 自定义 PANEL_INSTALL_DIR / PANEL_DATA_DIR 的机器就靠它找到安装目录与交换目录。
-Environment="GSH_PANEL_ENV_FILE=${PANEL_ENV_FILE}"
-Environment="GSH_INSTALL_DIR=${PANEL_INSTALL_DIR}"
-Environment="GSH_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}"
-Environment="GSH_NATIVE_USER=${NATIVE_SERVICE_USER}"
+Environment="BSP_PANEL_ENV_FILE=${PANEL_ENV_FILE}"
+Environment="BSP_NATIVE_SERVICE=${PANEL_NATIVE_SERVICE}"
+Environment="BSP_INSTALL_DIR=${PANEL_INSTALL_DIR}"
+Environment="BSP_NATIVE_UPDATE_DIR=${NATIVE_UPDATE_DIR}"
+Environment="BSP_NATIVE_USER=${NATIVE_SERVICE_USER}"
 ExecStart=${NATIVE_UPDATE_HELPER_PATH}
 TimeoutStartSec=2700
 EOF
@@ -3034,7 +3121,7 @@ EOF
 native_update_path_unit() {
   cat <<EOF
 [Unit]
-Description=Watch the panel update request for Game Server Hub (Native)
+Description=Watch the panel update request for BubbleShark Panel (Native)
 
 [Path]
 PathExists=${NATIVE_UPDATE_DIR}/request
@@ -3050,17 +3137,17 @@ install_native_update_helper() {
   local script_dir src tmp service_tmp path_tmp
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
   src=""
-  if [[ -n "${script_dir}" && -f "${script_dir}/gsh-native-update.sh" ]]; then
-    src="${script_dir}/gsh-native-update.sh"
-  elif [[ -n "${script_dir}" && -f "${script_dir}/../scripts/gsh-native-update.sh" ]]; then
-    src="${script_dir}/../scripts/gsh-native-update.sh"
+  if [[ -n "${script_dir}" && -f "${script_dir}/bsp-native-update.sh" ]]; then
+    src="${script_dir}/bsp-native-update.sh"
+  elif [[ -n "${script_dir}" && -f "${script_dir}/../scripts/bsp-native-update.sh" ]]; then
+    src="${script_dir}/../scripts/bsp-native-update.sh"
   fi
   if [[ -z "${src}" ]]; then
     tmp="$(mktemp)"
-    if download_installer_asset "scripts/gsh-native-update.sh" "${tmp}"; then
+    if download_installer_asset "scripts/bsp-native-update.sh" "${tmp}"; then
       src="${tmp}"
     else
-      log_warn "gsh-native-update.sh not available locally or from mirrors; panel updates will keep asking for a manual command."
+      log_warn "bsp-native-update.sh not available locally or from mirrors; panel updates will keep asking for a manual command."
       return 0
     fi
   fi
@@ -3099,7 +3186,7 @@ print_summary() {
   sub_rule="----------------------------------------------------------------------"
 
   printf '\n%s\n' "${rule}"
-  printf ' 安装完成：game-server-hub %s\n' "${GSH_RELEASE_TAG}"
+  printf ' 安装完成：bubblesharkpanel %s\n' "${BSP_RELEASE_TAG}"
   printf ' 部署模式：%s    网络档：%s\n' "${RESOLVED_INSTALL_MODE}" "${RESOLVED_NETWORK_PROFILE}"
   printf '%s\n' "${rule}"
   printf ' 面板地址   %s（%s）\n' "${PANEL_ACCESS_URL}" "$(panel_public_ip_source_label "${PANEL_PUBLIC_IP_SOURCE}")"
@@ -3116,13 +3203,13 @@ print_summary() {
   fi
   printf '%s\n' "${sub_rule}"
   if [[ "${RESOLVED_INSTALL_MODE}" == "native" ]]; then
-    printf ' 面板服务   game-server-hub.service（sudo systemctl status 查看）\n'
+    printf ' 面板服务   %s（sudo systemctl status 查看）\n' "${PANEL_NATIVE_SERVICE}"
     printf ' 程序目录   %s\n' "${NATIVE_CURRENT_LINK}"
   else
     printf ' 运行镜像   %s\n' "${PANEL_IMAGE}"
     printf ' 安装目录   %s\n' "${PANEL_INSTALL_DIR}"
   fi
-  printf ' 常用命令   gsh doctor（体检）· gsh status（状态）· gsh setup-swap（缓存区）\n'
+  printf ' 常用命令   bsp doctor（体检）· bsp status（状态）· bsp setup-swap（缓存区）\n'
   # 用 date 而不是 SECONDS：冒烟测试里 source 过来的 SECONDS 受到其它脚本影响，读数不可靠。
   local elapsed_seconds=$(( $(date +%s) - INSTALL_STARTED_AT ))
   if (( elapsed_seconds < 0 )); then
@@ -3163,24 +3250,24 @@ print_summary() {
     skipped)
       case "${AUTO_SWAP_SKIPPED_REASON}" in
         disk)
-          printf ' 5. 根分区余量不足，未创建缓存区；腾出空间后执行 sudo gsh setup-swap\n'
+          printf ' 5. 根分区余量不足，未创建缓存区；腾出空间后执行 sudo bsp setup-swap\n'
           ;;
         disabled)
-          printf ' 5. 已按要求跳过自动缓存区；需要时执行 sudo gsh setup-swap（docs/MEMORY.md）\n'
+          printf ' 5. 已按要求跳过自动缓存区；需要时执行 sudo bsp setup-swap（docs/MEMORY.md）\n'
           ;;
         memory-ok)
           printf ' 5. 内存充足，未创建缓存区\n'
           ;;
         *)
-          printf ' 5. 未能自动配置缓存区；内存偏小时执行 sudo gsh setup-swap（docs/MEMORY.md）\n'
+          printf ' 5. 未能自动配置缓存区；内存偏小时执行 sudo bsp setup-swap（docs/MEMORY.md）\n'
           ;;
       esac
       ;;
     failed)
-      printf ' 5. 自动创建缓存区失败（不阻断安装）；请手动执行 sudo gsh setup-swap，详见 docs/MEMORY.md\n'
+      printf ' 5. 自动创建缓存区失败（不阻断安装）；请手动执行 sudo bsp setup-swap，详见 docs/MEMORY.md\n'
       ;;
     *)
-      printf ' 5. 内存偏小（≤ 6 GiB）建议执行 sudo gsh setup-swap，详见 docs/MEMORY.md\n'
+      printf ' 5. 内存偏小（≤ 6 GiB）建议执行 sudo bsp setup-swap，详见 docs/MEMORY.md\n'
       ;;
   esac
   printf '%s\n\n' "${rule}"
@@ -3228,7 +3315,7 @@ main() {
         shift
         ;;
       --no-swap)
-        GSH_SWAP_ON_INSTALL=0
+        BSP_SWAP_ON_INSTALL=0
         shift
         ;;
       --check)
@@ -3262,7 +3349,7 @@ main() {
   if [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
     finalize_image_refs
     # 自证身份：脚本默认 tag 与本地镜像 tag 不一致时，这一行最先暴露问题（含实际执行的文件名）。
-    log_info "Installer: ${SCRIPT_NAME} release=${GSH_RELEASE_TAG} image=${PANEL_IMAGE}"
+    log_info "Installer: ${SCRIPT_NAME} release=${BSP_RELEASE_TAG} image=${PANEL_IMAGE}"
   fi
 
   INSTALL_STARTED_AT="$(date +%s)"
@@ -3292,7 +3379,7 @@ main() {
   install_base_packages
   if [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
     if ! install_docker; then
-      abort "Docker installation failed. See /var/log/game-server-hub/install.status and the troubleshooting section in docs/install-docker.md; if the error above contains manual commands, run them and rerun this installer."
+      abort "Docker installation failed. See /var/log/bubblesharkpanel/install.status and the troubleshooting section in docs/install-docker.md; if the error above contains manual commands, run them and rerun this installer."
     fi
     add_user_to_docker_group
     write_status "dependencies" "ok" "Docker dependencies installed"
@@ -3301,8 +3388,8 @@ main() {
     ensure_native_service_user
     write_status "dependencies" "ok" "Native systemd dependencies installed"
   fi
-  # gsh CLI 必须在自动 swap 之前就位：面板容器不以 root 运行，创建缓存区需要 root，
-  # 所以安装器是唯一能一次性把这件事做掉的环节（也是 gsh setup-swap 的兜底）。
+  # bsp CLI 必须在自动 swap 之前就位：面板容器不以 root 运行，创建缓存区需要 root，
+  # 所以安装器是唯一能一次性把这件事做掉的环节（也是 bsp setup-swap 的兜底）。
   install_gsh_cli
   backup_existing_install_state
 
@@ -3336,6 +3423,6 @@ main() {
   print_summary
 }
 
-if [[ "${GSH_INSTALLER_LIB_ONLY:-0}" != "1" ]]; then
+if [[ "${BSP_INSTALLER_LIB_ONLY:-0}" != "1" ]]; then
   main "$@"
 fi

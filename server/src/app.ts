@@ -37,7 +37,7 @@ export async function createServerApp(config: Pick<ServerConfig, 'mode' | 'logLe
     logger: {
       level: config.logLevel,
       base: {
-        service: 'game-server-hub-backend',
+        service: 'bubblesharkpanel-backend',
         env: config.mode,
       },
     },
@@ -60,7 +60,7 @@ export async function createServerApp(config: Pick<ServerConfig, 'mode' | 'logLe
     const runtimeStatus = getCachedRuntimeStatus()
     return {
       status: 'ok',
-      service: 'game-server-hub-backend',
+      service: 'bubblesharkpanel-backend',
       runtime: {
         mode: config.runtimeMode,
         status: runtimeStatus,

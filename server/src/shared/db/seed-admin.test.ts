@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import type { AdminCredentialOutcome } from '../config/credentials-file'
 import { closeDatabase, findUserByAccount, initDatabase, updateUserPassword, verifyPassword } from '../../shared/db/index'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-seed-admin-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-seed-admin-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 describe('seedAdminUserFromEnv', () => {
@@ -50,7 +50,7 @@ describe('seedAdminUserFromEnv', () => {
   })
 
   it('reports created / skipped / updated / absent for the credentials outcome', async () => {
-    const outcomeDbPath = path.join(os.tmpdir(), `gsh-seed-admin-outcome-test-${randomUUID()}.sqlite`)
+    const outcomeDbPath = path.join(os.tmpdir(), `bsp-seed-admin-outcome-test-${randomUUID()}.sqlite`)
     const outcomes: AdminCredentialOutcome[] = []
     const record = (outcome: AdminCredentialOutcome) => {
       outcomes.push(outcome)

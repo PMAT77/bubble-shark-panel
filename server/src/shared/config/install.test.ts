@@ -4,8 +4,8 @@ import { isInstallSeedEnabled, shouldDeferDstImagePullOnInstall } from './instal
 
 describe('install config', () => {
   afterEach(() => {
-    delete process.env.GSH_INSTALL_SEED_ENABLED
-    delete process.env.GSH_INSTALL_DEFER_DST_IMAGE_PULL
+    delete process.env.BSP_INSTALL_SEED_ENABLED
+    delete process.env.BSP_INSTALL_DEFER_DST_IMAGE_PULL
   })
 
   it('enables install seed by default', () => {
@@ -13,7 +13,7 @@ describe('install config', () => {
   })
 
   it('disables install seed when env is 0', () => {
-    process.env.GSH_INSTALL_SEED_ENABLED = '0'
+    process.env.BSP_INSTALL_SEED_ENABLED = '0'
     assert.equal(isInstallSeedEnabled(), false)
   })
 
@@ -22,7 +22,7 @@ describe('install config', () => {
   })
 
   it('pulls dst image on install when defer disabled', () => {
-    process.env.GSH_INSTALL_DEFER_DST_IMAGE_PULL = '0'
+    process.env.BSP_INSTALL_DEFER_DST_IMAGE_PULL = '0'
     assert.equal(shouldDeferDstImagePullOnInstall(), false)
   })
 })

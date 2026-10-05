@@ -29,14 +29,14 @@ const FORBIDDEN = [
 ]
 
 /** 只有在字符串字面量里才算缺陷：这些前缀同时也是代码标识符命名习惯 */
-const FORBIDDEN_IN_STRING = ['GSH_', 'PANEL_', 'ADMIN_PASSWORD', 'panel.env']
+const FORBIDDEN_IN_STRING = ['BSP_', 'PANEL_', 'ADMIN_PASSWORD', 'panel.env']
 
 /**
- * 例外文件：这里的 `GSH_` 出现在**用户要照着敲的命令**里，不是解释性文案。
+ * 例外文件：这里的 `BSP_` 出现在**用户要照着敲的命令**里，不是解释性文案。
  *
- * `gsh setup-swap` 只认 `GSH_SWAP_SIZE` 环境变量（没有 `--size` 这类参数，见 scripts/gsh.sh 的
+ * `bsp setup-swap` 只认 `BSP_SWAP_SIZE` 环境变量（没有 `--size` 这类参数，见 scripts/bsp.sh 的
  * cmd_setup_swap），把「缓存区扩到 4 GiB」写成可照抄的命令就只有这一种写法。
- * 例外按文件给而不是删词：删掉 `GSH_` 会让整改方向变成「别提示用户扩容」。
+ * 例外按文件给而不是删词：删掉 `BSP_` 会让整改方向变成「别提示用户扩容」。
  */
 const FORBIDDEN_IN_STRING_EXEMPT = new Set(['src/utils/hostMemoryPressure.ts'])
 

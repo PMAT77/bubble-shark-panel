@@ -20,7 +20,7 @@ describe('describeSystemdExitReason 的内存补充判断', () => {
     assert.ok(reason)
     assert.match(reason, /进程被信号终止/)
     assert.match(reason, /未配置缓存区/)
-    assert.match(reason, /gsh setup-swap/)
+    assert.match(reason, /bsp setup-swap/)
   })
 
   it('缓存区配了但被用满时，给的是扩容做法而不是再跑一遍 setup-swap', () => {
@@ -31,9 +31,9 @@ describe('describeSystemdExitReason 的内存补充判断', () => {
     })
     assert.ok(reason)
     assert.match(reason, /进程被信号终止/)
-    // 已有缓存区时 gsh setup-swap 会直接返回：提示再跑一遍只会白折腾一轮
+    // 已有缓存区时 bsp setup-swap 会直接返回：提示再跑一遍只会白折腾一轮
     assert.match(reason, /缓存区已被用满（共 2048 MiB）/)
-    assert.match(reason, /GSH_SWAP_SIZE=4G gsh setup-swap/)
+    assert.match(reason, /BSP_SWAP_SIZE=4G bsp setup-swap/)
     assert.doesNotMatch(reason, /未配置缓存区/)
   })
 
@@ -45,7 +45,7 @@ describe('describeSystemdExitReason 的内存补充判断', () => {
     })
     assert.ok(reason)
     assert.match(reason, /非零状态退出/)
-    assert.match(reason, /gsh setup-swap/)
+    assert.match(reason, /bsp setup-swap/)
   })
 
   it('内存真的紧张时按当前余量提示，即使已经配了 swap', () => {
@@ -82,14 +82,14 @@ describe('describeMemoryHint', () => {
   })
 
   it('确实没有配置缓存区时才让补缓存区', () => {
-    assert.match(describeMemoryHint({ availableMb: 9999, swapFreeMb: 0, swapTotalMb: 0 }) ?? '', /gsh setup-swap/)
+    assert.match(describeMemoryHint({ availableMb: 9999, swapFreeMb: 0, swapTotalMb: 0 }) ?? '', /bsp setup-swap/)
   })
 
   it('swap 配了但已用满时不说「未配置」，改说扩容', () => {
     const hint = describeMemoryHint({ availableMb: 9999, swapFreeMb: 0, swapTotalMb: 2048 })
     assert.ok(hint)
     assert.match(hint, /已被用满（共 2048 MiB）/)
-    assert.match(hint, /GSH_SWAP_SIZE=4G gsh setup-swap/)
+    assert.match(hint, /BSP_SWAP_SIZE=4G bsp setup-swap/)
     assert.doesNotMatch(hint, /未配置/)
   })
 

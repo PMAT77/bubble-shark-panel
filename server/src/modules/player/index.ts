@@ -648,7 +648,7 @@ async function rememberOnlineNames(instanceId: string, snapshots: DstShardOnline
  * 从日志里补玩家名。
  *
  * 覆盖两种日志来源：
- * - 面板自己采集的控制台日志：里面有面板注入的 `GSH_PLAYER_LIST_ITEM:...` 标记行，
+ * - 面板自己采集的控制台日志：里面有面板注入的 `BSP_PLAYER_LIST_ITEM:...` 标记行，
  *   这是最可靠的名字来源（制表符分隔、由面板生成）；
  * - 游戏自己写的 server_log.txt：部分版本会打印 `Client authenticated: (KU_x) 名字`。
  *

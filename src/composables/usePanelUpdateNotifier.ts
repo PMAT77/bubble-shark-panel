@@ -2,7 +2,7 @@ import type { NotificationReactive } from 'naive-ui'
 import { useNotification } from 'naive-ui'
 import apiSystem from '@/api/modules/system'
 
-const PANEL_UPDATE_NOTIFY_DISMISSED_KEY = 'gsh-panel-update-dismissed'
+const PANEL_UPDATE_NOTIFY_DISMISSED_KEY = 'bsp-panel-update-dismissed'
 
 export function usePanelUpdateNotifier() {
   const notification = useNotification()

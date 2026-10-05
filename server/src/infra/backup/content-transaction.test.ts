@@ -7,7 +7,7 @@ import { ContentTransaction, recoverContentTransaction } from './content-transac
 
 const roots: string[] = []
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-content-tx-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-content-tx-'))
   roots.push(root)
   const source = path.join(root, 'source')
   const live = path.join(root, 'mods', '123')

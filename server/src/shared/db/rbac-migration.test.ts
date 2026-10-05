@@ -41,7 +41,7 @@ import type { RbacMigrationOutcome } from './rbac-migration'
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 function freshDbPath(tag: string): string {
-  return path.join(os.tmpdir(), `gsh-rbac-${tag}-${randomUUID()}.sqlite`)
+  return path.join(os.tmpdir(), `bsp-rbac-${tag}-${randomUUID()}.sqlite`)
 }
 
 describe('RBAC 迁移：全新库', () => {

@@ -18,7 +18,7 @@ import {
 const tempRoots: string[] = []
 
 function createTempClusterRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-player-lists-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-player-lists-'))
   tempRoots.push(root)
   return root
 }

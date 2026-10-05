@@ -23,9 +23,9 @@ afterEach(() => {
 
 describe('ensureNativeShardInterconnectConfig', () => {
   it('switches a Docker shard config back to loopback', () => {
-    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-shard-native-'))
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-shard-native-'))
     tempDirs.push(installPath)
-    writeClusterIni(installPath, true, DOCKER_SHARD_BIND_IP, 'gsh-abc-master')
+    writeClusterIni(installPath, true, DOCKER_SHARD_BIND_IP, 'bsp-abc-master')
 
     assert.equal(ensureNativeShardInterconnectConfig(installPath), true)
     const content = fs.readFileSync(
@@ -50,7 +50,7 @@ function writeClusterIni(installPath: string, shardEnabled: boolean, bindIp = '1
 
 describe('ensureDockerShardInterconnectConfig', () => {
   it('patches bind_ip and master_ip when shard is enabled', () => {
-    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-shard-net-'))
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-shard-net-'))
     tempDirs.push(installPath)
     const instanceId = 'abc-123'
     writeClusterIni(installPath, true)
@@ -67,7 +67,7 @@ describe('ensureDockerShardInterconnectConfig', () => {
   })
 
   it('is idempotent when values already match', () => {
-    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-shard-net-'))
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-shard-net-'))
     tempDirs.push(installPath)
     const instanceId = 'abc-123'
     writeClusterIni(
@@ -82,7 +82,7 @@ describe('ensureDockerShardInterconnectConfig', () => {
   })
 
   it('skips when shard is disabled', () => {
-    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-shard-net-'))
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-shard-net-'))
     tempDirs.push(installPath)
     writeClusterIni(installPath, false)
 

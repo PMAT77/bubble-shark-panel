@@ -23,18 +23,18 @@ describe('buildOfflineArchiveName', () => {
 
 describe('buildOfflineArchiveUrls', () => {
   it('tries accelerator proxies before the direct release URL', () => {
-    const urls = buildOfflineArchiveUrls({ githubRepo: 'PMAT77/game-serve-hub', releaseTag: 'v0.4.2' })
+    const urls = buildOfflineArchiveUrls({ githubRepo: 'PMAT77/bubble-shark-panel', releaseTag: 'v0.4.2' })
     assert.equal(urls.length, GITHUB_PROXY_SITES.length + 1)
     assert.equal(
       urls[0],
-      'https://gh-proxy.com/https://github.com/PMAT77/game-serve-hub/releases/download/v0.4.2/game-server-hub-v0.4.2-docker-image.tar.gz',
+      'https://gh-proxy.com/https://github.com/PMAT77/bubble-shark-panel/releases/download/v0.4.2/game-server-hub-v0.4.2-docker-image.tar.gz',
     )
-    assert.match(urls[urls.length - 1] ?? '', /^https:\/\/github\.com\/PMAT77\/game-serve-hub\/releases\/download\/v0\.4\.2\//)
+    assert.match(urls[urls.length - 1] ?? '', /^https:\/\/github\.com\/PMAT77\/bubble-shark-panel\/releases\/download\/v0\.4\.2\//)
   })
 
-  it('uses the configured proxy alone when GSH_GITHUB_PROXY is set', () => {
+  it('uses the configured proxy alone when BSP_GITHUB_PROXY is set', () => {
     const urls = buildOfflineArchiveUrls({
-      githubRepo: 'PMAT77/game-serve-hub',
+      githubRepo: 'PMAT77/bubble-shark-panel',
       releaseTag: 'v0.4.2',
       githubProxy: 'https://my-mirror.example.com/',
     })
@@ -80,7 +80,7 @@ describe('formatBytes', () => {
 
 describe('断点续传的分片文件', () => {
   it('reports the downloaded size of a partial archive', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-archive-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-archive-'))
     try {
       const filePath = path.join(dir, 'game-server-hub-v0.4.2-docker-image.tar.gz')
       const partPath = resolvePartPath(filePath)
@@ -97,7 +97,7 @@ describe('断点续传的分片文件', () => {
 
 describe('ensureDiskSpace', () => {
   it('accepts a small requirement and rejects an impossible one', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-space-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-space-'))
     try {
       assert.equal((await ensureDiskSpace(dir, 1_024)).ok, true)
       const huge = await ensureDiskSpace(dir, Number.MAX_SAFE_INTEGER)

@@ -42,7 +42,7 @@ function createMockMod(partial: Partial<DbInstanceMod> & Pick<DbInstanceMod, 'wo
 }
 
 function makeInstallPath(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-readiness-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-readiness-'))
   tempDirs.push(dir)
   return dir
 }

@@ -15,7 +15,7 @@ describe('copyGameDepotFromDonor', () => {
   })
 
   function makeTempDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-depot-copy-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-depot-copy-'))
     tempDirs.push(dir)
     return dir
   }

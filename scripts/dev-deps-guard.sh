@@ -8,7 +8,7 @@
 # 现在改为按 pnpm-lock.yaml 的 sha256 指纹判断：lockfile 变了才重装，既不漏装也不每次白跑安装。
 set -e
 
-stamp_file="node_modules/.gsh-lock-stamp"
+stamp_file="node_modules/.bsp-lock-stamp"
 current="$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)"
 
 if [ -f node_modules/.modules.yaml ] && [ -f "$stamp_file" ] && [ "$(cat "$stamp_file")" = "$current" ]; then

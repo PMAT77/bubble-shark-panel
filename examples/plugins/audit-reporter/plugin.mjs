@@ -4,7 +4,7 @@
  *
  * 它演示插件开发的全部约定：
  * 1. 从环境变量读取身份、能力服务地址与一次性令牌（**不要硬编码地址**，每次启动端口都不同）；
- * 2. 用 `POST /capabilities/<能力>` 调用宿主，请求头带 `x-gsh-plugin-token`，body 带 `pluginId`；
+ * 2. 用 `POST /capabilities/<能力>` 调用宿主，请求头带 `x-bsp-plugin-token`，body 带 `pluginId`；
  * 3. 只能调用清单里声明过的能力，越权会拿到 403 —— 而且**这次尝试会被宿主记进审计**；
  * 4. 处理完就退出（退出码 0 会被记为「已正常退出」，不会触发重启）；
  *    想常驻就用事件循环保持运行，宿主停用时会发 SIGTERM。
@@ -16,10 +16,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 
-const pluginId = process.env.GSH_PLUGIN_ID ?? ''
-const baseUrl = process.env.GSH_CAPABILITY_URL ?? ''
-const token = process.env.GSH_PLUGIN_TOKEN ?? ''
-const pluginDir = process.env.GSH_PLUGIN_DIR ?? process.cwd()
+const pluginId = process.env.BSP_PLUGIN_ID ?? process.env.GSH_PLUGIN_ID ?? ''
+const baseUrl = process.env.BSP_CAPABILITY_URL ?? process.env.GSH_CAPABILITY_URL ?? ''
+const token = process.env.BSP_PLUGIN_TOKEN ?? process.env.GSH_PLUGIN_TOKEN ?? ''
+const pluginDir = process.env.BSP_PLUGIN_DIR ?? process.env.GSH_PLUGIN_DIR ?? process.cwd()
 
 function log(message) {
   // 插件的 stdout / stderr 会被宿主流转写到本目录的 plugin.log
@@ -31,7 +31,7 @@ async function callCapability(pathname, body = {}) {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-gsh-plugin-token': token,
+      'x-bsp-plugin-token': token,
     },
     body: JSON.stringify({ pluginId, ...body }),
   })
@@ -69,7 +69,7 @@ async function main() {
 
   const summary = {
     generatedAt: new Date().toISOString(),
-    hostApiVersion: process.env.GSH_PLUGIN_API_VERSION ?? null,
+    hostApiVersion: process.env.BSP_PLUGIN_API_VERSION ?? process.env.GSH_PLUGIN_API_VERSION ?? null,
     instanceCount: list.length,
     runningInstances: running.map(item => ({ id: item.id, name: item.name, gamePort: item.gamePort ?? null })),
     auditStatus: audit.status,

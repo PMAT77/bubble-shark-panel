@@ -36,10 +36,10 @@ function sleep(ms: number) {
 }
 
 before(async () => {
-  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-backup-service-test-'))
-  process.env.GSH_BACKUPS_ROOT = path.join(workDir, 'backups')
+  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-backup-service-test-'))
+  process.env.BSP_BACKUPS_ROOT = path.join(workDir, 'backups')
   // 无 installPath 的实例回退到 instancesRoot/{id}，fake 存档目录必须与之对齐
-  process.env.GSH_INSTANCES_ROOT = path.join(workDir, 'instances')
+  process.env.BSP_INSTANCES_ROOT = path.join(workDir, 'instances')
   await initDatabase(path.join(workDir, `test-${randomUUID()}.sqlite`), migrationsFolder, {
     adminUsername: 'superadmin',
     adminPassword: '123456',

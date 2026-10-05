@@ -9,7 +9,7 @@ import { resolveLocalModContentVersion } from './mod-content-version'
 const tempDirs: string[] = []
 
 function makeInstallPath(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-content-version-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-content-version-'))
   tempDirs.push(dir)
   return dir
 }

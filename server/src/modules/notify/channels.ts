@@ -64,11 +64,11 @@ const SEVERITY_LABEL: Record<PanelEvent['severity'], string> = {
 }
 
 export function formatEventText(event: PanelEvent): string {
-  return `[Game Server Hub] ${SEVERITY_LABEL[event.severity]}\n${event.message}\n时间：${event.at.replace('T', ' ').slice(0, 19)}`
+  return `[BubbleShark Panel] ${SEVERITY_LABEL[event.severity]}\n${event.message}\n时间：${event.at.replace('T', ' ').slice(0, 19)}`
 }
 
 export function formatEventTitle(event: PanelEvent): string {
-  return `[Game Server Hub] ${SEVERITY_LABEL[event.severity]}：${event.message}`
+  return `[BubbleShark Panel] ${SEVERITY_LABEL[event.severity]}：${event.message}`
 }
 
 /** 钉钉加签算法（官方文档）：HMAC-SHA256(secret, timestamp + '\n' + secret) 的 Base64 */
@@ -160,7 +160,7 @@ export function buildNotification(type: DbNotifyChannelType, config: NotifyChann
         url: config.webhookUrl,
         headers: {},
         body: JSON.stringify({
-          source: 'game-server-hub',
+          source: 'bubblesharkpanel',
           severity: event.severity,
           title: formatEventTitle(event),
           message: event.message,

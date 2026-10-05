@@ -21,13 +21,13 @@ import { signPluginDirectory } from './sign-plugin'
  */
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-sign-plugin-'))
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-sign-plugin-'))
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519')
-const privateKeyPath = path.join(workDir, 'plugin-private.gsh-key')
+const privateKeyPath = path.join(workDir, 'plugin-private.bsp-key')
 const publicKeyBase64 = (publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64')
 
-const originalPluginKey = process.env.GSH_PLUGIN_PUBLIC_KEY
+const originalPluginKey = process.env.BSP_PLUGIN_PUBLIC_KEY
 
 function freshPluginCopy(name: string): string {
   const target = path.join(workDir, name)
@@ -39,15 +39,15 @@ function freshPluginCopy(name: string): string {
 
 before(() => {
   fs.writeFileSync(privateKeyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), { encoding: 'utf8', mode: 0o600 })
-  process.env.GSH_PLUGIN_PUBLIC_KEY = publicKeyBase64
+  process.env.BSP_PLUGIN_PUBLIC_KEY = publicKeyBase64
 })
 
 after(() => {
   if (originalPluginKey === undefined) {
-    delete process.env.GSH_PLUGIN_PUBLIC_KEY
+    delete process.env.BSP_PLUGIN_PUBLIC_KEY
   }
   else {
-    process.env.GSH_PLUGIN_PUBLIC_KEY = originalPluginKey
+    process.env.BSP_PLUGIN_PUBLIC_KEY = originalPluginKey
   }
   fs.rmSync(workDir, { recursive: true, force: true })
 })
@@ -118,7 +118,7 @@ describe('插件签发', () => {
   it('私钥缺失、目录缺清单、清单非法时给出明确原因', () => {
     const pluginDir = freshPluginCopy('remote-backup')
 
-    const missingKey = signPluginDirectory({ pluginDir, keyPath: path.join(workDir, 'nope.gsh-key') })
+    const missingKey = signPluginDirectory({ pluginDir, keyPath: path.join(workDir, 'nope.bsp-key') })
     assert.equal(missingKey.ok, false)
     if (!missingKey.ok) {
       assert.match(missingKey.message, /私钥不存在/)

@@ -18,7 +18,7 @@ import { resolveShardSaveDir } from './shard-layout'
 const tempDirs: string[] = []
 
 function createTempInstallDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-world-maintenance-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-world-maintenance-'))
   tempDirs.push(dir)
   return dir
 }

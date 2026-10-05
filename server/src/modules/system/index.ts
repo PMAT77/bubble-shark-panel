@@ -434,7 +434,7 @@ export function registerSystemModule(app: FastifyInstance) {
     if ((await resolveRuntimeStatus(true)) !== 'running') {
       return businessError(
         runtimeMode === 'native'
-          ? '无法连接 systemd 用户服务管理器，请检查 gsh 用户 linger 和 user bus'
+          ? '无法连接 systemd 用户服务管理器，请检查 bsp 用户 linger 和 user bus'
           : '无法连接 Docker，请确认面板已挂载 docker.sock（或 Windows 下 Docker Desktop 已启动）',
         request,
       )

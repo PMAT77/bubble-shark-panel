@@ -14,7 +14,7 @@ import type { DbNotifyChannel } from '../../shared/db/index'
 import { deliverToChannel, resetNotifyStateForTests } from './notify-service'
 import type { PanelEvent } from './events'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-notify-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-notify-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 const stubApp = {

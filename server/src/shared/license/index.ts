@@ -1,14 +1,14 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { LicenseState } from '../../../../shared/contracts/license'
 import fs from 'node:fs'
 import path from 'node:path'
-import process from 'node:process'
 import { loadServerConfig } from '../config'
 import { communityLicenseState, inspectLicenseFile } from './verify'
 
 /**
  * 许可状态的读取入口（带缓存）。
  *
- * 文件位置：`GSH_LICENSE_FILE` 指定；未指定时用**面板数据目录**下的 `license.json`——
+ * 文件位置：`BSP_LICENSE_FILE` 指定；未指定时用**面板数据目录**下的 `license.json`——
  * 放在数据目录里是有意的：它与数据库、备份一起被复制或迁移，客户换机器时不会丢；
  * 而放进发布目录则会被升级覆盖。
  *
@@ -28,7 +28,7 @@ interface LicenseCacheEntry {
 let cache: LicenseCacheEntry | null = null
 
 export function resolveLicenseFilePath(): string {
-  const configured = process.env.GSH_LICENSE_FILE?.trim()
+  const configured = readBrandEnv('BSP_LICENSE_FILE')?.trim()
   if (configured) {
     return path.resolve(configured)
   }

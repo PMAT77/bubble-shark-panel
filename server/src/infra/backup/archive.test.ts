@@ -48,7 +48,7 @@ function writeTree(root: string) {
 }
 
 before(() => {
-  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-archive-test-'))
+  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-archive-test-'))
 })
 
 after(() => {

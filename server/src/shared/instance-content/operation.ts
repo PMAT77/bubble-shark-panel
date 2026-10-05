@@ -10,7 +10,7 @@ export class InstanceContentBusyError extends Error {
   constructor() { super('该实例正在执行文件操作、启动或下载，请稍后再试'); this.name = 'InstanceContentBusyError' }
 }
 export function assertInstanceContentAvailable(instanceId: string): void {
-  if (recoveryFailures.has(instanceId)) throw new Error('实例存在未完成的内容恢复，已禁止启动和写入；请保留 .gsh-content-transaction 目录并修复权限或日志后重启面板')
+  if (recoveryFailures.has(instanceId)) throw new Error('实例存在未完成的内容恢复，已禁止启动和写入；请保留 .bsp-content-transaction 目录并修复权限或日志后重启面板')
   if (exclusive.has(instanceId) && exclusive.get(instanceId) !== context.getStore()) throw new InstanceContentBusyError()
 }
 export function markContentRecoveryFailed(instanceId: string, failed: boolean): void {

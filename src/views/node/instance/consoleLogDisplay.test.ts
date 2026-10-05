@@ -17,7 +17,7 @@ function makeLine(partial: Partial<InstanceConsoleLogLine> & { text: string }): 
 function sampleLines(): InstanceConsoleLogLine[] {
   return [
     makeLine({ id: 1, stream: 'system', text: '已连接地上运行时，开始采集控制台输出', shard: 'master' }),
-    makeLine({ id: 2, stream: 'system', text: '> print("GSH_PLAYER_COUNT:abc:")', shard: 'master' }),
+    makeLine({ id: 2, stream: 'system', text: '> print("BSP_PLAYER_COUNT:abc:")', shard: 'master' }),
     makeLine({ id: 3, stream: 'stdout', text: 'KU_Mjne0Map 玩家甲', shard: 'master' }),
     makeLine({ id: 4, stream: 'stderr', text: 'attempt to index a nil value', shard: 'caves' }),
   ]

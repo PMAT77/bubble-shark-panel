@@ -9,7 +9,7 @@ if (!INSTANCE_ID) {
   process.exit(1)
 }
 
-const dbPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data/game-server-hub.sqlite')
+const dbPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data/bubblesharkpanel.sqlite')
 
 async function requestJson(method: string, urlPath: string, token: string, body?: unknown) {
   const controller = new AbortController()

@@ -11,7 +11,7 @@ import { extractArchive } from './archive'
 import { extractZipArchive } from './zip-extract'
 import { receiveUploadToTempFile } from './upload'
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-archive-security-'))
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-archive-security-'))
 let seq = 0
 after(() => fs.rmSync(root, { recursive: true, force: true }))
 async function makeTar(entries: Array<{ name: string, type?: 'file' | 'directory' | 'symlink' | 'link' | 'fifo', text?: string }>) {

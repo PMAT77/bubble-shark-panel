@@ -24,7 +24,7 @@ import type { PanelEvent } from '../../modules/notify/events'
  * 读出，这里补上的正是这一段。
  */
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-notify-repo-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-notify-repo-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 const stubApp = {

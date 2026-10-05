@@ -55,7 +55,7 @@ async function collectManagedSteamcmdStats(docker: Docker): Promise<ResourceSnap
   try {
     const listed = await docker.listContainers({
       all: false,
-      filters: { label: ['gsh.managed=steamcmd-install'] },
+      filters: { label: ['bsp.managed=steamcmd-install'] },
     })
     const rows: ResourceSnapshot['containers'] = []
     for (const item of listed) {

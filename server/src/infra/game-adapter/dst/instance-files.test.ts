@@ -26,7 +26,7 @@ import {
 const tempDirs: string[] = []
 
 function createTempInstanceRoot(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-instance-files-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-instance-files-'))
   tempDirs.push(dir)
   return dir
 }
@@ -238,9 +238,9 @@ describe('instance file upload and download', () => {
 
   it('reads the upload size limit from the environment', () => {
     assert.equal(resolveInstanceUploadMaxBytes({}), INSTANCE_UPLOAD_DEFAULT_MAX_BYTES)
-    assert.equal(resolveInstanceUploadMaxBytes({ GSH_INSTANCE_UPLOAD_MAX_BYTES: '1024' }), 1024)
-    assert.equal(resolveInstanceUploadMaxBytes({ GSH_INSTANCE_UPLOAD_MAX_BYTES: '0' }), INSTANCE_UPLOAD_DEFAULT_MAX_BYTES)
-    assert.equal(resolveInstanceUploadMaxBytes({ GSH_INSTANCE_UPLOAD_MAX_BYTES: 'abc' }), INSTANCE_UPLOAD_DEFAULT_MAX_BYTES)
+    assert.equal(resolveInstanceUploadMaxBytes({ BSP_INSTANCE_UPLOAD_MAX_BYTES: '1024' }), 1024)
+    assert.equal(resolveInstanceUploadMaxBytes({ BSP_INSTANCE_UPLOAD_MAX_BYTES: '0' }), INSTANCE_UPLOAD_DEFAULT_MAX_BYTES)
+    assert.equal(resolveInstanceUploadMaxBytes({ BSP_INSTANCE_UPLOAD_MAX_BYTES: 'abc' }), INSTANCE_UPLOAD_DEFAULT_MAX_BYTES)
   })
 
   it('backs up the existing file before an overwriting upload', () => {

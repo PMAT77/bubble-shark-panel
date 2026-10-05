@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const dbPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data/game-server-hub.sqlite')
+const dbPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data/bubblesharkpanel.sqlite')
 const [action, instanceId] = process.argv.slice(2)
 
 if (!action || !instanceId) {

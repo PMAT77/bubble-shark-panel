@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyInstance } from 'fastify'
 import { collectHostResourceSnapshot } from '../../shared/host-metrics'
 import {
@@ -25,7 +26,7 @@ const cooldownMap = new Map<string, number>()
 const failureCounts = new Map<string, number>()
 
 function isUnitTest(): boolean {
-  return process.env.GSH_UNIT_TEST === '1'
+  return readBrandEnv('BSP_UNIT_TEST') === '1'
 }
 
 export function resetNotifyStateForTests(): void {

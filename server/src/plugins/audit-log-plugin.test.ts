@@ -33,18 +33,18 @@ import { appendOperationAudit, readOperationAudit } from '../shared/audit/operat
  * 每个格式都起一遍进程会让测试慢十倍而覆盖不变。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-audit-log-plugin-'))
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-audit-log-plugin-'))
 const pluginsRoot = path.join(workDir, 'plugins')
 const pluginAuditRoot = path.join(workDir, 'plugin-audit')
 const operationAuditRoot = path.join(workDir, 'operation-audit')
 const remoteDir = path.join(workDir, 'remote-audit')
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../drizzle')
 
 process.env.DB_PATH = dbFilePath
-process.env.GSH_PLUGINS_ROOT = pluginsRoot
-process.env.GSH_PLUGIN_AUDIT_ROOT = pluginAuditRoot
-process.env.GSH_OPERATION_AUDIT_ROOT = operationAuditRoot
+process.env.BSP_PLUGINS_ROOT = pluginsRoot
+process.env.BSP_PLUGIN_AUDIT_ROOT = pluginAuditRoot
+process.env.BSP_OPERATION_AUDIT_ROOT = operationAuditRoot
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519')
 
@@ -60,7 +60,7 @@ function writeLicense(capabilities: LicensePayload['capabilities']): void {
   const signature = signWithKey(null, Buffer.from(canonicalizeLicensePayload(payload), 'utf8'), privateKey).toString('base64')
   const licensePath = path.join(path.dirname(dbFilePath), 'license.json')
   fs.writeFileSync(licensePath, `${JSON.stringify({ payload, signature }, null, 2)}\n`, 'utf8')
-  process.env.GSH_LICENSE_FILE = licensePath
+  process.env.BSP_LICENSE_FILE = licensePath
   clearLicenseCache()
 }
 
@@ -155,7 +155,7 @@ before(async () => {
     adminPassword: '123456',
     seedDevelopmentUsers: false,
   })
-  process.env.GSH_LICENSE_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+  process.env.BSP_LICENSE_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString()
   writeLicense(['audit-log'])
   installAuditLogPlugin()
 
@@ -187,13 +187,13 @@ before(async () => {
     body: { id: 'inst-1' }, statusCode: 403, durationMs: 3, requestId: 'req-seed-3',
   })
 
-  process.env.GSH_CAPABILITY_URL = await startCapabilityStub()
-  process.env.GSH_PLUGIN_TOKEN = 'test-token'
+  process.env.BSP_CAPABILITY_URL = await startCapabilityStub()
+  process.env.BSP_PLUGIN_TOKEN = 'test-token'
   /**
-   * 插件用 `GSH_PLUGIN_DIR` 定位自己的归档目录；测试里 import 插件时没有宿主注入，
+   * 插件用 `BSP_PLUGIN_DIR` 定位自己的归档目录；测试里 import 插件时没有宿主注入，
    * 不设置它就会按 `process.cwd()` 写——归档会落到仓库根目录去。
    */
-  process.env.GSH_PLUGIN_DIR = path.join(pluginsRoot, 'audit-log')
+  process.env.BSP_PLUGIN_DIR = path.join(pluginsRoot, 'audit-log')
   // 插件是交付给用户的 .mjs，不带类型声明；这里按已知的导出形状收窄
   // @ts-expect-error 插件模块没有 .d.ts
   pluginModule = await import('../../../examples/plugins/audit-log/plugin.mjs') as unknown as PluginModule
@@ -255,7 +255,7 @@ describe('audit log pro plugin', () => {
     const state: Record<string, unknown> = { lastSeenId: 0 }
 
     const first = await pluginModule.runOnce(auditConfig(), state)
-    assert.equal(first.ok, true, `归档失败：${first.message}｜state=${JSON.stringify(state)}｜可用记录=${readOperationAudit({ limit: 5 }).length}｜capabilityUrl=${process.env.GSH_CAPABILITY_URL}`)
+    assert.equal(first.ok, true, `归档失败：${first.message}｜state=${JSON.stringify(state)}｜可用记录=${readOperationAudit({ limit: 5 }).length}｜capabilityUrl=${process.env.BSP_CAPABILITY_URL}`)
     assert.ok(first.written >= 3, `应当归档全部记录，实际 ${first.written}（${first.message}）`)
     assert.equal(first.sensitive, 2, '删除备份与被拒的删除都算敏感操作')
 

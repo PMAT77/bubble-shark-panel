@@ -179,7 +179,7 @@ async function case4DbDrift(token: string) {
     return
   }
   const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-  const dbPath = process.env.REGRESSION_DB_PATH ?? path.resolve(serverRoot, 'data/game-server-hub.sqlite')
+  const dbPath = process.env.REGRESSION_DB_PATH ?? path.resolve(serverRoot, 'data/bubblesharkpanel.sqlite')
   const db = new DatabaseSync(dbPath)
   db.prepare(`UPDATE game_instances SET status = 'stopped', container_id = NULL WHERE id = ?`).run(instanceId)
 
@@ -227,7 +227,7 @@ async function case8MonitorPolling() {
     '../../src/views/console/monitor/index.vue',
   )
   const content = fs.readFileSync(monitorPath, 'utf8')
-  const hasStorage = content.includes('gsh-monitor-poll-settings')
+  const hasStorage = content.includes('bsp-monitor-poll-settings')
     && content.includes('DEFAULT_SYSTEM_POLL_MS')
     && content.includes('localStorage.setItem')
   const hasRetry = content.includes('重试') && content.includes('systemError')

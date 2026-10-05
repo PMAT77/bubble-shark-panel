@@ -1,10 +1,10 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import { Transform, type Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import process from 'node:process'
 import { extractArchive } from './archive'
 import { DEFAULT_ZIP_EXTRACT_LIMITS, extractZipArchive } from './zip-extract'
 import type { ZipExtractLimits } from './zip-extract'
@@ -18,13 +18,13 @@ const UPLOAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 
 /** 上传存档包临时根目录：默认系统临时目录，测试与特殊部署可用 env 覆盖 */
 export function resolveSaveImportUploadRoot(): string {
-  const base = process.env.GSH_SAVE_IMPORT_ROOT?.trim()
-  return path.resolve(base || path.join(os.tmpdir(), 'gsh-save-import'))
+  const base = readBrandEnv('BSP_SAVE_IMPORT_ROOT')?.trim()
+  return path.resolve(base || path.join(os.tmpdir(), 'bsp-save-import'))
 }
 
 /** 上传大小上限（env 可覆盖，便于测试与小内存部署收紧） */
 export function resolveMaxUploadBytes(): number {
-  const parsed = Number(process.env.GSH_SAVE_IMPORT_MAX_UPLOAD_BYTES)
+  const parsed = Number(readBrandEnv('BSP_SAVE_IMPORT_MAX_UPLOAD_BYTES'))
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_UPLOAD_LIMIT_BYTES
 }
 

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-05
+
+### Changed
+
+- 项目更名为 BubbleShark Panel，GitHub 仓库迁移为 PMAT77/bubble-shark-panel。
+- 新安装使用 bubblesharkpanel 部署名称、bsp 命令和 BSP_* 配置；旧 GSH_* 配置、gsh 命令、部署路径、服务、授权及插件继续兼容。
+- 发布新旧名称的镜像和安装包，既有面板可直接升级到 v0.15.0。
+
 ## [0.14.0] - 2026-10-04
 
 ### Added
@@ -970,26 +978,27 @@
 - DST 房间 / 世界 / Mod 管理
 - 面板与 DST 镜像 GHCR 发布（`v*` tag）
 
-[Unreleased]: https://github.com/PMAT77/game-serve-hub/compare/v0.14.0...HEAD
-[0.14.0]: https://github.com/PMAT77/game-serve-hub/compare/v0.13.4...v0.14.0
-[0.13.4]: https://github.com/PMAT77/game-serve-hub/compare/v0.13.3...v0.13.4
-[0.4.2]: https://github.com/PMAT77/game-serve-hub/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/PMAT77/game-serve-hub/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.10...v0.4.0
-[0.3.10]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.9...v0.3.10
-[0.3.9]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.8...v0.3.9
-[0.3.3]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.2...v0.3.3
-[0.3.4]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.3...v0.3.4
-[0.3.5]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.4...v0.3.5
-[0.3.2]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/PMAT77/game-serve-hub/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/PMAT77/game-serve-hub/compare/v0.2.2...v0.3.0
-[0.2.2]: https://github.com/PMAT77/game-serve-hub/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/PMAT77/game-serve-hub/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/PMAT77/game-serve-hub/compare/v0.1.4...v0.2.0
-[0.1.4]: https://github.com/PMAT77/game-serve-hub/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/PMAT77/game-serve-hub/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/PMAT77/game-serve-hub/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/PMAT77/game-serve-hub/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/PMAT77/game-serve-hub/compare/v0.0.0...v0.1.0
-[0.0.0]: https://github.com/PMAT77/game-serve-hub/releases
+[Unreleased]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.13.4...v0.14.0
+[0.13.4]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.13.3...v0.13.4
+[0.4.2]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.3.10...v0.4.0
+[0.3.10]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.3.9...v0.3.10
+[0.3.9]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.3.8...v0.3.9
+[0.3.3]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.3.2...v0.3.3
+[0.3.4]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.3.3...v0.3.4
+[0.3.5]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.3.4...v0.3.5
+[0.3.2]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.1.4...v0.2.0
+[0.1.4]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.0.0...v0.1.0
+[0.0.0]: https://github.com/PMAT77/bubble-shark-panel/releases

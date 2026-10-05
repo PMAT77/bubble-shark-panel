@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readBrandEnv } from '../../shared/brand-env'
 /**
  * 打印当前机器的指纹（给客户在**目标机器**上执行，用于签发绑定设备的许可）。
  *
@@ -15,12 +16,12 @@
 import process from 'node:process'
 import { resolveMachineFingerprint } from '../../server/src/shared/license/fingerprint.ts'
 
-const dataDir = process.env.GSH_DATA_DIR?.trim()
+const dataDir = readBrandEnv('BSP_DATA_DIR')?.trim()
 const fingerprint = resolveMachineFingerprint(dataDir ? { dataDir } : {})
 
 if (!fingerprint) {
   console.error('[fingerprint] 无法计算指纹：既读不到 /etc/machine-id，也没有可写的标识目录。')
-  console.error('[fingerprint] 请在目标机器上设置 GSH_LICENSE_FINGERPRINT=<自定义稳定标识>，或用 GSH_DATA_DIR 指定可写的面板数据目录。')
+  console.error('[fingerprint] 请在目标机器上设置 BSP_LICENSE_FINGERPRINT=<自定义稳定标识>，或用 BSP_DATA_DIR 指定可写的面板数据目录。')
   process.exit(1)
 }
 

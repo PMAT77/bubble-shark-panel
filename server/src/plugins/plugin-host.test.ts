@@ -20,7 +20,7 @@ import { resolvePluginsRoot, scanPlugins, setPluginEnabled } from './registry'
  * 否则一个坏插件会让管理员连禁用按钮都点不到。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-plugin-test-'))
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-plugin-test-'))
 const pluginsRoot = path.join(workDir, 'plugins')
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519')
@@ -68,8 +68,8 @@ function signManifest(manifest: PluginManifest, overrides: Record<string, unknow
 }
 
 before(() => {
-  process.env.GSH_PLUGINS_ROOT = pluginsRoot
-  process.env.GSH_LICENSE_PUBLIC_KEY = publicPem
+  process.env.BSP_PLUGINS_ROOT = pluginsRoot
+  process.env.BSP_LICENSE_PUBLIC_KEY = publicPem
 })
 
 after(() => {
@@ -220,11 +220,11 @@ describe('summarizePluginCapabilities', () => {
 
 describe('scanPlugins / setPluginEnabled', () => {
   it('插件根不存在时返回空列表而不是报错', () => {
-    process.env.GSH_PLUGINS_ROOT = path.join(workDir, 'not-created-yet')
+    process.env.BSP_PLUGINS_ROOT = path.join(workDir, 'not-created-yet')
     const result = scanPlugins()
     assert.deepEqual(result.items, [])
     assert.equal(result.hostApiVersion, 1)
-    process.env.GSH_PLUGINS_ROOT = pluginsRoot
+    process.env.BSP_PLUGINS_ROOT = pluginsRoot
   })
 
   it('已装载但未启用的插件状态是 disabled', () => {
@@ -327,7 +327,7 @@ describe('scanPlugins / setPluginEnabled', () => {
     assert.equal(result.ok, true, result.ok ? '' : result.message)
   })
 
-  it('插件根路径可由 GSH_PLUGINS_ROOT 指定', () => {
+  it('插件根路径可由 BSP_PLUGINS_ROOT 指定', () => {
     assert.equal(resolvePluginsRoot(), pluginsRoot)
   })
 })

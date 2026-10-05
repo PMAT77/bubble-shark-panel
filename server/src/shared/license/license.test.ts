@@ -23,7 +23,7 @@ import { communityLicenseState, inspectLicenseFile } from './verify'
  *   3. 设备绑定必须真绑定，且签发方与运行方用同一套指纹算法。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-license-'))
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-license-'))
 const licensePath = path.join(workDir, 'license.json')
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519')
@@ -51,8 +51,8 @@ function writeLicense(payload: LicensePayload, signature = signPayload(payload))
 }
 
 beforeEach(() => {
-  process.env.GSH_LICENSE_FILE = licensePath
-  process.env.GSH_LICENSE_PUBLIC_KEY = publicPem
+  process.env.BSP_LICENSE_FILE = licensePath
+  process.env.BSP_LICENSE_PUBLIC_KEY = publicPem
   clearLicenseCache()
 })
 
@@ -113,15 +113,15 @@ describe('inspectLicenseFile', () => {
   it('缺少公钥时判为无效但不抛异常（面板不能因此起不来）', () => {
     const payload = buildPayload()
     const file = { payload, signature: signPayload(payload) }
-    const original = process.env.GSH_LICENSE_PUBLIC_KEY
-    delete process.env.GSH_LICENSE_PUBLIC_KEY
+    const original = process.env.BSP_LICENSE_PUBLIC_KEY
+    delete process.env.BSP_LICENSE_PUBLIC_KEY
     try {
       const { state } = inspectLicenseFile(file)
       assert.equal(state.status, 'invalid')
       assert.match(state.message, /公钥/)
     }
     finally {
-      process.env.GSH_LICENSE_PUBLIC_KEY = original
+      process.env.BSP_LICENSE_PUBLIC_KEY = original
     }
   })
 
@@ -141,16 +141,16 @@ describe('inspectLicenseFile', () => {
       publicPem.replace(/\n/g, '\\n'),
       publicPem.replace(/\n/g, ''),
     ]
-    const original = process.env.GSH_LICENSE_PUBLIC_KEY
+    const original = process.env.BSP_LICENSE_PUBLIC_KEY
     try {
       for (const variant of variants) {
-        process.env.GSH_LICENSE_PUBLIC_KEY = variant
+        process.env.BSP_LICENSE_PUBLIC_KEY = variant
         const { state } = inspectLicenseFile({ payload, signature })
         assert.equal(state.status, 'active', `这种公钥写法未能通过验签：${variant.slice(0, 24)}…`)
       }
     }
     finally {
-      process.env.GSH_LICENSE_PUBLIC_KEY = original
+      process.env.BSP_LICENSE_PUBLIC_KEY = original
     }
   })
 
@@ -178,10 +178,10 @@ describe('inspectLicenseFile', () => {
   })
 
   it('绑定设备时指纹不一致判为无效，并标记为已绑定', () => {
-    const payload = buildPayload({ fingerprint: 'gsh-expected-fingerprint' })
+    const payload = buildPayload({ fingerprint: 'bsp-expected-fingerprint' })
     const { state } = inspectLicenseFile(
       { payload, signature: signPayload(payload) },
-      { machineFingerprint: 'gsh-other-machine' },
+      { machineFingerprint: 'bsp-other-machine' },
     )
     assert.equal(state.status, 'invalid')
     assert.equal(state.bound, true)
@@ -189,10 +189,10 @@ describe('inspectLicenseFile', () => {
   })
 
   it('绑定设备且指纹一致时生效', () => {
-    const payload = buildPayload({ fingerprint: 'gsh-same-machine' })
+    const payload = buildPayload({ fingerprint: 'bsp-same-machine' })
     const { state } = inspectLicenseFile(
       { payload, signature: signPayload(payload) },
-      { machineFingerprint: 'gsh-same-machine' },
+      { machineFingerprint: 'bsp-same-machine' },
     )
     assert.equal(state.status, 'active')
     assert.equal(state.bound, true)
@@ -225,7 +225,7 @@ describe('readLicenseState', () => {
     assert.match(state.message, /无法解析/)
   })
 
-  it('读取路径可用 GSH_LICENSE_FILE 指定', () => {
+  it('读取路径可用 BSP_LICENSE_FILE 指定', () => {
     assert.equal(resolveLicenseFilePath(), licensePath)
   })
 

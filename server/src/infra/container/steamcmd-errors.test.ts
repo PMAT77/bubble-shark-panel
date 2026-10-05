@@ -61,7 +61,7 @@ describe('formatSteamcmdAppUpdateFailureMessage', () => {
       hasAccountCredentials: false,
     })
     assert.match(message, /网络或 Steam 服务不稳定/)
-    assert.match(message, /GSH_STEAMCMD_DOWNLOAD_REGION=cn/)
+    assert.match(message, /BSP_STEAMCMD_DOWNLOAD_REGION=cn/)
     assert.doesNotMatch(message, /bind/)
     assert.doesNotMatch(message, /STEAMCMD_USERNAME/)
   })
@@ -74,7 +74,7 @@ describe('formatSteamcmdAppUpdateFailureMessage', () => {
       hasAccountCredentials: false,
     })
     assert.match(message, /Missing file permissions/)
-    assert.match(message, /GSH_STEAMCMD_RUN_USER/)
+    assert.match(message, /BSP_STEAMCMD_RUN_USER/)
   })
 
   it('explains No subscription for account-only games', () => {
@@ -109,8 +109,8 @@ describe('isRetriableSteamcmdInstallOutput', () => {
       hasAccountCredentials: false,
     })
     assert.match(message, /下载超时/)
-    assert.match(message, /GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS/)
-    assert.doesNotMatch(message, /GSH_STEAMCMD_CONTAINER_MEMORY_MB/)
+    assert.match(message, /BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS/)
+    assert.doesNotMatch(message, /BSP_STEAMCMD_CONTAINER_MEMORY_MB/)
   })
 })
 

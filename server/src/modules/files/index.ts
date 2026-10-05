@@ -56,7 +56,7 @@ export function registerFilesModule(app: FastifyInstance) {
   const maxUploadBytes = resolveInstanceUploadMaxBytes()
   // 实例文件上传：以原始二进制体接收并流式落盘（与存档导入同一个思路，内容类型刻意区分，
   // 避免与存档导入的解析器冲突）。解析器只把流交给路由，落盘位置由路由决定。
-  app.addContentTypeParser('application/x-gsh-instance-file', (_request, payload, done) => {
+  app.addContentTypeParser('application/x-bsp-instance-file', (_request, payload, done) => {
     done(null, payload)
   })
 

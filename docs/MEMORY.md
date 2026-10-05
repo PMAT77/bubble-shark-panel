@@ -1,6 +1,6 @@
 # 宿主机内存与 DST 部署档位
 
-Game Server Hub 支持 **Docker 与 Native systemd 双运行时**。下文的档位与预算按 **Docker 模式** 给出：面板容器 + 每实例 DST 容器（开启洞穴时为 **地上 + 洞穴两个容器**）+ 安装时的 **SteamCMD 临时容器**；Native 模式没有容器与 SteamCMD 子容器开销，但游戏进程本身的内存占用相近。  
+BubbleShark Panel 支持 **Docker 与 Native systemd 双运行时**。下文的档位与预算按 **Docker 模式** 给出：面板容器 + 每实例 DST 容器（开启洞穴时为 **地上 + 洞穴两个容器**）+ 安装时的 **SteamCMD 临时容器**；Native 模式没有容器与 SteamCMD 子容器开销，但游戏进程本身的内存占用相近。
 任务管理器里单个进程只显示几十 MiB 属正常现象，**总占用请看「可用内存」与 `docker stats`**。
 
 ---
@@ -15,7 +15,7 @@ Game Server Hub 支持 **Docker 与 Native systemd 双运行时**。下文的档
 
 说明：
 
-- **Mod** 主要增加 **DST 游戏容器** 内存，不是面板进程；Mod 越多，越需要更大内存或设置 `GSH_DST_CONTAINER_MEMORY_MB`。
+- **Mod** 主要增加 **DST 游戏容器** 内存，不是面板进程；Mod 越多，越需要更大内存或设置 `BSP_DST_CONTAINER_MEMORY_MB`。
 - **安装 / 更新** Steam 服务端时会短时升高占用；面板默认串行 SteamCMD 任务，但仍建议 **先停止运行中实例** 再安装。
 - **开发环境** `pnpm dev:compose` 为双 Node 容器，内存显著高于生产单容器，**不能**用开发占用评估生产。
 
@@ -50,14 +50,14 @@ Out of memory: Killed process ... (dontstarve_dedi) anon-rss:2075120kB
 缓存区就是给这个尖峰准备的落点：内存紧张时把冷数据挪到硬盘，尖峰过去再换回来。它不是「让机器变慢」，而是「让尖峰有地方落」。
 
 ```bash
-sudo gsh setup-swap
+sudo bsp setup-swap
 ```
 
-它会创建 2 GiB 的缓存区文件（`/swapfile-gsh`）、写进 `/etc/fstab`（**重启后仍然有效**），并设置 `vm.swappiness=20`（优先用内存、必要时才换出）与 `vm.min_free_kbytes=100000`。**做一次即可**，之后升级面板、重启实例都不用再管。
+它会创建 2 GiB 的缓存区文件（`/swapfile-bsp`）、写进 `/etc/fstab`（**重启后仍然有效**），并设置 `vm.swappiness=20`（优先用内存、必要时才换出）与 `vm.min_free_kbytes=100000`。**做一次即可**，之后升级面板、重启实例都不用再管。
 
-**小内存机由安装器自动完成**：`install.linux.sh` 检测到总内存低于 5 GiB 且当前没有缓存区时，会创建同样的缓存区文件 并写入 fstab 与 sysctl，安装摘要里会写明结果。换档规则是总内存低于 3800 MiB 时给 4 GiB，其余小内存机给 2 GiB。关闭方式：`--no-swap` 或 `GSH_SWAP_ON_INSTALL=0`；改大小用 `GSH_SWAP_SIZE`。
+**小内存机由安装器自动完成**：`install.linux.sh` 检测到总内存低于 5 GiB 且当前没有缓存区时，会创建同样的缓存区文件 并写入 fstab 与 sysctl，安装摘要里会写明结果。换档规则是总内存低于 3800 MiB 时给 4 GiB，其余小内存机给 2 GiB。关闭方式：`--no-swap` 或 `BSP_SWAP_ON_INSTALL=0`；改大小用 `BSP_SWAP_SIZE`。
 
-**为什么要 root**：创建缓存区需要 root，而面板以普通用户 `gsh` 运行（这是有意的安全设计，面板不应是 root），所以面板做不到这一步。**从旧版本升级上来的机器**（安装时还没这个行为）需要手动执行一次上面的命令。
+**为什么要 root**：创建缓存区需要 root，而面板以普通用户 `bsp` 运行（这是有意的安全设计，面板不应是 root），所以面板做不到这一步。**从旧版本升级上来的机器**（安装时还没这个行为）需要手动执行一次上面的命令。
 
 缓存区文件会占用根分区磁盘空间；余量不足时安装器会跳过并提示，不会写出半途而废的配置。
 
@@ -69,17 +69,17 @@ swapon --show     # 有输出即已生效；没有任何输出说明还没配
 
 ### 面板会替你挡一道
 
-启动前按「分片数 ×（512 MiB + 每个启用中的 Mod 32 MiB）」估算峰值，并把**可用缓存区计入可回收余量**。不够时**直接拒绝启动**并提示执行 `gsh setup-swap`，而不是启动到一半被内核杀掉。确需强制放行可在 `panel.env` 设 `GSH_HOST_MIN_AVAILABLE_MB=0`（小内存机慎用）。
+启动前按「分片数 ×（512 MiB + 每个启用中的 Mod 32 MiB）」估算峰值，并把**可用缓存区计入可回收余量**。不够时**直接拒绝启动**并提示执行 `bsp setup-swap`，而不是启动到一半被内核杀掉。确需强制放行可在 `panel.env` 设 `BSP_HOST_MIN_AVAILABLE_MB=0`（小内存机慎用）。
 
 加了缓存区仍被拒绝时，按顺序考虑：
 
 1. 把缓存区加到 4 GiB。**`setup-swap` 在检测到已有缓存区时不做任何改动**（直接返回，安装器的自动配置同样跳过），所以要先关掉旧的再重建：
 
    ```bash
-   sudo swapoff /swapfile-gsh
-   sudo rm -f /swapfile-gsh
-   sudo sed -i '\#^/swapfile-gsh #d' /etc/fstab
-   sudo GSH_SWAP_SIZE=4G gsh setup-swap
+   sudo swapoff /swapfile-bsp
+   sudo rm -f /swapfile-bsp
+   sudo sed -i '\#^/swapfile-bsp #d' /etc/fstab
+   sudo BSP_SWAP_SIZE=4G bsp setup-swap
    ```
 
 2. 关闭洞穴分片——单分片峰值约为双分片的一半
@@ -99,19 +99,19 @@ swapon --show     # 有输出即已生效；没有任何输出说明还没配
 | 中等 | `config/panel.env.presets/medium.env` |
 | 大内存 | `config/panel.env.presets/large.env` |
 
-安装脚本默认 `GSH_PANEL_ENV_PRESET=auto`，按检测到的总内存自动追加对应预设片段到 `/opt/game-server-hub/panel.env`。
+安装脚本默认 `BSP_PANEL_ENV_PRESET=auto`，按检测到的总内存自动追加对应预设片段到 `/opt/bubblesharkpanel/panel.env`。
 
 手动指定预设：
 
 ```bash
-sudo GSH_PANEL_ENV_PRESET=medium bash ./scripts/install.linux.sh
+sudo BSP_PANEL_ENV_PRESET=medium bash ./scripts/install.linux.sh
 ```
 
 已安装后合并预设并重启：
 
 ```bash
-sudo bash -c 'cat /opt/game-server-hub/config/panel.env.presets/small.env >> /opt/game-server-hub/panel.env'
-cd /opt/game-server-hub
+sudo bash -c 'cat /opt/bubblesharkpanel/config/panel.env.presets/small.env >> /opt/bubblesharkpanel/panel.env'
+cd /opt/bubblesharkpanel
 sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose.bind.yml up -d
 ```
 
@@ -119,17 +119,17 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 
 | 变量 | 含义 |
 |------|------|
-| `GSH_STEAMCMD_CONTAINER_MEMORY_MB` | SteamCMD 子容器内存硬上限（MiB），不设则不限制 |
-| `GSH_STEAMCMD_CONTAINER_MEMORY_SWAP_MB` | SteamCMD 子容器缓存区上限（MiB），预设中与内存上限同值 |
-| `GSH_DST_CONTAINER_MEMORY_MB` | 每个 DST 分片容器上限（MiB） |
-| `GSH_HOST_STEAMCMD_PLANNING_MB` | 安装 / 更新前的内存规划预留（MiB），参与守卫判断 |
-| `GSH_HOST_DST_PLANNING_MB` | DST 启动守卫的单分片规划**下界**（MiB）；实际按「512 + 每个启用中的 Mod 32 MiB」估算，双分片再乘 2 并加余量。**设小不会让守卫更宽松** |
-| `GSH_HOST_MEMORY_HEADROOM_MB` | 安装/启动守卫保留空闲（默认 512） |
-| `GSH_HOST_MIN_AVAILABLE_MB` | 设为 `0` 可关闭守卫（小内存慎用） |
-| `GSH_SWAP_ON_INSTALL` | 安装器在小内存机上自动创建缓存区文件（默认 `1`，设 `0` 关闭；等同 `--no-swap`） |
-| `GSH_SWAP_SIZE` | 自动创建或 `gsh setup-swap` 的缓存区大小（默认 `2G`，总内存低于 3800 MiB 时安装器用 `4G`） |
-| `GSH_SHARD_READY_WAIT_SEC` | 等待主世界分片就绪的上限秒数（默认 900）；超时会照常启动洞穴分片 |
-| `GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS` | 单次 app_update 超时（毫秒，默认 3600000 = 60 分钟），超时终止后重试断点续传 |
+| `BSP_STEAMCMD_CONTAINER_MEMORY_MB` | SteamCMD 子容器内存硬上限（MiB），不设则不限制 |
+| `BSP_STEAMCMD_CONTAINER_MEMORY_SWAP_MB` | SteamCMD 子容器缓存区上限（MiB），预设中与内存上限同值 |
+| `BSP_DST_CONTAINER_MEMORY_MB` | 每个 DST 分片容器上限（MiB） |
+| `BSP_HOST_STEAMCMD_PLANNING_MB` | 安装 / 更新前的内存规划预留（MiB），参与守卫判断 |
+| `BSP_HOST_DST_PLANNING_MB` | DST 启动守卫的单分片规划**下界**（MiB）；实际按「512 + 每个启用中的 Mod 32 MiB」估算，双分片再乘 2 并加余量。**设小不会让守卫更宽松** |
+| `BSP_HOST_MEMORY_HEADROOM_MB` | 安装/启动守卫保留空闲（默认 512） |
+| `BSP_HOST_MIN_AVAILABLE_MB` | 设为 `0` 可关闭守卫（小内存慎用） |
+| `BSP_SWAP_ON_INSTALL` | 安装器在小内存机上自动创建缓存区文件（默认 `1`，设 `0` 关闭；等同 `--no-swap`） |
+| `BSP_SWAP_SIZE` | 自动创建或 `bsp setup-swap` 的缓存区大小（默认 `2G`，总内存低于 3800 MiB 时安装器用 `4G`） |
+| `BSP_SHARD_READY_WAIT_SEC` | 等待主世界分片就绪的上限秒数（默认 900）；超时会照常启动洞穴分片 |
+| `BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS` | 单次 app_update 超时（毫秒，默认 3600000 = 60 分钟），超时终止后重试断点续传 |
 
 完整示例见仓库根目录 `panel.env.example`。
 
@@ -140,7 +140,7 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 `scripts/install.linux.sh` 在预检阶段读取 `/proc/meminfo`：
 
 - 总内存 **&lt; 约 4 GiB**：输出 **WARN**，说明档位与建议，并写入 `install.status`
-- **`GSH_PANEL_ENV_PRESET=auto`**：自动合并 `small` / `medium` / `large` 预设
+- **`BSP_PANEL_ENV_PRESET=auto`**：自动合并 `small` / `medium` / `large` 预设
 
 ---
 
@@ -184,7 +184,7 @@ sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose
 
 ```bash
 free -h                                          # 看 available 还有多少
-swapon --show                                    # 没有输出说明没有缓存区：小内存机看安装摘要（自动创建失败或磁盘不足），其余机器执行 sudo gsh setup-swap
+swapon --show                                    # 没有输出说明没有缓存区：小内存机看安装摘要（自动创建失败或磁盘不足），其余机器执行 sudo bsp setup-swap
 sudo dmesg -T | grep -iE 'killed process|oom'    # 有输出即确实被内核 OOM 杀掉
 ```
 
@@ -195,16 +195,16 @@ free -h
 
 # Docker 模式
 docker stats --no-stream
-docker logs --tail 100 game-server-hub-panel
+docker logs --tail 100 bubblesharkpanel-panel
 
-# Native 模式（没有容器，游戏分片是 gsh 用户的 systemd 服务）
-sudo systemctl status game-server-hub.service --no-pager
-sudo journalctl -u game-server-hub.service -n 100 --no-pager
+# Native 模式（没有容器，游戏分片是 bsp 用户的 systemd 服务）
+sudo systemctl status bubblesharkpanel.service --no-pager
+sudo journalctl -u bubblesharkpanel.service -n 100 --no-pager
 ```
 
 Docker 模式下 SteamCMD 容器 exit 137 有两种来源（Native 模式无容器，对应的是安装任务超时与宿主机 OOM）：
 
-- **面板超时终止**：单次 app_update 超过 `GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS`（默认 60 分钟）后由面板 SIGKILL，日志含 `GSH-STEAMCMD-TIMEOUT`。此时与内存无关，调大该值即可；已下载内容保留，重试会自动断点续传。
+- **面板超时终止**：单次 app_update 超过 `BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS`（默认 60 分钟）后由面板 SIGKILL，日志含 `GSH-STEAMCMD-TIMEOUT`。此时与内存无关，调大该值即可；已下载内容保留，重试会自动断点续传。
 - **内存不足**：容器硬上限或宿主机 OOM。可调高预设或升级规格，并避免安装与多实例同时运行。
 
 更多安装步骤见 [Docker 模式安装](install-docker.md)与 [Native systemd 模式安装](install-native.md)。

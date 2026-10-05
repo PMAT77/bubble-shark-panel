@@ -1,5 +1,5 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyRequest } from 'fastify'
-import process from 'node:process'
 import type { ServerConfig } from '../../shared/config'
 import { loadServerConfig } from '../../shared/config'
 import {
@@ -95,7 +95,7 @@ export function resolveActualPanelPortFromRequest(
 
   return resolveActualPanelPort({
     serverPort,
-    publishedPortEnv: process.env.GSH_PANEL_PUBLISHED_PORT,
+    publishedPortEnv: readBrandEnv('BSP_PANEL_PUBLISHED_PORT'),
     hostHeader,
     forwardedHost,
     forwardedPort,
@@ -112,7 +112,7 @@ export interface PanelPortBootstrapSyncInput {
 /**
  * 计算「面板端口」启动引导值，返回应写入的端口，null 表示不写。
  *
- * 仅生产部署且通过 GSH_PANEL_PUBLISHED_PORT 显式声明对外发布端口（compose 栈）时，
+ * 仅生产部署且通过 BSP_PANEL_PUBLISHED_PORT 显式声明对外发布端口（compose 栈）时，
  * 才允许把发布端口初始化/校正进「面板端口」设置：
  * - 开发/测试环境没有"对外发布端口"语义，禁止把后端监听端口固化成面板端口（避免
  *   dev 后端 8888 / dev:compose 发布端口被误同步进设置与 panel.env 的 VITE_DEV_WEB_PORT）；
@@ -144,7 +144,7 @@ export async function syncPanelPortSettingIfStale(input: {
   const defaults = getDefaultPanelSettings()
   const nextPort = resolvePanelPortBootstrapSync({
     mode: input.mode,
-    publishedPortEnv: process.env.GSH_PANEL_PUBLISHED_PORT,
+    publishedPortEnv: readBrandEnv('BSP_PANEL_PUBLISHED_PORT'),
     existingPanelPort: settings?.panelPort,
     defaultPanelPort: defaults.panelPort,
   })

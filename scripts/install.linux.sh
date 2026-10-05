@@ -1726,7 +1726,7 @@ prepare_native_panel_env() {
 
   run_as_root bash -c "cat > \"${NATIVE_SYSTEMD_UNIT}\" <<EOF
 [Unit]
-Description=BubbleShark Panel (Native)
+Description=BubbleSharkPanel (Native)
 After=network-online.target user@${native_uid}.service
 Wants=network-online.target
 Requires=user@${native_uid}.service
@@ -3100,7 +3100,7 @@ install_gsh_cli() {
 native_update_service_unit() {
   cat <<EOF
 [Unit]
-Description=BubbleShark Panel panel update (Native release install)
+Description=BubbleSharkPanel panel update (Native release install)
 After=network-online.target
 Wants=network-online.target
 
@@ -3121,7 +3121,7 @@ EOF
 native_update_path_unit() {
   cat <<EOF
 [Unit]
-Description=Watch the panel update request for BubbleShark Panel (Native)
+Description=Watch the panel update request for BubbleSharkPanel (Native)
 
 [Path]
 PathExists=${NATIVE_UPDATE_DIR}/request

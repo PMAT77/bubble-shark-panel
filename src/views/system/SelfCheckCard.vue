@@ -62,7 +62,7 @@ async function runSelfCheck() {
 
 function buildCopyText(target: SelfCheckReport): string {
   const lines = [
-    `BubbleShark Panel 环境自检（${target.generatedAt}）`,
+    `BubbleSharkPanel 环境自检（${target.generatedAt}）`,
     `版本：${target.releaseVersion || '开发构建'}　运行方式：${target.runtimeMode}`,
     '',
     ...target.items.map((item: SelfCheckItem) =>

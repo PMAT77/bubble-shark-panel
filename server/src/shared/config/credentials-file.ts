@@ -33,7 +33,7 @@ export function resolveAdminCredentialsFilePath(dbPath: string): string {
 export function writeAdminCredentialsFile(dbPath: string, username: string, password: string): string {
   const filePath = resolveAdminCredentialsFilePath(dbPath)
   fs.writeFileSync(filePath, [
-    '# BubbleShark Panel 初始管理员凭据',
+    '# BubbleSharkPanel 初始管理员凭据',
     '# 首次登录修改密码后本文件即失效，可手动删除。',
     `ADMIN_USERNAME=${username}`,
     `ADMIN_PASSWORD=${password}`,

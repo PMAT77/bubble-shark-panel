@@ -120,7 +120,7 @@ export async function buildDstConnectInfo(
   options?: { gamePort?: number | null, running?: boolean },
 ): Promise<Omit<InstanceConnectInfoDto, 'consoleShards'>> {
   const { clusterIniPath } = resolveClusterPaths(installPath)
-  let clusterName = 'BubbleShark Panel'
+  let clusterName = 'BubbleSharkPanel'
   let clusterPassword = ''
   let networkMode: ClusterNetworkMode = 'offline'
   if (fs.existsSync(clusterIniPath)) {

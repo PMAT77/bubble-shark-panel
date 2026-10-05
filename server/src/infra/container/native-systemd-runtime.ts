@@ -365,7 +365,7 @@ export function buildNativeSystemdUnit(
    * 由面板如实报告失败原因。用户手动启动前会先 reset-failed，正常重启不会撞上限。
    */
   return `[Unit]
-Description=BubbleShark Panel ${escapeSpecifiers(spec.instanceId)} ${spec.shard}
+Description=BubbleSharkPanel ${escapeSpecifiers(spec.instanceId)} ${spec.shard}
 StartLimitIntervalSec=${NATIVE_UNIT_START_LIMIT_INTERVAL_SEC}
 StartLimitBurst=${NATIVE_UNIT_START_LIMIT_BURST}
 

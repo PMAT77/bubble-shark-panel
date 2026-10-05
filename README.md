@@ -1,4 +1,4 @@
-# BubbleShark Panel · 饥荒联机版专用服务器管理面板
+# BubbleSharkPanel · 饥荒联机版专用服务器管理面板
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/PMAT77/bubble-shark-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/PMAT77/bubble-shark-panel/actions/workflows/ci.yml)
@@ -12,7 +12,7 @@
 
 **开始使用：[在线体验](#在线体验) · [立即安装](#快速安装) · [存档导入](#存档导入)**
 
-![BubbleShark Panel 面板预览](https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/game-server-hub/GameServer_B_1004.png)
+![BubbleSharkPanel 面板预览](https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/game-server-hub/GameServer_B_1004.png)
 
 ## 在线体验
 
@@ -22,7 +22,7 @@
 
 预览环境为只读模式，不会对真实服务器执行操作。
 
-## 为什么用 BubbleShark Panel
+## 为什么用 BubbleSharkPanel
 
 ### 浏览器管理服务器
 
@@ -48,9 +48,9 @@ Docker 模式运行面板与游戏容器；Native 模式使用 systemd 管理面
 
 ## 已经在用其他 DST 面板？
 
-可以从下面这些使用场景判断 BubbleShark Panel 是否适合你：
+可以从下面这些使用场景判断 BubbleSharkPanel 是否适合你：
 
-| 你需要什么                   | BubbleShark Panel                 |
+| 你需要什么                   | BubbleSharkPanel                 |
 | ----------------------- | ------------------------------- |
 | 快速创建 DST 服务器            | 图形化创建实例，SteamCMD 自动安装与更新        |
 | 担心改错世界或丢存档              | 操作前自动备份，支持数据库快照与恢复              |
@@ -319,8 +319,8 @@ Native 模式直接使用 systemd 管理面板和游戏进程。
 Community 源代码采用 [MIT License](LICENSE)。
 
 ```text
-Copyright (c) 2026 BubbleShark Panel
+Copyright (c) 2026 BubbleSharkPanel
 SPDX-License-Identifier: MIT
 ```
 
-**BubbleShark Panel** — 让开服像点一下那么简单。
+**BubbleSharkPanel** — 让开服像点一下那么简单。

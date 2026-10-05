@@ -1,6 +1,6 @@
 # 参与贡献
 
-感谢关注 BubbleShark Panel。本文说明如何有效地提交 Issue 与 Pull Request。
+感谢关注 BubbleSharkPanel。本文说明如何有效地提交 Issue 与 Pull Request。
 
 ---
 

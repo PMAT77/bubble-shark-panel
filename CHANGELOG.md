@@ -8,7 +8,7 @@
 
 ### Changed
 
-- 项目更名为 BubbleShark Panel，GitHub 仓库迁移为 PMAT77/bubble-shark-panel。
+- 项目更名为 BubbleSharkPanel，GitHub 仓库迁移为 PMAT77/bubble-shark-panel。
 - 新安装使用 bubblesharkpanel 部署名称、bsp 命令和 BSP_* 配置；旧 GSH_* 配置、gsh 命令、部署路径、服务、授权及插件继续兼容。
 - 发布新旧名称的镜像和安装包，既有面板可直接升级到 v0.15.0。
 

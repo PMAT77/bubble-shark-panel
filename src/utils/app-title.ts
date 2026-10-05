@@ -1,4 +1,4 @@
-const DEFAULT_APP_TITLE = 'BubbleShark Panel · 饥荒联机版开服面板'
+const DEFAULT_APP_TITLE = 'BubbleSharkPanel · 饥荒联机版开服面板'
 
 export function resolveAppTitle(rawTitle: unknown = import.meta.env.VITE_APP_TITLE) {
   const normalizedTitle = String(rawTitle ?? '').trim()

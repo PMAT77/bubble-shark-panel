@@ -33,7 +33,7 @@ describe('buildNotification', () => {
     assert.ok(outgoing.url.includes('&sign='))
     const body = JSON.parse(outgoing.body) as { msgtype: string, text: { content: string } }
     assert.equal(body.msgtype, 'text')
-    assert.ok(body.text.content.includes('BubbleShark Panel'))
+    assert.ok(body.text.content.includes('BubbleSharkPanel'))
     assert.ok(body.text.content.includes('进程异常退出'))
   })
 
@@ -85,7 +85,7 @@ describe('buildNotification', () => {
     assert.equal(body.severity, 'critical')
     assert.ok(body.title.includes('进程异常退出'))
     assert.equal(body.message, baseEvent.message)
-    assert.ok(body.text.includes('BubbleShark Panel'))
+    assert.ok(body.text.includes('BubbleSharkPanel'))
     assert.equal(body.at, baseEvent.at)
     assert.equal(buildNotification('webhook', {}, baseEvent), null)
   })

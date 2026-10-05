@@ -103,7 +103,7 @@ function goLogin() {
       <div class="mb-6 flex items-center justify-between">
         <div class="flex gap-3 items-center">
           <AppLogoMark size-class="h-[30px] w-[40px]" class="p-1 border rounded-lg" />
-          <span class="tracking-tight font-semibold">BubbleShark Panel</span>
+          <span class="tracking-tight font-semibold">BubbleSharkPanel</span>
           <span class="text-xs text-muted-foreground px-2 py-0.5 border rounded-full">
             Community · MIT
           </span>
@@ -146,7 +146,7 @@ function goLogin() {
           <h1 class="text-2xl leading-tight tracking-tight font-semibold mb-3 md-text-3xl">
             饥荒联机版专用服，可视化管理
             <div class="text-4xl tracking-tight font-semibold md-text-6xl">
-              BubbleShark Panel
+              BubbleSharkPanel
             </div>
           </h1>
           <p class="text-sm text-muted-foreground leading-relaxed mb-6 max-w-prose md-text-base">

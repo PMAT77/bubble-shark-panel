@@ -1,6 +1,6 @@
 # 宿主机内存与 DST 部署档位
 
-BubbleShark Panel 支持 **Docker 与 Native systemd 双运行时**。下文的档位与预算按 **Docker 模式** 给出：面板容器 + 每实例 DST 容器（开启洞穴时为 **地上 + 洞穴两个容器**）+ 安装时的 **SteamCMD 临时容器**；Native 模式没有容器与 SteamCMD 子容器开销，但游戏进程本身的内存占用相近。
+BubbleSharkPanel 支持 **Docker 与 Native systemd 双运行时**。下文的档位与预算按 **Docker 模式** 给出：面板容器 + 每实例 DST 容器（开启洞穴时为 **地上 + 洞穴两个容器**）+ 安装时的 **SteamCMD 临时容器**；Native 模式没有容器与 SteamCMD 子容器开销，但游戏进程本身的内存占用相近。
 任务管理器里单个进程只显示几十 MiB 属正常现象，**总占用请看「可用内存」与 `docker stats`**。
 
 ---

@@ -9,5 +9,5 @@
     "instances:read"
   ],
   "description": "演示插件如何调用宿主能力：读取实例列表、读取自己的调用记录，并把结果写到插件目录。",
-  "author": "BubbleShark Panel 示例"
+  "author": "BubbleSharkPanel 示例"
 }

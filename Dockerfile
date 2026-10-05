@@ -29,10 +29,10 @@ COPY shared ./shared
 COPY scripts ./scripts
 COPY vite ./vite
 COPY public ./public
-COPY index.html loading.html ./
+COPY index.html loading.html .env.production.example ./
 COPY tsconfig.json tsconfig.app.json tsconfig.node.json ./
 COPY vite.config.ts uno.config.ts postcss.config.js components.json ./
-RUN pnpm run build && pnpm run build:server
+RUN cp .env.production.example .env.production && pnpm run build && pnpm run build:server
 
 # 运行层不再复用 deps：服务端由 esbuild 全量自包含打包（与 build-native-release.mjs
 # 的 native release 同款配置，已在生产验证），零 node_modules 依赖，

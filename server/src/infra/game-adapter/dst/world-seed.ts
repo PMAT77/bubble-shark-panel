@@ -73,7 +73,7 @@ export function buildWorldSeedModInfoContent(): string {
   return [
     'name = "GSH World Seed"',
     'description = "由服务器面板写入的世界生成种子；只在本分片生成地图时生效。"',
-    'author = "BubbleShark Panel"',
+    'author = "BubbleSharkPanel"',
     'version = "1.0.0"',
     'api_version = 10',
     // priority 取较大值：DST 按 priority 升序加载 Mod，靠后加载可以让本 Mod 最后设置 SEED，
@@ -98,7 +98,7 @@ export function buildWorldSeedModInfoContent(): string {
  */
 export function buildWorldSeedModWorldgenMainContent(seed: string): string {
   return [
-    '-- 由 BubbleShark Panel 自动生成，请勿手工编辑：本分片的世界生成种子。',
+    '-- 由 BubbleSharkPanel 自动生成，请勿手工编辑：本分片的世界生成种子。',
     '-- worldgen_main.lua 会在加载完所有 Mod 之后执行 SEED = SetWorldGenSeed(SEED)，',
     '-- 因此这里设置的全局 SEED 就是本次生成实际使用的种子（并写入存档 meta.seed）。',
     `GLOBAL.SEED = ${seed}`,

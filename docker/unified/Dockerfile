@@ -4,7 +4,7 @@
 # 本文件只用标准 Dockerfile 语法，内置 frontend 即可解析。
 # 若将来引入 `RUN --mount=` / heredoc 等特性，再按需加回并解决镜像源。
 #
-# BubbleShark Panel 统一镜像：面板（Node.js）+ DST 运行库 + SteamCMD。
+# BubbleSharkPanel 统一镜像：面板（Node.js）+ DST 运行库 + SteamCMD。
 #
 # 镜像保持「中性」：不设 ENTRYPOINT / HEALTHCHECK / USER ——
 # - 面板入口由 docker-compose.yml 的 command 提供（与镜像 CMD 一致）；
@@ -51,7 +51,7 @@ COPY . .
 # 控制台 SSE 的地址构造会抛异常、实时日志只剩轮询兜底。
 ARG VITE_APP_API_BASEURL=/
 ENV VITE_APP_API_BASEURL=${VITE_APP_API_BASEURL}
-RUN pnpm run build && pnpm run build:server
+RUN cp .env.production.example .env.production && pnpm run build && pnpm run build:server
 
 # 运行时基础：Debian 12 + DST 32 位运行库 + SteamCMD（构建期 SHA256 强校验与自检）。
 FROM base AS runtime
@@ -59,8 +59,8 @@ ARG BSP_RELEASE_VERSION=dev
 ARG BSP_BUILD_SHA=unknown
 ARG STEAMCMD_ARCHIVE_URL=https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
 ARG STEAMCMD_ARCHIVE_SHA256=
-LABEL org.opencontainers.image.title="BubbleShark Panel unified runtime"
-LABEL org.opencontainers.image.description="BubbleShark Panel panel, DST runtime libraries and SteamCMD in one image"
+LABEL org.opencontainers.image.title="BubbleSharkPanel unified runtime"
+LABEL org.opencontainers.image.description="BubbleSharkPanel panel, DST runtime libraries and SteamCMD in one image"
 LABEL org.opencontainers.image.source="https://github.com/PMAT77/bubble-shark-panel"
 LABEL org.opencontainers.image.version="${BSP_RELEASE_VERSION}"
 LABEL org.opencontainers.image.revision="${BSP_BUILD_SHA}"

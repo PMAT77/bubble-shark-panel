@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 修正 Docker 构建上下文遗漏生产标题模板，确保镜像构建使用 BubbleSharkPanel 页面标题。
+
 ## [0.15.0] - 2026-10-05
 
 ### Changed

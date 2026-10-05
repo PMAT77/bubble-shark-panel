@@ -16,6 +16,7 @@ data
 logs
 .env*
 !.env.example
+!.env.production.example
 panel.env
 **/*.md
 docs

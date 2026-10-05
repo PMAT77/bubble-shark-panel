@@ -2078,57 +2078,59 @@ onMounted(async () => {
                 已订阅 ({{ subscribedTabCount }})
               </template>
               <div class="flex h-full min-h-0 flex-col overflow-y-auto">
-                <div class="mb-2 flex shrink-0 flex-wrap gap-2">
-                  <NButton v-if="hasPermission('mod:install')" size="small" :disabled="!selectedInstanceId" @click="localImportShow = true">
-                    从本地导入
-                  </NButton>
-                  <NButton size="small" :disabled="!selectedInstanceId" :loading="loadingInstalled" @click="loadInstalledMods()">
-                    刷新列表
-                  </NButton>
-                </div>
-                <div v-if="!isMobileMode" class="flex shrink-0 flex-wrap items-center gap-3 pb-2">
-                  <NButton
-                    size="small"
-                    :loading="checkingUpdates"
-                    :disabled="!hasSelectedInstance || installedMods.length === 0"
-                    @click="checkModUpdates"
-                  >
-                    检查更新
-                  </NButton>
-                  <NButton
-                    size="small"
-                    type="primary"
-                    secondary
-                    :loading="batchUpdating"
-                    :disabled="updatableMods.length === 0"
-                    @click="updateAllOutdatedMods"
-                   v-if="hasPermission('mod:install')">
-                    全部更新 ({{ updatableMods.length }})
-                  </NButton>
-                  <NButton
-                    v-if="(checkedRowKeys.length > 0) && hasPermission('mod:install')"
-                    size="small"
-                    secondary
-                    :loading="batchUpdating"
-                    :disabled="selectedUpdatableMods.length === 0"
-                    @click="batchUpdateSelectedMods"
-                  >
-                    更新选中 ({{ selectedUpdatableMods.length }})
-                  </NButton>
-                  <NButton
-                    v-if="((downloadQueue?.retryableFailedCount ?? 0) > 0) && hasPermission('mod:install')"
-                    size="small"
-                    type="warning"
-                    secondary
-                    :loading="retryingFailedMods"
-                    @click="retryAllFailedMods"
-                  >
-                    重试全部失败 ({{ downloadQueue?.retryableFailedCount ?? 0 }})
-                  </NButton>
-                  <span class="text-xs text-muted-foreground">
-                    共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · {{ pendingStatusLabel }} {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
-                    <template v-if="lastUpdateCheckedAt"> · 上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</template>
-                  </span>
+                <div class="flex shrink-0 flex-wrap items-center gap-3 pb-2">
+                  <template v-if="!isMobileMode">
+                    <NButton
+                      size="small"
+                      :loading="checkingUpdates"
+                      :disabled="!hasSelectedInstance || installedMods.length === 0"
+                      @click="checkModUpdates"
+                    >
+                      检查更新
+                    </NButton>
+                    <NButton
+                      size="small"
+                      type="primary"
+                      secondary
+                      :loading="batchUpdating"
+                      :disabled="updatableMods.length === 0"
+                      @click="updateAllOutdatedMods"
+                     v-if="hasPermission('mod:install')">
+                      全部更新 ({{ updatableMods.length }})
+                    </NButton>
+                    <NButton
+                      v-if="(checkedRowKeys.length > 0) && hasPermission('mod:install')"
+                      size="small"
+                      secondary
+                      :loading="batchUpdating"
+                      :disabled="selectedUpdatableMods.length === 0"
+                      @click="batchUpdateSelectedMods"
+                    >
+                      更新选中 ({{ selectedUpdatableMods.length }})
+                    </NButton>
+                    <NButton
+                      v-if="((downloadQueue?.retryableFailedCount ?? 0) > 0) && hasPermission('mod:install')"
+                      size="small"
+                      type="warning"
+                      secondary
+                      :loading="retryingFailedMods"
+                      @click="retryAllFailedMods"
+                    >
+                      重试全部失败 ({{ downloadQueue?.retryableFailedCount ?? 0 }})
+                    </NButton>
+                    <span class="text-xs text-muted-foreground">
+                      共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · {{ pendingStatusLabel }} {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
+                      <template v-if="lastUpdateCheckedAt"> · 上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</template>
+                    </span>
+                  </template>
+                  <div class="flex shrink-0 gap-2" :class="{ 'ml-auto': !isMobileMode }">
+                    <NButton v-if="hasPermission('mod:install')" size="small" :disabled="!selectedInstanceId" @click="localImportShow = true">
+                      从本地导入
+                    </NButton>
+                    <NButton size="small" :disabled="!selectedInstanceId" :loading="loadingInstalled" @click="loadInstalledMods()">
+                      刷新列表
+                    </NButton>
+                  </div>
                 </div>
                 <NAlert
                   v-if="!isMobileMode && modCheckHint"

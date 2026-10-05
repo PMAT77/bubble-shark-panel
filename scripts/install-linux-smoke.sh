@@ -18,22 +18,22 @@ SMOKE_INSTALLED_TAG='v0.6.0'
 # 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
 SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.15.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${BSP_RELEASE_TAG}" == "v0.15.0" ]]
+# v0.15.1 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${BSP_RELEASE_TAG}" == "v0.15.1" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${BSP_GAME_DST_IMAGE}" == "" ]]
 [[ "${BSP_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.15.0"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.15.1"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.15.0" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.15.1" ]]
 [[ "${BSP_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${BSP_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 

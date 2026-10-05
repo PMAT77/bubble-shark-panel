@@ -4,9 +4,17 @@
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-05
+
 ### Fixed
 
 - 修正 Docker 构建上下文遗漏生产标题模板，确保镜像构建使用 BubbleSharkPanel 页面标题。
+
+### Changed
+
+- 左上角品牌 Logo 更换为 BubbleSharkPanel 鲨鱼图标，适配浅色与深色主题。
+- README 更新面板预览截图。
+- 已订阅 Mod 列表的「从本地导入」和「刷新列表」移至「检查更新」同行的最右侧。
 
 ## [0.15.0] - 2026-10-05
 
@@ -982,7 +990,8 @@
 - DST 房间 / 世界 / Mod 管理
 - 面板与 DST 镜像 GHCR 发布（`v*` tag）
 
-[Unreleased]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.13.4...v0.14.0
 [0.13.4]: https://github.com/PMAT77/bubble-shark-panel/compare/v0.13.3...v0.13.4

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import logoSvg from '@/assets/images/logo.svg?raw'
+import logoImage from '@/assets/images/logo.png'
 
 defineOptions({
   name: 'AppLogoMark',
@@ -18,9 +18,19 @@ withDefaults(
 
 <template>
   <span
-    class="inline-flex shrink-0 items-center justify-center [&_svg]:h-full [&_svg]:w-full [&_svg]:object-contain"
+    class="inline-flex shrink-0 items-center justify-center"
     :class="sizeClass"
+    :style="{ '--brand-logo': `url(${logoImage})` }"
     aria-hidden="true"
-    v-html="logoSvg"
-  />
+  >
+    <span class="brand-logo h-full w-full" />
+  </span>
 </template>
+
+<style scoped>
+.brand-logo {
+  background-color: oklch(var(--foreground));
+  -webkit-mask: var(--brand-logo) center / contain no-repeat;
+  mask: var(--brand-logo) center / contain no-repeat;
+}
+</style>

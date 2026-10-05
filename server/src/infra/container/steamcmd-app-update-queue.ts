@@ -1,8 +1,9 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 let chain: Promise<void> = Promise.resolve()
 let inFlight = 0
 
 function resolveInterJobCooldownMs(): number {
-  const raw = process.env.GSH_STEAMCMD_INTER_JOB_COOLDOWN_MS?.trim()
+  const raw = readBrandEnv('BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS')?.trim()
   if (raw !== undefined && raw !== '') {
     const parsed = Number(raw)
     if (Number.isFinite(parsed)) {

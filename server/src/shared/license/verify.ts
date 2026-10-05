@@ -1,7 +1,7 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { KeyObject } from 'node:crypto'
 import type { LicenseFile, LicensePayload, LicenseState } from '../../../../shared/contracts/license'
 import { createPublicKey, verify as verifySignature } from 'node:crypto'
-import process from 'node:process'
 import {
   canonicalizeLicensePayload,
   licenseCapabilitySchema,
@@ -12,7 +12,7 @@ import { resolveMachineFingerprint } from './fingerprint'
 /**
  * 许可验签与状态判定（纯逻辑，不读文件）。
  *
- * 内置公钥通过 `GSH_LICENSE_PUBLIC_KEY` 提供（PEM 或 base64 的 SPKI DER）：
+ * 内置公钥通过 `BSP_LICENSE_PUBLIC_KEY` 提供（PEM 或 base64 的 SPKI DER）：
  * 公钥不是秘密，正式发布时随构建注入即可。**私钥永远不进仓库、不进构建产物**，
  * 只存在于发布方的离线签发环境，见内部文档 `docs_local/license.md`。
  */
@@ -26,7 +26,7 @@ const publicKeyCache = new Map<string, KeyObject>()
  * 为什么支持多个：授权许可与插件包在信任模型上是两件事——
  * 许可按客户签发，插件包按发布流程签发；用同一把私钥同时干这两件事，
  * 一旦插件签名流程出错就波及所有客户的授权。所以允许把两者的公钥分开配置
- * （`GSH_LICENSE_PUBLIC_KEY` 与 `GSH_PLUGIN_PUBLIC_KEY`），
+ * （`BSP_LICENSE_PUBLIC_KEY` 与 `BSP_PLUGIN_PUBLIC_KEY`），
  * 同时又保持"只配一个也能跑"的简单部署。
  *
  * 取值可以是单个 PEM / base64，也可以用换行或逗号分隔多个（便于密钥轮换期同时信任新旧两把）。
@@ -95,7 +95,7 @@ function toPem(raw: string): string | null {
 
 /** 授权许可的公钥（首个）；保留单值形式供既有调用方使用 */
 export function resolveLicensePublicKeyPem(): string | null {
-  const raw = process.env.GSH_LICENSE_PUBLIC_KEY?.trim()
+  const raw = readBrandEnv('BSP_LICENSE_PUBLIC_KEY')?.trim()
   if (!raw) {
     return null
   }
@@ -116,16 +116,16 @@ export function resolveLicensePublicKeyPem(): string | null {
 /**
  * 插件包的验签公钥。
  *
- * 优先取 `GSH_PLUGIN_PUBLIC_KEY`（推荐：与授权分开两把密钥）；
+ * 优先取 `BSP_PLUGIN_PUBLIC_KEY`（推荐：与授权分开两把密钥）；
  * 未配置时回落到授权公钥，保证既有部署不用改配置也能继续验签插件。
  * 返回**原始配置值**（可能含多个公钥），由 `parsePublicKeys` 统一切分。
  */
 export function resolvePluginPublicKeyRaw(): string | null {
-  return process.env.GSH_PLUGIN_PUBLIC_KEY?.trim() || process.env.GSH_LICENSE_PUBLIC_KEY?.trim() || null
+  return readBrandEnv('BSP_PLUGIN_PUBLIC_KEY')?.trim() || readBrandEnv('BSP_LICENSE_PUBLIC_KEY')?.trim() || null
 }
 
 export function loadLicensePublicKeys(): KeyObject[] {
-  return parsePublicKeys(process.env.GSH_LICENSE_PUBLIC_KEY)
+  return parsePublicKeys(readBrandEnv('BSP_LICENSE_PUBLIC_KEY'))
 }
 
 export function loadPluginPublicKeys(): KeyObject[] {

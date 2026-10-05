@@ -7,8 +7,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        提交前请搜索 [已有 Issue](https://github.com/PMAT77/game-serve-hub/issues)。
-        安全漏洞请走 [Security Advisories](https://github.com/PMAT77/game-serve-hub/security/advisories/new)。
+        提交前请搜索 [已有 Issue](https://github.com/PMAT77/bubble-shark-panel/issues)。
+        安全漏洞请走 [Security Advisories](https://github.com/PMAT77/bubble-shark-panel/security/advisories/new)。
 
   - type: textarea
     id: summary

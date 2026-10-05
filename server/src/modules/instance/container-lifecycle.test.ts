@@ -27,7 +27,7 @@ import {
 const tempDirs: string[] = []
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-lifecycle-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-lifecycle-'))
   tempDirs.push(dir)
   return dir
 }
@@ -77,8 +77,8 @@ describe('ensureContainerRuntimeReady', () => {
 describe('isHealthyRuntimeForResurrect', () => {
   it('拒绝把自动拉起窗口里的分片当成健康运行', () => {
     assert.equal(isHealthyRuntimeForResurrect({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: true,
       restarting: true,
       exitResult: 'oom-kill',
@@ -87,8 +87,8 @@ describe('isHealthyRuntimeForResurrect', () => {
 
   it('拒绝把已经重启过的分片重新标成运行中', () => {
     assert.equal(isHealthyRuntimeForResurrect({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: true,
       restarts: 2,
     }), false)
@@ -96,8 +96,8 @@ describe('isHealthyRuntimeForResurrect', () => {
 
   it('接受真正在跑且没重启过的分片', () => {
     assert.equal(isHealthyRuntimeForResurrect({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: true,
     }), true)
   })
@@ -105,8 +105,8 @@ describe('isHealthyRuntimeForResurrect', () => {
   it('探测不到运行时时不复活实例', () => {
     assert.equal(isHealthyRuntimeForResurrect(null), false)
     assert.equal(isHealthyRuntimeForResurrect({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: false,
       probeFailed: true,
     }), false)
@@ -123,8 +123,8 @@ describe('isHealthyRuntimeForResurrect', () => {
 describe('classifyMasterProbe', () => {
   it('把重启窗口里的主世界判成崩溃循环而不是还活着', () => {
     assert.equal(classifyMasterProbe({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: true,
       restarting: true,
     }), 'restart-loop')
@@ -132,8 +132,8 @@ describe('classifyMasterProbe', () => {
 
   it('把我们启动之后又崩过的主世界判成崩溃循环', () => {
     assert.equal(classifyMasterProbe({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: true,
       restarts: 3,
       exitResult: 'oom-kill',
@@ -147,8 +147,8 @@ describe('classifyMasterProbe', () => {
    */
   it('沿用历史重启计数不算崩溃（基线之上的才算）', () => {
     assert.equal(classifyMasterProbe({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: true,
       restarts: 5,
     }, 5), 'healthy')
@@ -156,8 +156,8 @@ describe('classifyMasterProbe', () => {
 
   it('基线为 0 时任何非零重启计数都算崩溃', () => {
     assert.equal(classifyMasterProbe({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: true,
       restarts: 1,
     }), 'restart-loop')
@@ -165,16 +165,16 @@ describe('classifyMasterProbe', () => {
 
   it('把真正在跑的主世界判成健康', () => {
     assert.equal(classifyMasterProbe({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: true,
     }), 'healthy')
   })
 
   it('把已停止的主世界判成退出', () => {
     assert.equal(classifyMasterProbe({
-      id: 'gsh-x-master.service',
-      name: 'gsh-x-master',
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
       running: false,
       exitResult: 'oom-kill',
     }), 'stopped')
@@ -205,13 +205,13 @@ describe('洞穴启动代号', () => {
   })
 })
 
-describe('resolveShardReadyWaitSec', () => {  const original = process.env.GSH_SHARD_READY_WAIT_SEC
+describe('resolveShardReadyWaitSec', () => {  const original = process.env.BSP_SHARD_READY_WAIT_SEC
   afterEach(() => {
     if (original === undefined) {
-      delete process.env.GSH_SHARD_READY_WAIT_SEC
+      delete process.env.BSP_SHARD_READY_WAIT_SEC
     }
     else {
-      process.env.GSH_SHARD_READY_WAIT_SEC = original
+      process.env.BSP_SHARD_READY_WAIT_SEC = original
     }
   })
 
@@ -220,19 +220,19 @@ describe('resolveShardReadyWaitSec', () => {  const original = process.env.GSH_S
    * 等不够就放洞穴进来，两个加载峰值会重新叠在一起——正是被 OOM 杀掉的那次。
    */
   it('默认上限足以覆盖多 Mod 分片的冷启动', () => {
-    delete process.env.GSH_SHARD_READY_WAIT_SEC
+    delete process.env.BSP_SHARD_READY_WAIT_SEC
     assert.ok(resolveShardReadyWaitSec() >= 600)
   })
 
   it('允许用环境变量覆盖', () => {
-    process.env.GSH_SHARD_READY_WAIT_SEC = '1200'
+    process.env.BSP_SHARD_READY_WAIT_SEC = '1200'
     assert.equal(resolveShardReadyWaitSec(), 1200)
   })
 
   it('非法值退回默认上限', () => {
-    process.env.GSH_SHARD_READY_WAIT_SEC = 'abc'
+    process.env.BSP_SHARD_READY_WAIT_SEC = 'abc'
     assert.ok(resolveShardReadyWaitSec() >= 600)
-    process.env.GSH_SHARD_READY_WAIT_SEC = '-5'
+    process.env.BSP_SHARD_READY_WAIT_SEC = '-5'
     assert.ok(resolveShardReadyWaitSec() >= 600)
   })
 })

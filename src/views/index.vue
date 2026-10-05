@@ -10,8 +10,8 @@ defineOptions({
 const router = useRouter()
 
 const LINKS = {
-  docs: 'https://github.com/PMAT77/game-serve-hub#readme',
-  github: 'https://github.com/PMAT77/game-serve-hub',
+  docs: 'https://github.com/PMAT77/bubble-shark-panel#readme',
+  github: 'https://github.com/PMAT77/bubble-shark-panel',
 } as const
 
 /** 卡片数据在 `home-capabilities.ts`：顺序与菜单一致，且每张卡片跳面板内的对应页面 */
@@ -103,7 +103,7 @@ function goLogin() {
       <div class="mb-6 flex items-center justify-between">
         <div class="flex gap-3 items-center">
           <AppLogoMark size-class="h-[30px] w-[40px]" class="p-1 border rounded-lg" />
-          <span class="tracking-tight font-semibold">GameServerHub</span>
+          <span class="tracking-tight font-semibold">BubbleSharkPanel</span>
           <span class="text-xs text-muted-foreground px-2 py-0.5 border rounded-full">
             Community · MIT
           </span>
@@ -146,7 +146,7 @@ function goLogin() {
           <h1 class="text-2xl leading-tight tracking-tight font-semibold mb-3 md-text-3xl">
             饥荒联机版专用服，可视化管理
             <div class="text-4xl tracking-tight font-semibold md-text-6xl">
-              GameServerHub
+              BubbleSharkPanel
             </div>
           </h1>
           <p class="text-sm text-muted-foreground leading-relaxed mb-6 max-w-prose md-text-base">

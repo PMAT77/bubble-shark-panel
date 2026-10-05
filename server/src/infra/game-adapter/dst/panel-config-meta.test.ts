@@ -20,7 +20,7 @@ afterEach(() => {
 })
 
 function makeInstallPath() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-panel-meta-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-panel-meta-'))
   tempDirs.push(dir)
   return dir
 }

@@ -9,7 +9,7 @@ import { isCavesShardConfigured, isShardWorldGenerated, removeShardSaveDir, reso
 const tempDirs: string[] = []
 
 function makeTempInstall(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-shard-layout-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-shard-layout-'))
   tempDirs.push(dir)
   return dir
 }

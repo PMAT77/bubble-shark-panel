@@ -23,16 +23,16 @@ import { isInstallJobActive, reconcileStaleInstallingInstances } from './install
 import { findInstallSeedDonor } from './install-seed'
 
 const app = Fastify({ logger: false })
-const root = fs.mkdtempSync(path.join(process.cwd(), '.gsh-update-regression-'))
-const envKeys = ['DB_PATH', 'GSH_RUNTIME_MODE', 'GSH_INSTANCES_ROOT', 'GSH_PANEL_CONTAINER_NAME', 'GSH_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'GSH_UNIT_TEST'] as const
+const root = fs.mkdtempSync(path.join(process.cwd(), '.bsp-update-regression-'))
+const envKeys = ['DB_PATH', 'BSP_RUNTIME_MODE', 'BSP_INSTANCES_ROOT', 'BSP_PANEL_CONTAINER_NAME', 'BSP_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'BSP_UNIT_TEST'] as const
 const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]))
 process.env.DB_PATH = path.join(root, 'test.sqlite')
-process.env.GSH_RUNTIME_MODE = 'docker'
-process.env.GSH_INSTANCES_ROOT = path.join(root, 'instances')
-process.env.GSH_PANEL_CONTAINER_NAME = 'gsh-update-regression-panel'
+process.env.BSP_RUNTIME_MODE = 'docker'
+process.env.BSP_INSTANCES_ROOT = path.join(root, 'instances')
+process.env.BSP_PANEL_CONTAINER_NAME = 'bsp-update-regression-panel'
 process.env.SERVER_LOG_DIR = path.join(root, 'logs')
-process.env.GSH_UNIT_TEST = '1'
-process.env.GSH_INSTALL_DEFER_DST_IMAGE_PULL = '1'
+process.env.BSP_UNIT_TEST = '1'
+process.env.BSP_INSTALL_DEFER_DST_IMAGE_PULL = '1'
 
 let token = ''
 let queryOutput = ''
@@ -96,7 +96,7 @@ before(async () => {
   // POSIX 实例路径需要真实的面板挂载映射；Windows 直 bind 不经过这一分支。
   mock.method(Docker.prototype, 'getContainer', () => ({
     inspect: async () => ({
-      Mounts: [{ Type: 'bind', Source: process.env.GSH_INSTANCES_ROOT!, Destination: process.env.GSH_INSTANCES_ROOT! }],
+      Mounts: [{ Type: 'bind', Source: process.env.BSP_INSTANCES_ROOT!, Destination: process.env.BSP_INSTANCES_ROOT! }],
       State: { Running: false },
     }),
   }))

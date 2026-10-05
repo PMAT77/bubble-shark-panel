@@ -23,13 +23,13 @@ import { addUserInstanceGrants, closeDatabase, createGameInstance, findUserByAcc
  *   3. 报告里不能出现集群令牌与房间密码——报告会被贴进群里或发给客户。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-migration-export-'))
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-migration-export-'))
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const exportRoot = path.join(workDir, 'migration-exports')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 process.env.DB_PATH = dbFilePath
-process.env.GSH_MIGRATION_EXPORT_ROOT = exportRoot
+process.env.BSP_MIGRATION_EXPORT_ROOT = exportRoot
 
 const READY_INSTANCE_ID = `inst-${randomUUID()}`
 const FRESH_INSTANCE_ID = `inst-${randomUUID()}`

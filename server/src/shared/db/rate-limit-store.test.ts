@@ -11,7 +11,7 @@ import {
   saveRateLimitState,
 } from './rate-limit-store'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-rate-limit-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-rate-limit-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 describe('rate limit store', () => {

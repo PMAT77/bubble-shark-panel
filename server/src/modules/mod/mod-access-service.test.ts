@@ -11,7 +11,7 @@ import { hashPassword } from '../../shared/db/connection'
 import { getModAccessStatus } from './mod-access-service'
 import { observeSteamAccess } from '../../infra/game-adapter/dst/steam-access-observation'
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-access-'))
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-access-'))
 const app = Fastify()
 const originalFetch = globalThis.fetch
 let networkRequests = 0
@@ -49,13 +49,13 @@ it('allows a scoped reader to observe without probing, rejects ungranted instanc
   assert.ok(JSON.parse(write.body).error)
 })
 it('exposes independent outcomes and safe configuration booleans without credentials', () => {
-  const keys = ['GSH_STEAM_HTTP_PROXY', 'GSH_STEAMCMD_HTTP_PROXY', 'GSH_STEAM_RELAY_TOKEN', 'GSH_STEAM_WEBAPI_KEY']
+  const keys = ['BSP_STEAM_HTTP_PROXY', 'BSP_STEAMCMD_HTTP_PROXY', 'BSP_STEAM_RELAY_TOKEN', 'BSP_STEAM_WEBAPI_KEY']
   const saved = keys.map(key => process.env[key])
   try {
-    process.env.GSH_STEAM_HTTP_PROXY = 'http://name:secret-password@proxy.invalid:7890'
-    process.env.GSH_STEAMCMD_HTTP_PROXY = 'http://name:secret-password@proxy.invalid:7890'
-    process.env.GSH_STEAM_RELAY_TOKEN = 'secret-token'
-    process.env.GSH_STEAM_WEBAPI_KEY = 'secret-key'
+    process.env.BSP_STEAM_HTTP_PROXY = 'http://name:secret-password@proxy.invalid:7890'
+    process.env.BSP_STEAMCMD_HTTP_PROXY = 'http://name:secret-password@proxy.invalid:7890'
+    process.env.BSP_STEAM_RELAY_TOKEN = 'secret-token'
+    process.env.BSP_STEAM_WEBAPI_KEY = 'secret-key'
     observeSteamAccess('market', { status: 'success', message: '市场列表请求成功' })
     observeSteamAccess('files', { status: 'failed', message: '本次文件下载失败' }, 'access-instance')
     const data = getModAccessStatus('access-instance')

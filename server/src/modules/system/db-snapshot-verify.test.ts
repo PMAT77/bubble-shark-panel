@@ -16,7 +16,7 @@ import { verifyPanelDatabaseFile } from './db-snapshot-verify'
  * 灾难恢复时唯一的退路就没了。因此逐条钉住每个拒绝理由。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-db-verify-'))
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-db-verify-'))
 const migrationsFolder = resolveMigrationsFolder()
 
 /** 造一份结构完整的「面板数据库」；createdAt 用来模拟不同版本的迁移记录 */

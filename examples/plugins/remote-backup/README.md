@@ -18,8 +18,8 @@
 
 ```bash
 # 1. 复制到面板数据目录下的 plugins/
-#    Native：/var/lib/game-server-hub/plugins/
-cp -r examples/plugins/remote-backup /var/lib/game-server-hub/plugins/
+#    Native：/var/lib/bubblesharkpanel/plugins/
+cp -r examples/plugins/remote-backup /var/lib/bubblesharkpanel/plugins/
 
 # 2. 放进 plugin.signature.json（由发布方随插件提供；本地自测可自行签发，见下）
 # 3. 在左侧菜单打开「插件」→ 刷新列表 → 启用（会申请危险能力，需确认）
@@ -34,7 +34,7 @@ cp -r examples/plugins/remote-backup /var/lib/game-server-hub/plugins/
   "keepRemote": 7,
   "target": {
     "kind": "webdav",
-    "url": "https://dav.example.com/gsh-backups",
+    "url": "https://dav.example.com/bsp-backups",
     "putUrlTemplate": "",
     "dir": "",
     "username": "user",
@@ -64,7 +64,7 @@ cp -r examples/plugins/remote-backup /var/lib/game-server-hub/plugins/
 ```bash
 pnpm exec tsx scripts/license/generate-keypair.ts          # 生成密钥对（一次）
 pnpm exec tsx scripts/license/sign-license.ts \
-  --key ~/.gsh-license-keys/license-private.gsh-key \
+  --key ~/.bsp-license-keys/license-private.bsp-key \
   --customer "自测" --capabilities remote-backup --days 30 --out license.json
 # 私钥对清单签名，生成 plugin.signature.json（签发流程见内部文档 docs_local/license.md）
 ```
@@ -93,7 +93,7 @@ pnpm exec tsx scripts/license/sign-license.ts \
 
 想改这个插件或照着写自己的：
 
-- 能力调用见 `plugin.mjs` 的 `callCapability()`：`POST /capabilities/<能力>`，请求头 `x-gsh-plugin-token`，body 带 `pluginId`；
+- 能力调用见 `plugin.mjs` 的 `callCapability()`：`POST /capabilities/<能力>`，请求头 `x-bsp-plugin-token`，body 带 `pluginId`；
 - 备份列表返回的是**路径**而不是内容（`/capabilities/backups`），插件与面板同机，自己按需流式读取即可；
 - 常驻插件监听 `SIGTERM` 干净退出；宿主停用插件时会发这个信号，超过退避上限的崩溃会停在「进程异常」不再重启；
 - 完整能力清单与状态语义见仓库 `docs_local/research/API.md` 的「插件接口」一节（内部文档，不在公开仓库内）。

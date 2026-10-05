@@ -1,7 +1,7 @@
 {
-  "name": "game-server-hub",
+  "name": "bubblesharkpanel",
   "type": "module",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -34,7 +34,8 @@
     "lint": "vue-tsc -b",
     "lint:ox": "oxlint --deny-warnings .",
     "lint:copy": "node scripts/check-ui-copy.mjs",
-    "check:gsh": "node scripts/check-gsh-cli.mjs",
+    "check:gsh": "node scripts/check-bsp-cli.mjs",
+    "check:bsp": "node scripts/check-bsp-cli.mjs",
     "check:presets": "node scripts/check-panel-env-presets.mjs",
     "check:installer": "node scripts/check-installer-smoke.mjs",
     "check:transition": "node scripts/check-page-transition.mjs",

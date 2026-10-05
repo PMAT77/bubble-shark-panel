@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyInstance } from 'fastify'
 import type {
   InstanceCheckUpdatesPayload,
@@ -296,7 +297,7 @@ export async function refreshStaleInstanceUpdateChecks(
 }
 
 export function scheduleInstanceUpdateChecks(app: FastifyInstance) {
-  if (process.env.GSH_UNIT_TEST === '1') {
+  if (readBrandEnv('BSP_UNIT_TEST') === '1') {
     return
   }
   const run = async () => {

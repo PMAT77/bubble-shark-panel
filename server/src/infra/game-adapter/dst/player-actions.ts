@@ -16,13 +16,13 @@ const TOKEN_PATTERN = /^[0-9a-f]{1,16}$/
 const COMMAND_USER_ID_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/
 
 /** 面板自检标记：游戏执行到面板写进去的命令时，会把这行原样打印出来 */
-export const DST_CONSOLE_PING_MARKER = 'GSH_PING:'
+export const DST_CONSOLE_PING_MARKER = 'BSP_PING:'
 
 /** 房间主人（专用服务器自己那条 [Host] 连接）的账号，面板用它挡住「踢/封自己」 */
-export const DST_CONSOLE_HOST_MARKER = 'GSH_HOST:'
+export const DST_CONSOLE_HOST_MARKER = 'BSP_HOST:'
 
 /** 游戏连接表的快照标记：踢不掉时抄一份回面板日志，省掉下一次的手工排查 */
-export const DST_CONSOLE_CLIENT_MARKER = 'GSH_CLIENT:'
+export const DST_CONSOLE_CLIENT_MARKER = 'BSP_CLIENT:'
 
 /**
  * 构造踢人命令。

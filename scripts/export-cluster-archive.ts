@@ -4,7 +4,7 @@ import { parseModOverridesEntries, readLocalModInfo } from '../server/src/infra/
 import { isWorldSeedModId } from '../server/src/infra/game-adapter/dst/world-seed.ts'
 import type { MigrationMod } from '../shared/contracts/migration.ts'
 /**
- * 迁移导出工具：把源机器上的饥荒（DST）集群存档整理成「能直接交给 Game Server Hub 导入」的包。
+ * 迁移导出工具：把源机器上的饥荒（DST）集群存档整理成「能直接交给 BubbleSharkPanel 导入」的包。
  *
  * 为什么需要它：付费迁移服务里最费时间的不是安装面板，而是从旧机器或旧面板上把存档、
  * 配置、Mod 清单和端口对照关系理清楚。手工做这件事要在几个目录之间来回找，
@@ -120,7 +120,7 @@ async function main() {
       }
       const master = path.join(clusterPath, 'Master', 'modoverrides.lua')
       const entries = parseModOverridesEntries(fs.existsSync(master) ? master : path.join(clusterPath, 'Caves', 'modoverrides.lua')).filter(entry => !isWorldSeedModId(entry.workshopId))
-      const metaFile = path.join(clusterPath, '.gsh-mod-meta.json')
+      const metaFile = path.join(clusterPath, '.bsp-mod-meta.json')
       const dependencies = fs.existsSync(metaFile) ? JSON.parse(fs.readFileSync(metaFile, 'utf8')) as Record<string, string[]> : {}
       const mods: MigrationMod[] = entries.map((entry, index) => {
         const dir = sources.get(entry.workshopId)

@@ -398,7 +398,7 @@ function goConsole() {
             复制命令
           </NButton>
           <p class="text-muted-foreground">
-            若你用的不是 /swapfile-gsh，把命令里的路径换成 swapon --show 里显示的名字。
+            若你用的不是 /swapfile-bsp，把命令里的路径换成 swapon --show 里显示的名字。
           </p>
         </div>
         <p class="font-medium">

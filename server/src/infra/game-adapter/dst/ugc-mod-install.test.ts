@@ -19,7 +19,7 @@ import {
 const tempDirs: string[] = []
 
 function createInstallPath() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-ugc-mod-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-ugc-mod-'))
   tempDirs.push(dir)
   return dir
 }
@@ -257,7 +257,7 @@ describe('ensureDstUgcModLayout', () => {
   })
 
   it('reports a failure when the install path is missing', async () => {
-    const outcomes = await ensureDstUgcModLayout('/nonexistent/gsh-install-path', ['999'])
+    const outcomes = await ensureDstUgcModLayout('/nonexistent/bsp-install-path', ['999'])
     assert.equal(outcomes[0].status, 'failed')
     assert.match(outcomes[0].error ?? '', /安装目录不存在/)
   })

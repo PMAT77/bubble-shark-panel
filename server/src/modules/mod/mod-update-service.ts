@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyInstance } from 'fastify'
 import type {
   ModUpdateCheckResult,
@@ -345,7 +346,7 @@ export async function checkInstanceModUpdates(input: ModUpdateCheckInput): Promi
 
 /** 后台定时检查：与游戏服务端更新检查同节奏，让列表里的版本徽标平时就是新鲜的 */
 export function scheduleModUpdateChecks(app: FastifyInstance) {
-  if (process.env.GSH_UNIT_TEST === '1') {
+  if (readBrandEnv('BSP_UNIT_TEST') === '1') {
     return
   }
   const run = async () => {

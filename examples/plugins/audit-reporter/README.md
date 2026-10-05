@@ -6,9 +6,9 @@
 
 ```bash
 # 1. 复制到面板数据目录下的 plugins/
-#    Native：      /var/lib/game-server-hub/plugins/
+#    Native：      /var/lib/bubblesharkpanel/plugins/
 #    Docker：      docker cp ./audit-reporter <面板容器>:/app/data/plugins/
-cp -r examples/plugins/audit-reporter /var/lib/game-server-hub/plugins/
+cp -r examples/plugins/audit-reporter /var/lib/bubblesharkpanel/plugins/
 
 # 2. 在左侧菜单打开「插件」，点「刷新列表」，然后启用它
 ```
@@ -24,14 +24,14 @@ cp -r examples/plugins/audit-reporter /var/lib/game-server-hub/plugins/
 | 约定 | 位置 |
 | --- | --- |
 | 清单字段与能力声明 | `plugin.json`：`id`、`version`、`apiVersion`、`kind`、`entry`、`capabilities` |
-| 从环境变量取身份与地址 | `plugin.mjs` 顶部：`GSH_PLUGIN_ID`、`GSH_CAPABILITY_URL`、`GSH_PLUGIN_TOKEN`、`GSH_PLUGIN_API_VERSION` |
-| 调用宿主能力 | `callCapability()`：`POST /capabilities/<能力>`，请求头 `x-gsh-plugin-token`，body 带 `pluginId` |
+| 从环境变量取身份与地址 | `plugin.mjs` 顶部：`BSP_PLUGIN_ID`、`BSP_CAPABILITY_URL`、`BSP_PLUGIN_TOKEN`、`BSP_PLUGIN_API_VERSION` |
+| 调用宿主能力 | `callCapability()`：`POST /capabilities/<能力>`，请求头 `x-bsp-plugin-token`，body 带 `pluginId` |
 | 退出语义 | 处理完 `process.exit(0)` → 宿主记为「已正常退出」且不重启；常驻插件则监听 `SIGTERM` 后退出 |
 | 输出去哪 | 插件目录下的 `plugin.log`（宿主流转写入，不混进面板日志） |
 
 ## 几个容易踩的点
 
-1. **不要硬编码能力服务地址**：端口每次面板启动都不同，只能从 `GSH_CAPABILITY_URL` 读。
+1. **不要硬编码能力服务地址**：端口每次面板启动都不同，只能从 `BSP_CAPABILITY_URL` 读。
 2. **没有令牌就别想调通**：令牌是宿主注入的一次性凭证，插件不能自己"申请"，也不该试图写进配置文件。
 3. **越权调用会被记账**：声明了 `console:read` 才能读日志；没声明就拿 403，而且这次尝试会出现在「插件调用记录」里。这是有意的——插件行为需要对管理员可见。
 4. **想让插件能启停实例**：在清单里加 `instances:lifecycle`。这类危险能力在面板启用时需要管理员确认，每次调用都会记审计。

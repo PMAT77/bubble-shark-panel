@@ -8,7 +8,7 @@ const version = String(packageJson.version)
 const tag = `v${version}`
 
 // v0.2.0 起面板/DST/SteamCMD 合并为同一统一镜像；dst/steamcmd 引用默认与面板一致。
-const unifiedImage = `ghcr.io/pmat77/game-server-hub:${tag}`
+const unifiedImage = `ghcr.io/pmat77/bubblesharkpanel:${tag}`
 
 const requiredReferences = new Map([
   ['package.json', [`"version": "${version}"`]],
@@ -47,7 +47,7 @@ for (const [relativePath, expectedValues] of requiredReferences) {
 // （v0.3.9、v0.3.10 都踩过）。这里提前到 release:verify 阶段拦住，并直接给出新值。
 // 子串包含只能证明「出现过一次正确值」：同一文件里残留的旧镜像 tag 照样能过闸。
 // 这里把所有镜像引用逐个取出来比对，任何一处不是当前版本都算失败。
-const imageTagPattern = /ghcr\.io\/pmat77\/game-server-hub:(v\d+\.\d+\.\d+)/g
+const imageTagPattern = /ghcr\.io\/pmat77\/bubblesharkpanel:(v\d+\.\d+\.\d+)/g
 const imageTagScanTargets = [
   ...new Set([
     ...requiredReferences.keys(),

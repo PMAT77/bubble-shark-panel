@@ -121,13 +121,13 @@ describe('buildDespawnCommand', () => {
 
 describe('buildConsoleProbeCommand', () => {
   it('prints a marker the caller can look for', () => {
-    assert.match(buildConsoleProbeCommand('ab12cd34'), /print\("GSH_PING:ab12cd34"\)/)
+    assert.match(buildConsoleProbeCommand('ab12cd34'), /print\("BSP_PING:ab12cd34"\)/)
   })
 
   it('also reports the dedicated server [Host] account', () => {
     // 房间主人与玩家共用 userid 时，踢他会踢到假连接、封他会把服主自己写进黑名单
     assert.match(buildConsoleProbeCommand('ab12cd34'), /c\.performance~=nil/)
-    assert.match(buildConsoleProbeCommand('ab12cd34'), /GSH_HOST:ab12cd34:/)
+    assert.match(buildConsoleProbeCommand('ab12cd34'), /BSP_HOST:ab12cd34:/)
   })
 
   it('accepts a token produced by createConsoleToken', () => {
@@ -190,7 +190,7 @@ describe('isRoomOwner', () => {
 describe('buildClientTableCommand', () => {
   it('dumps every connection together with a placeholder flag', () => {
     const command = buildClientTableCommand('ab12cd34')
-    assert.match(command, /GSH_CLIENT:ab12cd34:/)
+    assert.match(command, /BSP_CLIENT:ab12cd34:/)
     assert.match(command, /c\.performance~=nil/)
   })
 

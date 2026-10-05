@@ -21,21 +21,21 @@ describe('shouldAllowInstallDespiteUpToDate', () => {
     assert.equal(shouldAllowInstallDespiteUpToDate({
       status: 'stopped',
       gameCode: '343050',
-    }, '/var/lib/game-server-hub/instances/x', true), true)
+    }, '/var/lib/bubblesharkpanel/instances/x', true), true)
   })
 
   it('allows error status without force', () => {
     assert.equal(shouldAllowInstallDespiteUpToDate({
       status: 'error',
       gameCode: '343050',
-    }, '/var/lib/game-server-hub/instances/x'), true)
+    }, '/var/lib/bubblesharkpanel/instances/x'), true)
   })
 
   it('allows stopped when game files missing on disk', () => {
     assert.equal(shouldAllowInstallDespiteUpToDate({
       status: 'stopped',
       gameCode: '343050',
-    }, '/nonexistent/path/for-gsh-test'), true)
+    }, '/nonexistent/path/for-bsp-test'), true)
   })
 })
 

@@ -19,8 +19,8 @@ import { fileURLToPath } from 'node:url'
 import Fastify from 'fastify'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-map-smoke-'))
-const dbPath = path.join(workDir, 'game-server-hub.sqlite')
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-map-smoke-'))
+const dbPath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const migrationsFolder = path.join(repoRoot, 'server', 'drizzle')
 const instanceId = `smoke-${randomUUID()}`
 const installPath = path.join(workDir, 'instances', instanceId)

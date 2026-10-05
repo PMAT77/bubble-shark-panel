@@ -178,7 +178,7 @@ async function case4DbDrift(token: string, dockerStatus: string) {
   }
 
   const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-  const dbPath = path.resolve(serverRoot, 'data/game-server-hub.sqlite')
+  const dbPath = path.resolve(serverRoot, 'data/bubblesharkpanel.sqlite')
   const db = new DatabaseSync(dbPath)
   db.exec(`UPDATE game_instances SET status = 'stopped', container_id = NULL WHERE id = '${instanceId}'`)
 
@@ -288,7 +288,7 @@ async function case8MonitorPollingCodeReview() {
   )
   const fs = await import('node:fs')
   const content = fs.readFileSync(monitorPath, 'utf8')
-  const ok = content.includes('gsh-monitor-poll-settings')
+  const ok = content.includes('bsp-monitor-poll-settings')
     && content.includes('DEFAULT_SYSTEM_POLL_MS')
     && content.includes('localStorage.setItem')
     && content.includes('重试')

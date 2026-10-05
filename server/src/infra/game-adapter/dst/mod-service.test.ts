@@ -6,12 +6,12 @@ import { afterEach, describe, it } from 'node:test'
 import { readModDependencies, writeInstanceModFiles, writeModDependencyMap } from './mod-service'
 import { resolveDstSteamWorkshopModDir } from './constants'
 import { writeWorldSeed } from './panel-config-meta'
-import { GSH_WORLD_SEED_MOD_ID, resolveWorldSeedModDir, toWorldSeedModName } from './world-seed'
+import { BSP_WORLD_SEED_MOD_ID, resolveWorldSeedModDir, toWorldSeedModName } from './world-seed'
 
 const tempDirs: string[] = []
 
 function createInstallPath() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-service-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-service-'))
   tempDirs.push(dir)
   return dir
 }
@@ -74,7 +74,7 @@ describe('mod-service', () => {
     assert.equal(fs.existsSync(resolveWorldSeedModDir(installPath, 'Caves')), false)
     // 内置 Mod 的文件由面板自己落位，不能进 SteamCMD 的拉取清单（工坊上没有这个 ID）
     const setupContent = fs.readFileSync(path.join(installPath, 'mods', 'dedicated_server_mods_setup.lua'), 'utf8')
-    assert.equal(setupContent.includes(GSH_WORLD_SEED_MOD_ID), false)
+    assert.equal(setupContent.includes(BSP_WORLD_SEED_MOD_ID), false)
   })
 
   it('keeps modoverrides free of the built-in mod when no seed is set', () => {
@@ -82,7 +82,7 @@ describe('mod-service', () => {
     writeInstanceModFiles(installPath, [{ workshopId: '111', enabled: true, loadOrder: 1 }])
 
     const masterOverrides = fs.readFileSync(path.join(resolveClusterRoot(installPath), 'Master', 'modoverrides.lua'), 'utf8')
-    assert.equal(masterOverrides.includes(GSH_WORLD_SEED_MOD_ID), false)
+    assert.equal(masterOverrides.includes(BSP_WORLD_SEED_MOD_ID), false)
     assert.equal(fs.existsSync(resolveWorldSeedModDir(installPath, 'Master')), false)
   })
 

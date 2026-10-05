@@ -11,19 +11,19 @@
 
 ## 用法
 
-**安装脚本自动档位**（默认 `GSH_PANEL_ENV_PRESET=auto`）：
+**安装脚本自动档位**（默认 `BSP_PANEL_ENV_PRESET=auto`）：
 
 ```bash
 sudo bash ./scripts/install.linux.sh
-# 显式指定：sudo GSH_PANEL_ENV_PRESET=small bash ./scripts/install.linux.sh
+# 显式指定：sudo BSP_PANEL_ENV_PRESET=small bash ./scripts/install.linux.sh
 ```
 
 **已安装后手动合并**（保留现有 `panel.env`，追加预设行）：
 
 ```bash
-sudo bash -c 'cat /opt/game-server-hub/config/panel.env.presets/small.env >> /opt/game-server-hub/panel.env'
+sudo bash -c 'cat /opt/bubblesharkpanel/config/panel.env.presets/small.env >> /opt/bubblesharkpanel/panel.env'
 # 安装脚本会将预设同步到 PANEL_INSTALL_DIR/config/panel.env.presets/
-cd /opt/game-server-hub
+cd /opt/bubblesharkpanel
 sudo docker compose --env-file panel.env -f docker-compose.yml -f docker-compose.bind.yml up -d
 ```
 

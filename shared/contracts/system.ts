@@ -40,7 +40,7 @@ export const panelSettingsSaveResponseSchema = successResultSchema.extend({
 export type PanelSettingsSaveResponse = z.infer<typeof panelSettingsSaveResponseSchema>
 
 export const panelSettingsResponseSchema = panelSettingsPayloadSchema.extend({
-  /** 面板实际监听的端口（服务端按 GSH_PANEL_PUBLISHED_PORT / X-Forwarded-* / Host 头判定） */
+  /** 面板实际监听的端口（服务端按 BSP_PANEL_PUBLISHED_PORT / X-Forwarded-* / Host 头判定） */
   apiPort: portSchema,
   /**
    * 是否为生产部署。开发环境下前端（Vite）与后端各占一个端口，「面板端口」没有单一含义，

@@ -1,4 +1,4 @@
-import process from 'node:process'
+import { readBrandEnv } from '../../../../shared/brand-env'
 import fs from 'node:fs'
 import { resolveDockerStatus } from '../docker'
 import { resolveRuntimeStatus } from '../runtime'
@@ -61,19 +61,19 @@ function buildSuggestions(input: {
   const suggestions: string[] = []
   if (!input.runtimeOk) {
     suggestions.push(input.runtimeMode === 'native'
-      ? 'systemd 用户服务管理器不可用：请确认 gsh 用户已启用 linger 且 user bus 正常。'
+      ? 'systemd 用户服务管理器不可用：请确认 bsp 用户已启用 linger 且 user bus 正常。'
       : 'Docker 不可用：请确认 docker.sock 已挂载且 Docker 服务已启动。')
   }
   if (!input.cdnOk) {
     if (!input.config.downloadRegion) {
-      suggestions.push('在 panel.env 设置 GSH_STEAMCMD_DOWNLOAD_REGION=cn（或 shanghai/beijing）强制国内 CDN 节点。')
+      suggestions.push('在 panel.env 设置 BSP_STEAMCMD_DOWNLOAD_REGION=cn（或 shanghai/beijing）强制国内 CDN 节点。')
     }
     if (!input.config.httpsProxy && !input.config.httpProxy) {
-      suggestions.push('若区域强制仍失败，可配置 GSH_STEAMCMD_HTTPS_PROXY 使用 HTTP/SOCKS 代理。')
+      suggestions.push('若区域强制仍失败，可配置 BSP_STEAMCMD_HTTPS_PROXY 使用 HTTP/SOCKS 代理。')
     }
     suggestions.push('检查宿主机 DNS（建议 223.5.5.5 / 114.114.114.114）与系统时间同步（chrony）。')
     if (input.config.networkMode !== 'host') {
-      suggestions.push('持续超时时可尝试 GSH_STEAMCMD_NETWORK_MODE=host 后重启面板。')
+      suggestions.push('持续超时时可尝试 BSP_STEAMCMD_NETWORK_MODE=host 后重启面板。')
     }
   }
   if (input.config.downloadRegion && input.cdnOk) {
@@ -132,7 +132,7 @@ export async function runSteamcmdDiagnostics(): Promise<SteamcmdDiagnosticsResul
       ok: Boolean(steamcmdConfig.downloadRegion),
       message: steamcmdConfig.downloadRegion
         ? `已配置下载区域：${steamcmdConfig.downloadRegion}`
-        : '未配置 GSH_STEAMCMD_DOWNLOAD_REGION（国内服务器建议设为 cn）',
+        : '未配置 BSP_STEAMCMD_DOWNLOAD_REGION（国内服务器建议设为 cn）',
     },
     {
       id: 'network_mode',
@@ -167,5 +167,5 @@ export async function runSteamcmdDiagnostics(): Promise<SteamcmdDiagnosticsResul
 
 /** 供测试：是否跳过外网探测 */
 export function isSteamcmdDiagnosticsOfflineMode(): boolean {
-  return process.env.GSH_STEAMCMD_DIAGNOSTICS_SKIP_NETWORK?.trim() === '1'
+  return readBrandEnv('BSP_STEAMCMD_DIAGNOSTICS_SKIP_NETWORK')?.trim() === '1'
 }

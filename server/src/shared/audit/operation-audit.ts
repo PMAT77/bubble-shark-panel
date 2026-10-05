@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -47,7 +48,7 @@ export interface OperationAuditRecord {
 }
 
 export function resolveOperationAuditRoot(): string {
-  const configured = process.env.GSH_OPERATION_AUDIT_ROOT?.trim()
+  const configured = readBrandEnv('BSP_OPERATION_AUDIT_ROOT')?.trim()
   if (configured) {
     return path.resolve(configured)
   }

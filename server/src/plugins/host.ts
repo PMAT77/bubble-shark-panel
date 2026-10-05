@@ -127,9 +127,9 @@ async function stopPluginProcess(child: ChildProcess | null): Promise<void> {
  * 启动插件进程。
  *
  * 环境变量是插件与宿主之间唯一的启动约定：
- * - `GSH_PLUGIN_ID` / `GSH_PLUGIN_DIR`：我是谁、我在哪；
- * - `GSH_CAPABILITY_URL` / `GSH_PLUGIN_TOKEN`：能力服务的地址与一次性令牌；
- * - `GSH_PLUGIN_API_VERSION`：宿主实现的接口版本。
+ * - `BSP_PLUGIN_ID` / `BSP_PLUGIN_DIR`：我是谁、我在哪；
+ * - `BSP_CAPABILITY_URL` / `BSP_PLUGIN_TOKEN`：能力服务的地址与一次性令牌；
+ * - `BSP_PLUGIN_API_VERSION`：宿主实现的接口版本。
  * 令牌只通过环境变量传递，不出现在命令行参数里（进程列表对同机其它用户可见）。
  */
 function spawnPluginProcess(input: {
@@ -154,6 +154,11 @@ function spawnPluginProcess(input: {
       GSH_PLUGIN_API_VERSION: String(input.hostApiVersion),
       GSH_CAPABILITY_URL: input.capabilityUrl,
       GSH_PLUGIN_TOKEN: input.token,
+      BSP_PLUGIN_ID: input.manifest.id,
+      BSP_PLUGIN_DIR: input.pluginDir,
+      BSP_PLUGIN_API_VERSION: String(input.hostApiVersion),
+      BSP_CAPABILITY_URL: input.capabilityUrl,
+      BSP_PLUGIN_TOKEN: input.token,
     },
     /**
      * 插件的输出接到它自己目录下的日志文件：既不在面板日志里制造噪音，

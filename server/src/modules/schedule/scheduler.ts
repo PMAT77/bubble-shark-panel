@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyInstance } from 'fastify'
 import {
   listDueScheduleTasks,
@@ -17,7 +18,7 @@ let tickInFlight = false
 const inFlightTaskIds = new Set<string>()
 
 function isUnitTest(): boolean {
-  return process.env.GSH_UNIT_TEST === '1'
+  return readBrandEnv('BSP_UNIT_TEST') === '1'
 }
 
 /**

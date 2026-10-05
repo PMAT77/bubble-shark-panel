@@ -9,14 +9,14 @@ import {
 } from './steamcmd.ts'
 
 const ENV_KEYS = [
-  'GSH_STEAMCMD_DOWNLOAD_REGION',
-  'GSH_STEAMCMD_HTTP_PROXY',
-  'GSH_STEAMCMD_HTTPS_PROXY',
-  'GSH_STEAMCMD_NO_PROXY',
-  'GSH_STEAMCMD_NETWORK_MODE',
-  'GSH_STEAMCMD_INSTALL_MAX_ATTEMPTS',
-  'GSH_STEAMCMD_INSTALL_RETRY_DELAYS_MS',
-  'GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS',
+  'BSP_STEAMCMD_DOWNLOAD_REGION',
+  'BSP_STEAMCMD_HTTP_PROXY',
+  'BSP_STEAMCMD_HTTPS_PROXY',
+  'BSP_STEAMCMD_NO_PROXY',
+  'BSP_STEAMCMD_NETWORK_MODE',
+  'BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS',
+  'BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS',
+  'BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS',
 ] as const
 
 function clearSteamcmdEnv() {
@@ -35,29 +35,29 @@ describe('loadSteamcmdRuntimeConfig', () => {
   })
 
   it('parses download region and network mode', () => {
-    process.env.GSH_STEAMCMD_DOWNLOAD_REGION = 'cn'
-    process.env.GSH_STEAMCMD_NETWORK_MODE = 'host'
+    process.env.BSP_STEAMCMD_DOWNLOAD_REGION = 'cn'
+    process.env.BSP_STEAMCMD_NETWORK_MODE = 'host'
     const config = loadSteamcmdRuntimeConfig()
     assert.equal(config.downloadRegion, 'cn')
     assert.equal(config.networkMode, 'host')
   })
 
   it('parses retry delays from comma-separated env', () => {
-    process.env.GSH_STEAMCMD_INSTALL_RETRY_DELAYS_MS = '5000,10000'
+    process.env.BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS = '5000,10000'
     assert.deepEqual(resolveSteamcmdInstallRetryDelaysMs(), [5000, 10000])
   })
 
   it('defaults app_update timeout to 60 minutes and parses overrides', () => {
     assert.equal(resolveSteamcmdAppUpdateTimeoutMs(), 60 * 60 * 1000)
-    process.env.GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS = '7200000'
+    process.env.BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS = '7200000'
     assert.equal(resolveSteamcmdAppUpdateTimeoutMs(), 7200000)
-    process.env.GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS = 'abc'
+    process.env.BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS = 'abc'
     assert.equal(resolveSteamcmdAppUpdateTimeoutMs(), 60 * 60 * 1000)
   })
 
   it('builds proxy env for SteamCMD container', () => {
-    process.env.GSH_STEAMCMD_HTTPS_PROXY = 'http://127.0.0.1:7890'
-    process.env.GSH_STEAMCMD_DOWNLOAD_REGION = 'cn'
+    process.env.BSP_STEAMCMD_HTTPS_PROXY = 'http://127.0.0.1:7890'
+    process.env.BSP_STEAMCMD_DOWNLOAD_REGION = 'cn'
     const env = buildSteamcmdContainerEnv()
     assert.ok(env.includes('https_proxy=http://127.0.0.1:7890'))
     assert.ok(env.includes('STEAMCMD_FORCE_DOWNLOAD_REGION=china'))

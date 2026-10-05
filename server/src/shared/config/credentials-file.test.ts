@@ -13,8 +13,8 @@ import {
 } from './credentials-file'
 
 describe('初始管理员凭据文件', () => {
-  const workDir = path.join(os.tmpdir(), `gsh-credentials-file-test-${randomUUID()}`)
-  const dbPath = path.join(workDir, 'game-server-hub.sqlite')
+  const workDir = path.join(os.tmpdir(), `bsp-credentials-file-test-${randomUUID()}`)
+  const dbPath = path.join(workDir, 'bubblesharkpanel.sqlite')
 
   after(() => {
     fs.rmSync(workDir, { recursive: true, force: true })
@@ -41,6 +41,6 @@ describe('初始管理员凭据文件', () => {
   })
 
   it('删除不存在的凭据文件不抛错', () => {
-    deleteAdminCredentialsFile(path.join(workDir, 'missing-dir', 'game-server-hub.sqlite'))
+    deleteAdminCredentialsFile(path.join(workDir, 'missing-dir', 'bubblesharkpanel.sqlite'))
   })
 })

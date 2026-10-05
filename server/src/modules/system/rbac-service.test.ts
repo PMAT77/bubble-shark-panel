@@ -31,7 +31,7 @@ import {
  * 而那种状态下他连"自己做了什么导致的"都看不出来。
  */
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-rbac-service-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-rbac-service-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 let adminUserId = ''

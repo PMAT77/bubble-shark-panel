@@ -10,12 +10,12 @@ import {
 describe('registry-manifest', () => {
   it('parses bearer challenge header', () => {
     const challenge = parseBearerChallenge(
-      'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:pmat77/game-server-hub:pull"',
+      'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:pmat77/bubblesharkpanel:pull"',
     )
     assert.deepEqual(challenge, {
       realm: 'https://ghcr.io/token',
       service: 'ghcr.io',
-      scope: 'repository:pmat77/game-server-hub:pull',
+      scope: 'repository:pmat77/bubblesharkpanel:pull',
     })
   })
 

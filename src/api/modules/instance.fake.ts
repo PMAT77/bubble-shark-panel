@@ -469,7 +469,7 @@ export default defineFakeRoute([
           host: running ? '127.0.0.1' : '<宿主机 IP>',
           port: target?.gamePort ?? 10999,
           udpPorts: [10999, 8766, 12346, 11000, 8768, 12348],
-          roomName: target?.name ?? 'Game Server Hub',
+          roomName: target?.name ?? 'BubbleSharkPanel',
           networkMode: 'offline',
           networkModeLabel: '离线',
           hasPassword: false,

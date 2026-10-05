@@ -4,7 +4,7 @@
 # 本文件只用标准 Dockerfile 语法，内置 frontend 即可解析。
 # 若将来引入 `RUN --mount=` / heredoc 等特性，再按需加回并解决镜像源。
 #
-# Game Server Hub 统一镜像：面板（Node.js）+ DST 运行库 + SteamCMD。
+# BubbleSharkPanel 统一镜像：面板（Node.js）+ DST 运行库 + SteamCMD。
 #
 # 镜像保持「中性」：不设 ENTRYPOINT / HEALTHCHECK / USER ——
 # - 面板入口由 docker-compose.yml 的 command 提供（与镜像 CMD 一致）；
@@ -51,19 +51,19 @@ COPY . .
 # 控制台 SSE 的地址构造会抛异常、实时日志只剩轮询兜底。
 ARG VITE_APP_API_BASEURL=/
 ENV VITE_APP_API_BASEURL=${VITE_APP_API_BASEURL}
-RUN pnpm run build && pnpm run build:server
+RUN cp .env.production.example .env.production && pnpm run build && pnpm run build:server
 
 # 运行时基础：Debian 12 + DST 32 位运行库 + SteamCMD（构建期 SHA256 强校验与自检）。
 FROM base AS runtime
-ARG GSH_RELEASE_VERSION=dev
-ARG GSH_BUILD_SHA=unknown
+ARG BSP_RELEASE_VERSION=dev
+ARG BSP_BUILD_SHA=unknown
 ARG STEAMCMD_ARCHIVE_URL=https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
 ARG STEAMCMD_ARCHIVE_SHA256=
-LABEL org.opencontainers.image.title="Game Server Hub unified runtime"
-LABEL org.opencontainers.image.description="Game Server Hub panel, DST runtime libraries and SteamCMD in one image"
-LABEL org.opencontainers.image.source="https://github.com/PMAT77/game-serve-hub"
-LABEL org.opencontainers.image.version="${GSH_RELEASE_VERSION}"
-LABEL org.opencontainers.image.revision="${GSH_BUILD_SHA}"
+LABEL org.opencontainers.image.title="BubbleSharkPanel unified runtime"
+LABEL org.opencontainers.image.description="BubbleSharkPanel panel, DST runtime libraries and SteamCMD in one image"
+LABEL org.opencontainers.image.source="https://github.com/PMAT77/bubble-shark-panel"
+LABEL org.opencontainers.image.version="${BSP_RELEASE_VERSION}"
+LABEL org.opencontainers.image.revision="${BSP_BUILD_SHA}"
 
 RUN dpkg --add-architecture i386 \
   && apt-get update \
@@ -142,11 +142,11 @@ RUN set -eux; \
 ENV GAME_ROOT=/game
 
 FROM runtime AS production
-ARG GSH_RELEASE_VERSION=dev
-ARG GSH_BUILD_SHA=unknown
+ARG BSP_RELEASE_VERSION=dev
+ARG BSP_BUILD_SHA=unknown
 ENV NODE_ENV=production
-ENV GSH_RELEASE_VERSION=${GSH_RELEASE_VERSION}
-ENV GSH_BUILD_SHA=${GSH_BUILD_SHA}
+ENV BSP_RELEASE_VERSION=${BSP_RELEASE_VERSION}
+ENV BSP_BUILD_SHA=${BSP_BUILD_SHA}
 WORKDIR /app
 # 服务端已 esbuild 全量自包含打包（scripts/build-server.mjs：packages='bundle'，与
 # build-native-release.mjs 的 native release 同款配置，已在生产验证），运行时零
@@ -159,7 +159,7 @@ COPY server/drizzle ./server/drizzle
 EXPOSE 8888
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8888
-ENV DB_PATH=/app/data/game-server-hub.sqlite
+ENV DB_PATH=/app/data/bubblesharkpanel.sqlite
 ENV SERVER_LOG_DIR=/app/logs
 # 面板入口即镜像默认命令；DST/SteamCMD 子容器会以面板显式 Cmd 覆盖。
 CMD ["node", "dist-server/main.js"]

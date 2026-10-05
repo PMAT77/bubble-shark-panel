@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../../shared/brand-env'
 import os from 'node:os'
 
 export type ConnectHostSource =
@@ -24,7 +25,7 @@ const IPV4_PATTERN = /^(?:\d{1,3}\.){3}\d{1,3}$/
 let cachedPublicIp: { ip: string, source: 'cloud_metadata' | 'ip_echo', expiresAt: number } | null = null
 
 function isAutoPublicIpProbeDisabled(): boolean {
-  const raw = process.env.GSH_DST_AUTO_PUBLIC_IP?.trim().toLowerCase()
+  const raw = readBrandEnv('BSP_DST_AUTO_PUBLIC_IP')?.trim().toLowerCase()
   return raw === '0' || raw === 'false' || raw === 'off' || raw === 'no'
 }
 
@@ -229,7 +230,7 @@ export function pickConnectHostFromInterfacePublicIps(publicIps: string[]): Reso
  * 解析玩家用于 c_connect 的公网/对外宿主机地址：云环境优先公网 IP（元数据 / 出站探测），其次网卡公网；不回落局域网。
  */
 export async function resolveDstConnectHost(): Promise<ResolvedConnectHost> {
-  const fromEnv = process.env.GSH_DST_CONNECT_HOST?.trim()
+  const fromEnv = readBrandEnv('BSP_DST_CONNECT_HOST')?.trim()
   if (fromEnv) {
     return { host: fromEnv, source: 'env', isPlaceholder: false }
   }

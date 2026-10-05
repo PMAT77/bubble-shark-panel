@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyInstance } from 'fastify'
 import { LOCAL_NODE_ID } from '../../shared/dst/local-dst-instance'
 import { getGameInstanceById, listGameInstances, updateGameInstanceRuntime } from '../../shared/db/index'
@@ -14,7 +15,7 @@ let watchStarted = false
 let watchInFlight = false
 
 function isUnitTest(): boolean {
-  return process.env.GSH_UNIT_TEST === '1'
+  return readBrandEnv('BSP_UNIT_TEST') === '1'
 }
 
 /**

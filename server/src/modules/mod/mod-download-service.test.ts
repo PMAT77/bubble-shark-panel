@@ -69,7 +69,7 @@ function createMockMod(input: Partial<DbInstanceMod> & Pick<DbInstanceMod, 'inst
 }
 
 function createInstallPath() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-download-service-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-download-service-'))
   tempDirs.push(dir)
   return dir
 }
@@ -602,7 +602,7 @@ describe('mod-download-queue', () => {
   }
 
   afterEach(() => {
-    delete process.env.GSH_MOD_DOWNLOAD_COALESCE_LIMIT
+    delete process.env.BSP_MOD_DOWNLOAD_COALESCE_LIMIT
     resetModDownloadRetryDelaysForTest()
     resetModDownloadQueueForTest()
   })
@@ -753,7 +753,7 @@ describe('mod-download-queue', () => {
     installDbHooks()
     const installPath = createInstallPath()
     const instanceId = 'inst-continue'
-    process.env.GSH_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
+    process.env.BSP_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
     listedMods = createPendingMods(instanceId, ['3001', '3002', '3003'])
     setModDownloadRetryDelaysForTest([5, 10, 20])
     let calls = 0
@@ -780,7 +780,7 @@ describe('mod-download-queue', () => {
     installDbHooks()
     const installPath = createInstallPath()
     const instanceId = 'inst-backoff'
-    process.env.GSH_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
+    process.env.BSP_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
     listedMods = createPendingMods(instanceId, ['4001'])
     setModDownloadRetryDelaysForTest([5, 10, 20])
     let calls = 0
@@ -807,7 +807,7 @@ describe('mod-download-queue', () => {
     installDbHooks()
     const installPath = createInstallPath()
     const instanceId = 'inst-backoff-once'
-    process.env.GSH_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
+    process.env.BSP_MOD_DOWNLOAD_COALESCE_LIMIT = '1'
     listedMods = createPendingMods(instanceId, ['4501'])
     setModDownloadRetryDelaysForTest([50, 60, 70])
     let calls = 0

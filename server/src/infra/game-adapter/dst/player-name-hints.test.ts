@@ -13,7 +13,7 @@ import {
 
 /** 面板在线查询注入的标记行（真实格式，见实例控制台日志） */
 function panelItemLine(kuId: string, name: string, token = '46b76c14'): string {
-  return `2026-09-15T12:16:02.325Z [master] [01:27:28]: GSH_PLAYER_LIST_ITEM:${token}:${kuId}\t${name}\t`
+  return `2026-09-15T12:16:02.325Z [master] [01:27:28]: BSP_PLAYER_LIST_ITEM:${token}:${kuId}\t${name}\t`
 }
 
 describe('parsePlayerNameHints', () => {
@@ -110,7 +110,7 @@ describe('mergePlayerNameHints', () => {
 
 describe('collectPlayerNameHintsFromGameLogs', () => {
   it('reads both shard logs and merges the results', () => {
-    const installPath = mkdtempSync(path.join(os.tmpdir(), 'gsh-name-hints-'))
+    const installPath = mkdtempSync(path.join(os.tmpdir(), 'bsp-name-hints-'))
     try {
       const masterLog = resolveShardServerLogPath(installPath, 'master')
       const cavesLog = resolveShardServerLogPath(installPath, 'caves')
@@ -131,7 +131,7 @@ describe('collectPlayerNameHintsFromGameLogs', () => {
   })
 
   it('returns an empty list when no log exists yet', () => {
-    const installPath = mkdtempSync(path.join(os.tmpdir(), 'gsh-name-hints-empty-'))
+    const installPath = mkdtempSync(path.join(os.tmpdir(), 'bsp-name-hints-empty-'))
     try {
       assert.deepEqual(collectPlayerNameHintsFromGameLogs(installPath), [])
     }

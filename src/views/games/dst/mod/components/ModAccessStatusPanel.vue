@@ -72,13 +72,13 @@ function toggle(event: Event) {
           <p v-if="result">运行环境：{{ result.configuration.runtime }}；文件下载代理{{ result.configuration.steamcmdProxyConfigured ? '已配置' : '未配置' }}；市场与详情代理{{ result.configuration.httpProxyConfigured ? '已配置' : '未配置' }}。</p>
           <ol class="list-decimal space-y-2 pl-5">
             <li>在服务器上打开面板的 panel.env 配置文件。</li>
-            <li>文件下载需要代理时，设置 GSH_STEAMCMD_HTTP_PROXY / GSH_STEAMCMD_HTTPS_PROXY；市场、详情与版本查询需要代理时，设置 GSH_STEAM_HTTP_PROXY / GSH_STEAM_HTTPS_PROXY。填写实际可用的 HTTP 代理地址，例如 http://proxy.example:7890。</li>
+            <li>文件下载需要代理时，设置 BSP_STEAMCMD_HTTP_PROXY / BSP_STEAMCMD_HTTPS_PROXY；市场、详情与版本查询需要代理时，设置 BSP_STEAM_HTTP_PROXY / BSP_STEAM_HTTPS_PROXY。填写实际可用的 HTTP 代理地址，例如 http://proxy.example:7890。</li>
             <li>保存并重启面板，然后重新尝试对应操作。</li>
           </ol>
           <p>已配置代理或市场访问成功，不能证明文件下载正常。</p>
           <p v-if="result?.configuration.runtime === 'docker'">代理须从下载容器可达；面板的 host.docker.internal 映射不会自动传给下载容器。下载容器网络模式：{{ result.configuration.networkMode }}。</p>
           <p v-else>代理地址须从对应运行环境可达。</p>
-          <p>GSH_STEAM_WEBAPI_BASE_URL 可配置 Web API 地址。Relay 仅提供市场列表，不代理文件下载。</p>
+          <p>BSP_STEAM_WEBAPI_BASE_URL 可配置 Web API 地址。Relay 仅提供市场列表，不代理文件下载。</p>
         </div>
       </details>
     </div>

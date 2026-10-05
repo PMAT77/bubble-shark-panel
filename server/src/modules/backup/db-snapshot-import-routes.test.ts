@@ -21,14 +21,14 @@ import { registerBackupModule } from './index'
  * 所以这里钉住：只有真正能用面板数据库才允许入库。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-db-import-'))
-const dbFilePath = path.join(workDir, 'game-server-hub.sqlite')
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-db-import-'))
+const dbFilePath = path.join(workDir, 'bubblesharkpanel.sqlite')
 const backupsRoot = path.join(workDir, 'backups')
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 process.env.DB_PATH = dbFilePath
-process.env.GSH_BACKUPS_ROOT = backupsRoot
-process.env.GSH_SAVE_IMPORT_ROOT = path.join(workDir, 'uploads')
+process.env.BSP_BACKUPS_ROOT = backupsRoot
+process.env.BSP_SAVE_IMPORT_ROOT = path.join(workDir, 'uploads')
 
 interface ApiEnvelope<T> {
   status: 0 | 1

@@ -17,7 +17,7 @@ function buildStatus(overrides: StatusOverrides = {}): PanelUpdateStatus {
   return {
     runtimeMode: 'docker',
     image: {
-      image: 'ghcr.io/pmat77/game-server-hub:v0.2.2',
+      image: 'ghcr.io/pmat77/bubblesharkpanel:v0.2.2',
       tag: 'v0.2.2',
       releaseVersion: 'v0.2.2',
       localDigest: 'sha256:1111',
@@ -35,7 +35,7 @@ function buildStatus(overrides: StatusOverrides = {}): PanelUpdateStatus {
           name: 'v0.2.2',
           body: '本 Release 的统一镜像……',
           publishedAt: '2026-09-08T00:00:00Z',
-          htmlUrl: 'https://github.com/PMAT77/game-serve-hub/releases/tag/v0.2.2',
+          htmlUrl: 'https://github.com/PMAT77/bubble-shark-panel/releases/tag/v0.2.2',
         }
       : release,
     lastCheckedAt: '2026-09-10T03:19:14.000Z',
@@ -44,9 +44,9 @@ function buildStatus(overrides: StatusOverrides = {}): PanelUpdateStatus {
     applySupported: true,
     imageApplySupported: false,
     nativeUpdateSupported: false,
-    applyHint: '未配置 GSH_STACK_DIR，无法一键更新面板。',
+    applyHint: '未配置 BSP_STACK_DIR，无法一键更新面板。',
     updateKind: 'same-version-changed',
-    manualUpdateCommand: 'cd /opt/game-server-hub && docker compose --env-file panel.env pull',
+    manualUpdateCommand: 'cd /opt/bubblesharkpanel && docker compose --env-file panel.env pull',
     offlineImageCommand: null,
     checkError: null,
     updatePhase: 'idle',
@@ -69,7 +69,7 @@ describe('buildPanelUpdatePresentation', () => {
         name: 'v0.3.0',
         body: '',
         publishedAt: '2026-09-15T00:00:00Z',
-        htmlUrl: 'https://github.com/PMAT77/game-serve-hub/releases/tag/v0.3.0',
+        htmlUrl: 'https://github.com/PMAT77/bubble-shark-panel/releases/tag/v0.3.0',
       },
     }))
     assert.equal(view.versionLine, '当前版本：v0.2.2 · 有新版本 v0.3.0')
@@ -233,6 +233,6 @@ describe('buildPanelUpdatePresentation', () => {
 describe('manual update note', () => {
   it('states the conclusion without deployment jargon', () => {
     assert.match(MANUAL_UPDATE_NOTE, /无法在面板里更新/)
-    assert.doesNotMatch(MANUAL_UPDATE_NOTE, /digest|摘要|GSH_STACK_DIR|systemd|编排文件|compose|镜像|容器/)
+    assert.doesNotMatch(MANUAL_UPDATE_NOTE, /digest|摘要|BSP_STACK_DIR|systemd|编排文件|compose|镜像|容器/)
   })
 })

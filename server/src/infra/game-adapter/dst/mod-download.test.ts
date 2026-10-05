@@ -17,7 +17,7 @@ import {
 const tempDirs: string[] = []
 
 function createInstallPath() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-download-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-download-'))
   tempDirs.push(dir)
   return dir
 }

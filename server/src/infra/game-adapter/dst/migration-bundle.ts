@@ -100,7 +100,7 @@ export async function writeMigrationBundle(options: { clusterPath: string, archi
     fs.mkdirSync(meta, { recursive: true, mode: 0o700 })
     for (const [id, source] of inspected.sources) {
       const target = path.join(meta, 'mods', id)
-      await fs.promises.cp(source.directory, target, { recursive: true, preserveTimestamps: true, filter: file => path.basename(file) !== '.gsh-legacy-copy.json' })
+      await fs.promises.cp(source.directory, target, { recursive: true, preserveTimestamps: true, filter: file => path.basename(file) !== '.bsp-legacy-copy.json' })
       if ((await inspectContentTree(target)).sha256 !== source.tree.sha256 || (await inspectContentTree(source.directory)).sha256 !== source.tree.sha256) throw new Error(`导出期间 Mod ${id} 发生变化，请重试`)
     }
     const manifest = migrationManifestSchema.parse({ formatVersion: 1, game: 'dont-starve-together', clusterDirectory, includeMods: options.includeMods, mods: inspected.mods })

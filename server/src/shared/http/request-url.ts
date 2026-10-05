@@ -15,7 +15,7 @@ const SENSITIVE_QUERY_KEYS = new Set([
 /** Returns a request URL that is safe to include in application logs. */
 export function sanitizeRequestUrlForLog(requestUrl: string): string {
   try {
-    const url = new URL(requestUrl, 'http://game-server-hub.local')
+    const url = new URL(requestUrl, 'http://bubblesharkpanel.local')
     for (const [key] of url.searchParams) {
       if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase())) {
         url.searchParams.set(key, '[REDACTED]')

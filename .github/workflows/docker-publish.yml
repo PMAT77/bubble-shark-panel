@@ -92,7 +92,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          images=(game-server-hub)
+          images=(bubblesharkpanel game-server-hub)
           found=0
           for image in "${images[@]}"; do
             target="${IMAGE_PREFIX}/${image}:${GITHUB_REF_NAME}"
@@ -122,7 +122,7 @@ jobs:
           - name: unified
             context: .
             file: docker/unified/Dockerfile
-            image: game-server-hub
+            image: bubblesharkpanel
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -163,8 +163,8 @@ jobs:
           provenance: mode=max
           sbom: true
           build-args: |
-            GSH_RELEASE_VERSION=${{ github.ref_name }}
-            GSH_BUILD_SHA=${{ github.sha }}
+            BSP_RELEASE_VERSION=${{ github.ref_name }}
+            BSP_BUILD_SHA=${{ github.sha }}
             STEAMCMD_ARCHIVE_SHA256=${{ vars.STEAMCMD_ARCHIVE_SHA256 }}
 
       - name: Record candidate digest
@@ -193,7 +193,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          images=(game-server-hub)
+          images=(bubblesharkpanel)
           candidate_tag="candidate-${{ github.run_id }}-${{ github.run_attempt }}"
           tags=("${{ github.ref_name }}")
           remote_digest() {
@@ -201,16 +201,22 @@ jobs:
           }
 
           # 幂等：正式 tag 已存在说明本次 run 早前 attempt 已完成提升，直接成功（支持 Re-run）。
-          first_target="${IMAGE_PREFIX}/game-server-hub:${{ github.ref_name }}"
+          first_target="${IMAGE_PREFIX}/bubblesharkpanel:${{ github.ref_name }}"
           if promoted="$(remote_digest "${first_target}" 2>/dev/null)" && [[ -n "${promoted}" ]]; then
-            echo "Release tag already promoted: ${first_target}@${promoted}; nothing to do."
-            exit 0
+            legacy_target="${IMAGE_PREFIX}/game-server-hub:${{ github.ref_name }}"
+            legacy_digest="$(remote_digest "${legacy_target}" 2>/dev/null || true)"
+            if [[ "${legacy_digest}" == "${promoted}" ]]; then
+              echo "Release aliases already promoted with matching digests."
+              exit 0
+            fi
           fi
+
+          images=(bubblesharkpanel game-server-hub)
 
           # Finish every read-only check before creating any public tag.
           # GHCR manifest 传播存在秒级延迟（尤其带 provenance/SBOM 的 index），带重试缓冲。
           for image in "${images[@]}"; do
-            source="${IMAGE_PREFIX}/${image}:${candidate_tag}"
+            source="${IMAGE_PREFIX}/bubblesharkpanel:${candidate_tag}"
             digest=""
             for attempt in 1 2 3 4 5 6; do
               if digest="$(remote_digest "${source}" 2>/dev/null)" && [[ -n "${digest}" ]]; then
@@ -226,10 +232,15 @@ jobs:
           done
 
           for image in "${images[@]}"; do
-            source="${IMAGE_PREFIX}/${image}:${candidate_tag}"
+            source="${IMAGE_PREFIX}/bubblesharkpanel:${candidate_tag}"
             source_digest="$(remote_digest "${source}")"
             for tag in "${tags[@]}"; do
               target="${IMAGE_PREFIX}/${image}:${tag}"
+              existing_digest="$(remote_digest "${target}" 2>/dev/null || true)"
+              if [[ -n "${existing_digest}" && "${existing_digest}" != "${source_digest}" ]]; then
+                echo "Refusing to overwrite ${target}@${existing_digest}" >&2
+                exit 1
+              fi
               docker buildx imagetools create --prefer-index=false --tag "${target}" "${source}"
               target_digest="$(remote_digest "${target}")"
               if [[ "${target_digest}" != "${source_digest}" ]]; then
@@ -275,9 +286,12 @@ jobs:
           pnpm exec vite build
           pnpm run build:native -- --include-node
           version="$(node -p "require('./package.json').version")"
-          artifact="game-server-hub-native-v${version}-linux-x64"
+          artifact="bubblesharkpanel-native-v${version}-linux-x64"
           tar -C .artifacts/native -czf ".artifacts/native/${artifact}.tar.gz" "${artifact}"
           sha256sum ".artifacts/native/${artifact}.tar.gz" > ".artifacts/native/${artifact}.tar.gz.sha256"
+          legacy="game-server-hub-native-v${version}-linux-x64"
+          cp ".artifacts/native/${artifact}.tar.gz" ".artifacts/native/${legacy}.tar.gz"
+          sha256sum ".artifacts/native/${legacy}.tar.gz" > ".artifacts/native/${legacy}.tar.gz.sha256"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
@@ -294,7 +308,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          images=(game-server-hub)
+          images=(bubblesharkpanel game-server-hub)
           remote_digest() {
             docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -r '.digest // empty'
           }
@@ -317,8 +331,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          docker pull "${IMAGE_PREFIX}/bubblesharkpanel:${GITHUB_REF_NAME}"
           docker pull "${IMAGE_PREFIX}/game-server-hub:${GITHUB_REF_NAME}"
-          docker save "${IMAGE_PREFIX}/game-server-hub:${GITHUB_REF_NAME}" | gzip > "game-server-hub-${GITHUB_REF_NAME}-docker-image.tar.gz"
+          docker save "${IMAGE_PREFIX}/bubblesharkpanel:${GITHUB_REF_NAME}" "${IMAGE_PREFIX}/game-server-hub:${GITHUB_REF_NAME}" | gzip > "bubblesharkpanel-${GITHUB_REF_NAME}-docker-image.tar.gz"
+          sha256sum "bubblesharkpanel-${GITHUB_REF_NAME}-docker-image.tar.gz" > "bubblesharkpanel-${GITHUB_REF_NAME}-docker-image.tar.gz.sha256"
+          cp "bubblesharkpanel-${GITHUB_REF_NAME}-docker-image.tar.gz" "game-server-hub-${GITHUB_REF_NAME}-docker-image.tar.gz"
           sha256sum "game-server-hub-${GITHUB_REF_NAME}-docker-image.tar.gz" > "game-server-hub-${GITHUB_REF_NAME}-docker-image.tar.gz.sha256"
 
       - name: Package installer script
@@ -335,8 +352,10 @@ jobs:
             release-images.json
             .artifacts/native/*.tar.gz
             .artifacts/native/*.tar.gz.sha256
+            bubblesharkpanel-*-docker-image.tar.gz
             game-server-hub-*-docker-image.tar.gz
             game-server-hub-*-docker-image.tar.gz.sha256
+            bubblesharkpanel-*-docker-image.tar.gz.sha256
             install-*.sh
             install-*.sh.sha256
           body: |
@@ -363,7 +382,7 @@ jobs:
         run: |
           set -euo pipefail
           candidate_tag="candidate-${{ github.run_id }}-${{ github.run_attempt }}"
-          images=(game-server-hub)
+          images=(bubblesharkpanel)
           for image in "${images[@]}"; do
             version_ids="$(gh api --paginate \
               "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/${image}/versions?per_page=100" \

@@ -16,7 +16,7 @@ import {
 } from './schedule-repository'
 import { recoverMissedTasksOnBoot } from '../../modules/schedule/scheduler'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-schedule-repo-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-schedule-repo-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 const stubApp = {
@@ -33,7 +33,7 @@ async function seedInstance(): Promise<string> {
     name: `schedule-target-${randomUUID().slice(0, 6)}`,
     gameCode: 'dst',
     status: 'stopped',
-    installPath: path.join(os.tmpdir(), `gsh-schedule-target-${randomUUID().slice(0, 6)}`),
+    installPath: path.join(os.tmpdir(), `bsp-schedule-target-${randomUUID().slice(0, 6)}`),
   })
   return instance.id
 }

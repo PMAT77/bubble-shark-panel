@@ -134,7 +134,7 @@ function getTrustedProxies(): string[] {
 }
 
 function getClientIp(request: FastifyRequest): string {
-  // 仅当 socket 对端命中 GSH_TRUST_PROXY 时才采信 X-Forwarded-For，
+  // 仅当 socket 对端命中 BSP_TRUST_PROXY 时才采信 X-Forwarded-For，
   // 防止伪造请求头绕过基于 IP 的登录限流。
   return resolveClientIp(request, getTrustedProxies())
 }

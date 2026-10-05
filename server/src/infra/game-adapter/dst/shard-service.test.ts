@@ -19,7 +19,7 @@ import { readWorldSeeds } from './panel-config-meta'
 const tempDirs: string[] = []
 
 function makeTempInstall(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-shard-svc-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-shard-svc-'))
   tempDirs.push(dir)
   return dir
 }

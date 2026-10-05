@@ -1,3 +1,4 @@
+import { readBrandEnv } from './shared/brand-env'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -39,7 +40,7 @@ export default defineConfig(({ mode, command }) => {
       port: resolveDevPort(9527),
       strictPort: true,
       clearScreen: false,
-      ...(process.env.GSH_DEV_COMPOSE_QUIET === '1' ? { logLevel: 'warn' as const } : {}),
+      ...(readBrandEnv('BSP_DEV_COMPOSE_QUIET') === '1' ? { logLevel: 'warn' as const } : {}),
       // 根目录下的 pnpm 包缓存与内置 Node 发行版共 5 万+ 文件，不在 Vite 默认忽略列表内
       // （默认只忽略 .git / node_modules / test-results / 缓存与输出目录），
       // 会让文件监听器过载并导致 HMR 静默失效，这里显式排除。

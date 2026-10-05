@@ -7,28 +7,28 @@ import {
 
 describe('resolveSteamcmdContainerMemoryLimits', () => {
   it('defaults app-update to unlimited when env unset', () => {
-    const prev = process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB
-    delete process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB
-    delete process.env.GSH_STEAMCMD_CONTAINER_MEMORY_SWAP_MB
+    const prev = process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB
+    delete process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB
+    delete process.env.BSP_STEAMCMD_CONTAINER_MEMORY_SWAP_MB
     assert.equal(resolveSteamcmdContainerMemoryLimits('app-update'), undefined)
     if (prev !== undefined) {
-      process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB = prev
+      process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB = prev
     }
   })
 
   it('applies explicit app-update cap', () => {
-    process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB = '4096'
+    process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB = '4096'
     const limits = resolveSteamcmdContainerMemoryLimits('app-update')
-    delete process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB
+    delete process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB
     assert.ok(limits)
     assert.equal(limits!.Memory, 4096 * 1024 * 1024)
     assert.equal(limits!.MemorySwap, limits!.Memory)
   })
 
   it('returns undefined when memory limit set to 0', () => {
-    process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB = '0'
+    process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB = '0'
     assert.equal(resolveSteamcmdContainerMemoryLimits('app-update'), undefined)
-    delete process.env.GSH_STEAMCMD_CONTAINER_MEMORY_MB
+    delete process.env.BSP_STEAMCMD_CONTAINER_MEMORY_MB
   })
 })
 

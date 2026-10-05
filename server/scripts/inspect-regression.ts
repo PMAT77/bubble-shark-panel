@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const BASE = 'http://127.0.0.1:8888'
-const dbPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data/game-server-hub.sqlite')
+const dbPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data/bubblesharkpanel.sqlite')
 const db = new DatabaseSync(dbPath)
 
 async function main() {

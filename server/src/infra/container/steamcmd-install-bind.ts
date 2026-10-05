@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import path from 'node:path'
 import type Docker from 'dockerode'
 
@@ -53,14 +54,14 @@ export function shouldRejectDirectBindFallback(installPath: string, instancesRoo
     && isInstallPathUnderInstancesRoot(installPath, instancesRoot)
 }
 
-export const PANEL_VOLUME_BIND_RESOLUTION_ERROR = '无法解析 instances 卷挂载。请确认 panel 容器已设置 GSH_PANEL_CONTAINER_NAME，且 instances 目录为 Docker 卷挂载；dev:compose 与 dev:server 请勿同时运行。'
+export const PANEL_VOLUME_BIND_RESOLUTION_ERROR = '无法解析 instances 卷挂载。请确认 panel 容器已设置 BSP_PANEL_CONTAINER_NAME，且 instances 目录为 Docker 卷挂载；dev:compose 与 dev:server 请勿同时运行。'
 
 async function resolveInstancesRootMountBind(
   docker: Docker,
   instancesRoot: string,
 ): Promise<{ bind: string, mode: SteamcmdInstallBindMode } | null> {
   const containerRef = process.env.HOSTNAME?.trim()
-    || process.env.GSH_PANEL_CONTAINER_NAME?.trim()
+    || readBrandEnv('BSP_PANEL_CONTAINER_NAME')?.trim()
   if (!containerRef) {
     return null
   }

@@ -31,7 +31,7 @@
 
 ## 执行
 
-可向项目维护者通过 [GitHub Issue](https://github.com/PMAT77/game-serve-hub/issues/new)（标题注明 `[CoC]`）报告不当行为。所有投诉将被审查并调查，维护者将视情况作出回应。
+可向项目维护者通过 [GitHub Issue](https://github.com/PMAT77/bubble-shark-panel/issues/new)（标题注明 `[CoC]`）报告不当行为。所有投诉将被审查并调查，维护者将视情况作出回应。
 
 ## 来源
 

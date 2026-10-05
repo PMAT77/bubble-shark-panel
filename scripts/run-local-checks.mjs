@@ -16,7 +16,7 @@ const STEPS = {
   'write-entries': { label: '写入口权限', args: ['scripts/check-write-entry-permissions.mjs'] },
   'menu-pages': { label: '菜单页读权限', args: ['scripts/check-menu-page-permissions.mjs'] },
   docs: { label: '文档一致性', args: ['scripts/check-docs.mjs'] },
-  gsh: { label: 'gsh CLI 检查', args: ['scripts/check-gsh-cli.mjs'] },
+  bsp: { label: 'bsp CLI 检查', args: ['scripts/check-bsp-cli.mjs'] },
   presets: { label: 'panel.env 预设一致性', args: ['scripts/check-panel-env-presets.mjs'] },
   release: { label: '发布引用一致性', args: ['scripts/check-release-consistency.mjs'] },
   tests: { label: '全量单元测试', args: ['scripts/run-unit-tests.mjs'] },
@@ -26,7 +26,7 @@ const STEPS = {
   'server-tests': { label: '后端单元测试', args: ['scripts/run-server-tests.mjs'] },
 }
 
-const requested = process.argv.slice(2)
+const requested = process.argv.slice(2).map(name => name === 'gsh' ? 'bsp' : name)
 const names = [...new Set(requested.length > 0 ? requested : Object.keys(STEPS).filter(name => name !== 'server-tests'))]
 for (const name of names) {
   if (!Object.hasOwn(STEPS, name)) {

@@ -5,7 +5,7 @@ import { ContentTransaction, recoverContentTransaction } from '../../infra/backu
 import { resolveClusterPaths, resolveInstanceInstallPath } from '../../infra/game-adapter/dst/cluster-service'
 import { markContentRecoveryFailed } from './operation'
 import path from 'node:path'
-import { GSH_WORLD_SEED_MOD_ID, resolveWorldSeedModDir } from '../../infra/game-adapter/dst/world-seed'
+import { BSP_WORLD_SEED_MOD_ID, resolveWorldSeedModDir } from '../../infra/game-adapter/dst/world-seed'
 import { resolveDstLegacyModDir } from '../../infra/game-adapter/dst/ugc-mod-install'
 
 export interface ContentSnapshot { instanceId: string, mods: DbInstanceMod[], gamePort: number | null }
@@ -42,11 +42,11 @@ export function protectModConfiguration<T>(transaction: ContentTransaction<T>, i
   for (const target of [
     path.join(installPath, 'mods', 'dedicated_server_mods_setup.lua'),
     path.join(clusterRoot, 'dedicated_server_mods_setup.lua'),
-    path.join(clusterRoot, '.gsh-mod-meta.json'),
+    path.join(clusterRoot, '.bsp-mod-meta.json'),
     path.join(clusterRoot, 'Master', 'modoverrides.lua'),
     path.join(clusterRoot, 'Caves', 'modoverrides.lua'),
   ]) transaction.protect(target)
-  for (const target of [resolveWorldSeedModDir(installPath, 'Master'), resolveWorldSeedModDir(installPath, 'Caves'), resolveDstLegacyModDir(installPath, GSH_WORLD_SEED_MOD_ID)]) transaction.protect(target)
+  for (const target of [resolveWorldSeedModDir(installPath, 'Master'), resolveWorldSeedModDir(installPath, 'Caves'), resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)]) transaction.protect(target)
 }
 
 export function makeModRecord(instanceId: string, workshopId: string, values: Partial<DbInstanceMod> = {}): DbInstanceMod {

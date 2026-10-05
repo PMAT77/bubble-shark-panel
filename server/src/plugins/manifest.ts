@@ -48,7 +48,7 @@ function isSafeRelativeEntry(entry: string): boolean {
 /**
  * 校验商业插件签名。
  *
- * 公钥与授权许可共用同一套（`GSH_LICENSE_PUBLIC_KEY`）：插件与许可是同一个商业信任根，
+ * 公钥与授权许可共用同一套（`BSP_LICENSE_PUBLIC_KEY`）：插件与许可是同一个商业信任根，
  * 分成两套密钥只会让「换密钥」变成两次运维事故。
  */
 function verifyPluginSignature(
@@ -87,7 +87,7 @@ function verifyPluginSignature(
   if (publicKeys.length === 0) {
     return {
       ok: false,
-      message: '此构建未内置插件签名公钥（GSH_PLUGIN_PUBLIC_KEY 或 GSH_LICENSE_PUBLIC_KEY）：无法校验商业插件签名。',
+      message: '此构建未内置插件签名公钥（BSP_PLUGIN_PUBLIC_KEY 或 BSP_LICENSE_PUBLIC_KEY）：无法校验商业插件签名。',
     }
   }
 

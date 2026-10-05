@@ -55,7 +55,7 @@ export default {
       overwrite: input.overwrite ? '1' : '0',
     })
     return api.post(`app/instance/files/upload?${params.toString()}`, input.file, {
-      headers: { 'Content-Type': 'application/x-gsh-instance-file' },
+      headers: { 'Content-Type': 'application/x-bsp-instance-file' },
       timeout: 0,
       onUploadProgress: (event: { loaded: number, total?: number }) => {
         if (onProgress && event.total) {

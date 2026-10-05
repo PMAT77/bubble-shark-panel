@@ -31,7 +31,7 @@ export interface PanelPortSyncResult {
   manualCommand: string | null
 }
 
-export const DEFAULT_STACK_DIR = '/opt/game-server-hub'
+export const DEFAULT_STACK_DIR = '/opt/bubblesharkpanel'
 export const PANEL_ENV_FILENAME = 'panel.env'
 
 /** 在配置文件内容里替换或追加一个键；注释、其他键与顺序都保持原样，行尾统一为 LF */
@@ -79,7 +79,7 @@ export function buildPanelPortWriteScript(envKey: PanelPortEnvKey, port: number)
     'else',
     `  printf '%s\\n' '${envKey}=${port}' >> panel.env`,
     'fi',
-    `echo "[gsh] 已写入 ${envKey}=${port}（备份：$backup）"`,
+    `echo "[bsp] 已写入 ${envKey}=${port}（备份：$backup）"`,
   ].join('\n')
 }
 
@@ -95,7 +95,7 @@ export function buildPanelPortManualCommand(input: {
   const envFile = `${stackDir}/${PANEL_ENV_FILENAME}`
   const replacePort = `sudo sed -i 's|^${input.envKey}=.*|${input.envKey}=${input.port}|' ${envFile}`
   if (input.runtimeMode === 'native') {
-    return [replacePort, 'sudo gsh restart'].join('\n')
+    return [replacePort, 'sudo bsp restart'].join('\n')
   }
   const composeFiles = input.composeFiles?.length
     ? input.composeFiles
@@ -129,7 +129,7 @@ export function resolvePanelEnvFileWithKey(candidates: string[], key: PanelPortE
   return null
 }
 
-/** Native 部署的 panel.env 候选：安装目录默认 /opt/game-server-hub */
+/** Native 部署的 panel.env 候选：安装目录默认 /opt/bubblesharkpanel */
 export function buildPanelEnvCandidates(stackDir: string): string[] {
   const dir = stackDir.trim() || DEFAULT_STACK_DIR
   return [path.join(dir, PANEL_ENV_FILENAME)]

@@ -24,34 +24,34 @@ describe('normalizeMirrorRegistries', () => {
 
 describe('buildImageRef', () => {
   it('omits docker.io prefix', () => {
-    assert.equal(buildImageRef('docker.io', 'pmat77/game-server-hub', 'v1'), 'pmat77/game-server-hub:v1')
-    assert.equal(buildImageRef('ghcr.io', 'pmat77/game-server-hub', 'v1'), 'ghcr.io/pmat77/game-server-hub:v1')
+    assert.equal(buildImageRef('docker.io', 'pmat77/bubblesharkpanel', 'v1'), 'pmat77/bubblesharkpanel:v1')
+    assert.equal(buildImageRef('ghcr.io', 'pmat77/bubblesharkpanel', 'v1'), 'ghcr.io/pmat77/bubblesharkpanel:v1')
   })
 })
 
 describe('buildImageCandidates', () => {
   it('uses the configured image when mirrors are not configured', () => {
     assert.deepEqual(
-      buildImageCandidates('registry.example.com/ns/game-server-hub:stable', ''),
-      ['registry.example.com/ns/game-server-hub:stable'],
+      buildImageCandidates('registry.example.com/ns/bubblesharkpanel:stable', ''),
+      ['registry.example.com/ns/bubblesharkpanel:stable'],
     )
   })
 
   it('prioritizes configured mirrors before the configured fallback', () => {
     assert.deepEqual(
-      buildImageCandidates('ghcr.io/pmat77/game-server-hub:latest', 'docker.m.daocloud.io,hub-mirror.c.163.com'),
+      buildImageCandidates('ghcr.io/pmat77/bubblesharkpanel:latest', 'docker.m.daocloud.io,hub-mirror.c.163.com'),
       [
-        'docker.m.daocloud.io/pmat77/game-server-hub:latest',
-        'hub-mirror.c.163.com/pmat77/game-server-hub:latest',
-        'ghcr.io/pmat77/game-server-hub:latest',
+        'docker.m.daocloud.io/pmat77/bubblesharkpanel:latest',
+        'hub-mirror.c.163.com/pmat77/bubblesharkpanel:latest',
+        'ghcr.io/pmat77/bubblesharkpanel:latest',
       ],
     )
   })
 
   it('skips mirrors equal to the configured registry', () => {
     assert.deepEqual(
-      buildImageCandidates('ghcr.io/pmat77/game-server-hub:latest', 'ghcr.io'),
-      ['ghcr.io/pmat77/game-server-hub:latest'],
+      buildImageCandidates('ghcr.io/pmat77/bubblesharkpanel:latest', 'ghcr.io'),
+      ['ghcr.io/pmat77/bubblesharkpanel:latest'],
     )
   })
 
@@ -66,19 +66,19 @@ describe('buildImageCandidates', () => {
 describe('steamcmd pull ref helpers', () => {
   it('preserves the complete configured image reference', () => {
     assert.equal(
-      resolvePanelSteamcmdPullRef('registry.cn-hangzhou.aliyuncs.com/game-server-hub/steamcmd-base:stable'),
-      'registry.cn-hangzhou.aliyuncs.com/game-server-hub/steamcmd-base:stable',
+      resolvePanelSteamcmdPullRef('registry.cn-hangzhou.aliyuncs.com/bubblesharkpanel/steamcmd-base:stable'),
+      'registry.cn-hangzhou.aliyuncs.com/bubblesharkpanel/steamcmd-base:stable',
     )
     assert.equal(
-      resolvePanelSteamcmdPullRef('ghcr.io/pmat77/game-server-hub:latest'),
+      resolvePanelSteamcmdPullRef('ghcr.io/pmat77/bubblesharkpanel:latest'),
       `${OFFICIAL_UNIFIED_IMAGE_REPOSITORY}:latest`,
     )
     assert.equal(resolvePanelSteamcmdPullRef(''), `${OFFICIAL_UNIFIED_IMAGE_REPOSITORY}:latest`)
   })
 
   it('delegates candidates to the generic builder', () => {
-    const previous = process.env.GSH_STEAMCMD_IMAGE_MIRRORS
-    delete process.env.GSH_STEAMCMD_IMAGE_MIRRORS
+    const previous = process.env.BSP_STEAMCMD_IMAGE_MIRRORS
+    delete process.env.BSP_STEAMCMD_IMAGE_MIRRORS
     try {
       assert.deepEqual(
         buildSteamcmdImageCandidates('registry.example.com/ns/steamcmd-base:stable'),
@@ -87,10 +87,10 @@ describe('steamcmd pull ref helpers', () => {
     }
     finally {
       if (previous === undefined) {
-        delete process.env.GSH_STEAMCMD_IMAGE_MIRRORS
+        delete process.env.BSP_STEAMCMD_IMAGE_MIRRORS
       }
       else {
-        process.env.GSH_STEAMCMD_IMAGE_MIRRORS = previous
+        process.env.BSP_STEAMCMD_IMAGE_MIRRORS = previous
       }
     }
   })
@@ -128,7 +128,7 @@ describe('createPullProgressAggregator', () => {
 
   it('reports a partial total without throwing on malformed events', () => {
     const aggregator = createPullProgressAggregator()
-    aggregator.handle({ status: 'Pulling from pmat77/game-server-hub', id: 'latest' })
+    aggregator.handle({ status: 'Pulling from pmat77/bubblesharkpanel', id: 'latest' })
     aggregator.handle({ status: 'Downloading', id: 'a', progressDetail: { current: 2_048 } })
     aggregator.handle({ status: 'Digest: sha256:abc', id: 'b', progressDetail: { current: 'n/a', total: null } })
     aggregator.handle(null)

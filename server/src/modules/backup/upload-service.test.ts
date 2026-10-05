@@ -56,8 +56,8 @@ async function unpackAndProbe(zipPath: string): Promise<{ uploadId: string, extr
 }
 
 before(() => {
-  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-save-import-test-'))
-  process.env.GSH_SAVE_IMPORT_ROOT = path.join(workDir, 'uploads')
+  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-save-import-test-'))
+  process.env.BSP_SAVE_IMPORT_ROOT = path.join(workDir, 'uploads')
 })
 
 after(() => {

@@ -9,7 +9,7 @@ import { ensureWorldSeedModLayout, toWorldSeedModName } from './world-seed'
 
 const MOD_SETUP_FILE_NAME = 'dedicated_server_mods_setup.lua'
 const MOD_OVERRIDES_FILE_NAME = 'modoverrides.lua'
-const MOD_META_FILE_NAME = '.gsh-mod-meta.json'
+const MOD_META_FILE_NAME = '.bsp-mod-meta.json'
 
 export interface DstModEntry {
   workshopId: string
@@ -145,7 +145,7 @@ export function writeModDependencyMap(installPath: string, dependencyMap: DstMod
 }
 
 /**
- * 该 Mod 在本地可得的依赖：面板自己记录的（订阅时写入 `.gsh-mod-meta.json`）
+ * 该 Mod 在本地可得的依赖：面板自己记录的（订阅时写入 `.bsp-mod-meta.json`）
  * 加上内容里 `modinfo.lua` 声明的。
  *
  * 下载队列用它把启用项的必要依赖一起排进队列。两处都取不到就是空——内容缺失的 Mod

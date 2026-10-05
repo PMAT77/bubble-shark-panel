@@ -35,7 +35,7 @@ describe('resolvePanelVersionMismatch', () => {
   })
 
   it('never guesses when either side is unknown', () => {
-    // 开发构建、未设置 GSH_RELEASE_VERSION 的部署、/health 取不到：一律不提示
+    // 开发构建、未设置 BSP_RELEASE_VERSION 的部署、/health 取不到：一律不提示
     assert.equal(resolvePanelVersionMismatch('', 'v1.2.3'), null)
     assert.equal(resolvePanelVersionMismatch('1.2.3', null), null)
     assert.equal(resolvePanelVersionMismatch('1.2.3', ''), null)

@@ -1,3 +1,4 @@
+import { shardNameCandidates } from './naming'
 import { resolveDstContainerResourceLimits } from './dst-container-resources'
 import type { ContainerCreateOptions } from 'dockerode'
 import Docker from 'dockerode'
@@ -38,11 +39,11 @@ export class DockerContainerRuntime implements ContainerRuntime {
   async ensureShardNetwork(instanceId: string): Promise<string> {
     const networkName = buildInstanceShardNetworkName(instanceId)
     const existing = await this.docker.listNetworks({
-      filters: { name: [networkName] },
+      filters: { name: shardNameCandidates(networkName) },
     })
-    const exact = existing.find(item => item.Name === networkName)
+    const exact = existing.find(item => shardNameCandidates(networkName).includes(item.Name))
     if (exact?.Id) {
-      return networkName
+      return exact.Name
     }
     await this.docker.createNetwork({
       Name: networkName,
@@ -55,9 +56,9 @@ export class DockerContainerRuntime implements ContainerRuntime {
   async removeShardNetwork(instanceId: string): Promise<void> {
     const networkName = buildInstanceShardNetworkName(instanceId)
     const existing = await this.docker.listNetworks({
-      filters: { name: [networkName] },
+      filters: { name: shardNameCandidates(networkName) },
     })
-    const match = existing.find(item => item.Name === networkName)
+    const match = existing.find(item => shardNameCandidates(networkName).includes(item.Name))
     if (!match?.Id) {
       return
     }
@@ -76,6 +77,7 @@ export class DockerContainerRuntime implements ContainerRuntime {
   async createShardContainer(spec: ShardContainerSpec): Promise<ContainerRef> {
     const existing = await this.findByName(spec.name)
     if (existing) {
+      spec = { ...spec, name: existing.name }
       await this.remove(existing)
     }
     const containerGameRoot = spec.containerGameRoot ?? '/game'
@@ -325,12 +327,13 @@ export class DockerContainerRuntime implements ContainerRuntime {
 
   async findByName(name: string): Promise<ContainerRef | undefined> {
     try {
-      const containers = await this.docker.listContainers({ all: true, filters: { name: [name] } })
-      const match = containers.find(item => item.Names?.some(n => n === `/${name}` || n.endsWith(`/${name}`)))
+      const containers = await this.docker.listContainers({ all: true, filters: { name: shardNameCandidates(name) } })
+      const names = shardNameCandidates(name)
+      const match = names.map(candidate => containers.find(item => item.Names?.includes(`/${candidate}`))).find(Boolean)
       if (!match?.Id) {
         return undefined
       }
-      return { id: match.Id, name }
+      return { id: match.Id, name: match.Names?.map(value => value.slice(1)).find(value => names.includes(value)) ?? name }
     }
     catch (error) {
       if (isDockerUnavailableError(error)) {

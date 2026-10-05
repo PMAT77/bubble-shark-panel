@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../shared/brand-env'
 /**
  * dev:compose 前置：若本地无 SteamCMD 镜像则 pull（幂等）。
  * 拉取失败时不阻塞 compose 启动（实例安装前仍会检测镜像）。
@@ -35,7 +36,7 @@ loadPanelEnvFile()
 
 // 兜底默认值必须与其它镜像引用（compose、panel.env.example、配置默认值）保持同一版本；
 // 这里曾长期停在 v0.2.0，而它又不在发布校验的扫描清单里，于是没人发现。
-const image = process.env.GSH_STEAMCMD_IMAGE?.trim() || 'ghcr.io/pmat77/game-server-hub:v0.14.0'
+const image = readBrandEnv('BSP_STEAMCMD_IMAGE')?.trim() || 'ghcr.io/pmat77/bubblesharkpanel:v0.15.0'
 const FALLBACK_IMAGE = 'cm2network/steamcmd:steam-bookworm'
 
 function imageExists(target: string): boolean {
@@ -71,11 +72,11 @@ function main() {
   }
 
   if (image !== FALLBACK_IMAGE && imageExists(FALLBACK_IMAGE)) {
-    console.warn(`[ensure-steamcmd-image] 将使用本地已有镜像 ${FALLBACK_IMAGE}（可在 panel.env 设置 GSH_STEAMCMD_IMAGE）`)
+    console.warn(`[ensure-steamcmd-image] 将使用本地已有镜像 ${FALLBACK_IMAGE}（可在 panel.env 设置 BSP_STEAMCMD_IMAGE）`)
     return
   }
 
-  console.warn('[ensure-steamcmd-image] SteamCMD 镜像未就绪，compose 仍会继续启动；请在实例页拉取镜像或配置 GSH_STEAMCMD_IMAGE')
+  console.warn('[ensure-steamcmd-image] SteamCMD 镜像未就绪，compose 仍会继续启动；请在实例页拉取镜像或配置 BSP_STEAMCMD_IMAGE')
 }
 
 main()

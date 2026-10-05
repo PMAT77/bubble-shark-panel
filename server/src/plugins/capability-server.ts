@@ -134,7 +134,7 @@ export async function startCapabilityServer(
     const pluginId = typeof input.body.pluginId === 'string' ? input.body.pluginId.trim() : ''
 
     if (!isTokenValid(token, input.providedToken)) {
-      return capabilityError('令牌无效：请使用宿主注入的 GSH_PLUGIN_TOKEN', 'denied')
+      return capabilityError('令牌无效：请使用宿主注入的 BSP_PLUGIN_TOKEN', 'denied')
     }
     if (!pluginId) {
       return capabilityError('缺少 pluginId')
@@ -190,7 +190,7 @@ export async function startCapabilityServer(
   }
 
   const tokenOf = (request: { headers: Record<string, unknown> }) =>
-    request.headers['x-gsh-plugin-token'] as string | undefined
+    (request.headers['x-bsp-plugin-token'] ?? request.headers['x-gsh-plugin-token']) as string | undefined
 
   app.post('/capabilities/instances', async request => withAudit({
     providedToken: tokenOf(request),
@@ -423,7 +423,7 @@ export async function startCapabilityServer(
   }))
 
   /** 健康检查：插件可用它确认宿主能力服务还在，也便于排障 */
-  app.get('/capabilities/ping', async () => ({ ok: true, host: 'game-server-hub' }))
+  app.get('/capabilities/ping', async () => ({ ok: true, host: 'bubblesharkpanel' }))
 
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()

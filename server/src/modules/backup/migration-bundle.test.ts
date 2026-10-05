@@ -15,7 +15,7 @@ import { resolveDstLegacyModDir } from '../../infra/game-adapter/dst/ugc-mod-ins
 import { setModDownloadExecutorForTest, resetModDownloadExecutorForTest } from '../mod/mod-download-service'
 import { beginContentTransaction } from '../../shared/instance-content/state'
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-migration-bundle-'))
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-migration-bundle-'))
 const source = path.join(root, 'source', 'Cluster_7')
 const modsSource = path.join(root, 'mods-source')
 const oldFetch = globalThis.fetch
@@ -23,8 +23,8 @@ let networkCalls = 0
 let seq = 0
 const mod = (id: string, enabled: boolean, dependencies: string[] = []): MigrationMod => ({ workshopId: id, name: `Mod ${id}`, enabled, loadOrder: 0, configurationOptions: { option: 'kept' }, dependencyIds: dependencies, version: 'v1', localUpdatedAt: '2025-01-01T00:00:00.000Z', content: null })
 before(async () => {
-  process.env.GSH_BACKUPS_ROOT = path.join(root, 'backups')
-  process.env.GSH_MOD_DOWNLOAD_AUTO_START = '1'
+  process.env.BSP_BACKUPS_ROOT = path.join(root, 'backups')
+  process.env.BSP_MOD_DOWNLOAD_AUTO_START = '1'
   await initDatabase(path.join(root, 'db.sqlite'), path.resolve('server/drizzle'), { adminUsername: 'superadmin', adminPassword: '123456', seedDevelopmentUsers: false })
   fs.mkdirSync(path.join(source, 'Master', 'save'), { recursive: true })
   fs.writeFileSync(path.join(source, 'cluster.ini'), '[NETWORK]\ncluster_name = Bundle\n[SHARD]\nshard_enabled = false\n')
@@ -45,8 +45,8 @@ after(() => {
   resetModDownloadExecutorForTest()
   closeDatabase()
   fs.rmSync(root, { recursive: true, force: true })
-  delete process.env.GSH_BACKUPS_ROOT
-  delete process.env.GSH_MOD_DOWNLOAD_AUTO_START
+  delete process.env.BSP_BACKUPS_ROOT
+  delete process.env.BSP_MOD_DOWNLOAD_AUTO_START
 })
 const inspect = () => inspectMigrationContents([mod('100', true, ['200']), mod('300', false)], true, async id => fs.existsSync(path.join(modsSource, id)) ? path.join(modsSource, id) : null)
 async function createTarget() {

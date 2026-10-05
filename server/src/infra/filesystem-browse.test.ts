@@ -10,7 +10,7 @@ let rootDir: string
 let outsideDir: string
 
 before(() => {
-  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-browse-test-'))
+  workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-browse-test-'))
   rootDir = path.join(workDir, 'root')
   outsideDir = path.join(workDir, 'outside')
   fs.mkdirSync(path.join(rootDir, 'inner'), { recursive: true })

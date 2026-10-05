@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { HostMemoryPressureData } from '../../../../shared/contracts/host-memory-pressure'
 import {
   kbToMb,
@@ -61,7 +62,7 @@ export type SwapState = 'unknown' | 'none' | 'exhausted' | 'ready'
 
 /**
  * 只按 `SwapFree` 判「有没有 swap」是错的：它为 0 既可能是没配，也可能是配了但被用满。
- * 两者的做法相反——前者执行 `gsh setup-swap` 能建出 swapfile，后者会被它直接跳过
+ * 两者的做法相反——前者执行 `bsp setup-swap` 能建出 swapfile，后者会被它直接跳过
  * （脚本检测到已有 swap 就不动），照做一遍什么都不会变，排查方向被带偏。
  */
 export function resolveSwapState(
@@ -78,7 +79,7 @@ export function resolveSwapState(
 }
 
 function parsePositiveMbEnv(key: string): number | undefined {
-  const raw = process.env[key]?.trim()
+  const raw = readBrandEnv(key)?.trim()
   if (!raw) {
     return undefined
   }
@@ -94,7 +95,7 @@ function parsePositiveMbEnv(key: string): number | undefined {
  * 实际上 SteamCMD 常态占用通常几百 MiB；上限仅在瞬时冲高时触发 OOM。
  */
 export function resolveSteamcmdPlanningMb(): number {
-  const explicit = parsePositiveMbEnv('GSH_HOST_STEAMCMD_PLANNING_MB')
+  const explicit = parsePositiveMbEnv('BSP_HOST_STEAMCMD_PLANNING_MB')
   if (explicit !== undefined) {
     return explicit
   }
@@ -112,12 +113,12 @@ export function resolveSteamcmdPlanningMb(): number {
  * 传入 Mod 数量时按真实规模估算：Mod 才是内存大头，只用固定值会让「36 个 Mod 双分片」
  * 这种配置轻易通过守卫，然后在加载途中被内核 OOM 杀掉（线上已发生）。
  * 显式配置只作为下界——配置写得偏小不能变成「放行一次注定 OOM 的启动」；
- * 确实要强制启动请用 GSH_HOST_MIN_AVAILABLE_MB=0 关掉守卫。
+ * 确实要强制启动请用 BSP_HOST_MIN_AVAILABLE_MB=0 关掉守卫。
  */
 export function resolveDstShardPlanningMb(modCount?: number): number {
   const limits = resolveDstContainerResourceLimits()
   const capMb = limits?.memory ? Math.round(limits.memory / MIB) : undefined
-  const base = parsePositiveMbEnv('GSH_HOST_DST_PLANNING_MB') ?? DEFAULT_DST_PLANNING_MB
+  const base = parsePositiveMbEnv('BSP_HOST_DST_PLANNING_MB') ?? DEFAULT_DST_PLANNING_MB
   const estimated = typeof modCount === 'number' && Number.isFinite(modCount)
     ? DST_PLANNING_BASE_MB + DST_PLANNING_MB_PER_MOD * Math.max(0, Math.floor(modCount))
     : 0
@@ -126,11 +127,11 @@ export function resolveDstShardPlanningMb(modCount?: number): number {
 }
 
 function resolveSeedPlanningMb(): number {
-  return parsePositiveMbEnv('GSH_HOST_SEED_PLANNING_MB') ?? DEFAULT_SEED_PLANNING_MB
+  return parsePositiveMbEnv('BSP_HOST_SEED_PLANNING_MB') ?? DEFAULT_SEED_PLANNING_MB
 }
 
 function resolveHostMemoryHeadroomMb(): number {
-  return parsePositiveMbEnv('GSH_HOST_MEMORY_HEADROOM_MB') ?? 512
+  return parsePositiveMbEnv('BSP_HOST_MEMORY_HEADROOM_MB') ?? 512
 }
 
 /** 执行重操作前要求宿主机（面板容器 /proc）剩余可用内存下限（MiB） */
@@ -138,7 +139,7 @@ export function resolveMinHostAvailableMbForOperation(
   operation: HeavyHostOperation,
   context: DstStartMemoryContext = {},
 ): number {
-  const override = parsePositiveMbEnv('GSH_HOST_MIN_AVAILABLE_MB')
+  const override = parsePositiveMbEnv('BSP_HOST_MIN_AVAILABLE_MB')
   if (override !== undefined) {
     return override
   }
@@ -202,8 +203,8 @@ function buildHostMemoryPressureFailure(
         ? `，缓存区已用满（共 ${swapTotalMb} MiB）`
         : `，可用缓存区约 ${swapFreeMb} MiB`
   const swapAdvice = swapState === 'exhausted'
-    ? '1. 扩缓存区（最有效）：缓存区已被用满，加载尖峰没有落点；先停用并删掉旧的缓存区文件，再执行 GSH_SWAP_SIZE=4G gsh setup-swap 重建'
-    : '1. 加缓存区（最有效）：执行 gsh setup-swap 创建 2 GiB 缓存区文件，让加载尖峰有地方落'
+    ? '1. 扩缓存区（最有效）：缓存区已被用满，加载尖峰没有落点；先停用并删掉旧的缓存区文件，再执行 BSP_SWAP_SIZE=4G bsp setup-swap 重建'
+    : '1. 加缓存区（最有效）：执行 bsp setup-swap 创建 2 GiB 缓存区文件，让加载尖峰有地方落'
   const explanationLines = [
     '说明：安装/启动按典型峰值估算，并非按容器上限占满内存。',
     ...(capMb ? [`DST 分片内存硬上限为 ${capMb} MiB（每个分片，非预留占用）。`] : []),
@@ -222,7 +223,7 @@ function buildHostMemoryPressureFailure(
     '3. 在「世界设置 → 模组」减少订阅的 Mod：内存占用与 Mod 数量近似线性',
     '4. 停止其他正在运行的实例，释放内存',
     '',
-    '若确需强制执行：在 panel.env 设置 GSH_HOST_MIN_AVAILABLE_MB=0 可关闭内存守卫（小内存机慎用，可能触发 OOM）。',
+    '若确需强制执行：在 panel.env 设置 BSP_HOST_MIN_AVAILABLE_MB=0 可关闭内存守卫（小内存机慎用，可能触发 OOM）。',
   ].join('\n')
   const summary = `宿主机可用内存不足（当前约 ${availableMb} MiB${swapHint}，建议至少 ${requiredMb} MiB${totalHint}）`
   const data: HostMemoryPressureData = {

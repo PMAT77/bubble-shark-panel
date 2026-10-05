@@ -204,7 +204,7 @@ const DANGEROUS_POSIX_PREFIXES = [
 ]
 
 export interface InstallPathValidationOptions {
-  /** 实例根目录（GSH_INSTANCES_ROOT） */
+  /** 实例根目录（BSP_INSTANCES_ROOT） */
   instancesRoot?: string
   /** instances-root=必须位于实例根目录之下；缺省时仅做危险目录过滤（兼容既有实例的启动/删除） */
   policy?: 'instances-root' | 'any'
@@ -251,7 +251,7 @@ function validateInstallPath(rawPath: string, options: InstallPathValidationOpti
     const instancesRoot = path.resolve(options.instancesRoot)
     const relative = path.relative(instancesRoot, resolved)
     if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
-      return '安装路径必须位于实例数据目录（GSH_INSTANCES_ROOT）之下；如确需自定义目录，请设置 GSH_INSTALL_PATH_POLICY=any 并自行承担隔离风险'
+      return '安装路径必须位于实例数据目录（BSP_INSTANCES_ROOT）之下；如确需自定义目录，请设置 BSP_INSTALL_PATH_POLICY=any 并自行承担隔离风险'
     }
   }
 }

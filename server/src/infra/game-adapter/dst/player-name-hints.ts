@@ -12,7 +12,7 @@ import { resolveShardRoot } from './shard-layout'
  * 白名单里的那条 ID 就又变成一串看不懂的字符了。
  *
  * 名字的可信来源只有两处（实测自真实服务器日志）：
- * 1. 面板自己注入的查询标记行 `GSH_PLAYER_LIST_ITEM:<token>:<KU_x>\t名字`——制表符分隔、
+ * 1. 面板自己注入的查询标记行 `BSP_PLAYER_LIST_ITEM:<token>:<KU_x>\t名字`——制表符分隔、
  *    由面板生成，最可靠；
  * 2. 部分版本会打印的 `Client authenticated: (KU_x) 名字`。
  *
@@ -40,7 +40,7 @@ const MAX_LOG_READ_BYTES = 512 * 1024
 const TRAILING_NOISE_PATTERN = /\s+(?:has |have |joined|left |disconnected|from |steam|ip |\[|\()/i
 
 /**
- * 面板在线查询注入的标记行：`GSH_PLAYER_LIST_ITEM:<token>:<KU_x>\t名字`。
+ * 面板在线查询注入的标记行：`BSP_PLAYER_LIST_ITEM:<token>:<KU_x>\t名字`。
  *
  * 名字部分允许缺失：解析前会 trim 每一行，而名字为空的标记行结尾就是制表符，
  * 会被 trim 掉（`...KU_x`）——那种情况按"有 ID 无名字"处理。

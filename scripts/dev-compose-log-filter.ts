@@ -2,7 +2,7 @@ const COMPOSE_PREFIX = /^[\w.-]+\s+\|\s/
 
 const DROP_LINE_PATTERNS = [
   /^$/,
-  /^> game-server-hub@/,
+  /^> bubblesharkpanel@/,
   /^> vite$/,
   /^> tsx /,
   /vite-plugin-svg-spritemap/,

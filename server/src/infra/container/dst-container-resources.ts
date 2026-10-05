@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 /** DST 运行容器 HostConfig.Memory / NanoCpus（字节 / 纳核） */
 
 export interface DstContainerResourceLimits {
@@ -20,12 +21,12 @@ function parsePositiveNumber(raw: string | undefined): number | undefined {
 }
 
 /**
- * 解析 GSH_DST_CONTAINER_MEMORY_MB / GSH_DST_CONTAINER_CPU_QUOTA。
+ * 解析 BSP_DST_CONTAINER_MEMORY_MB / BSP_DST_CONTAINER_CPU_QUOTA。
  * CPU 配额按「逻辑核数」解释（如 1.5 表示 1.5 核）；设 0 或未设置表示不限制。
  */
 export function resolveDstContainerResourceLimits(): DstContainerResourceLimits | undefined {
-  const memoryMb = parsePositiveNumber(process.env.GSH_DST_CONTAINER_MEMORY_MB)
-  const cpuCores = parsePositiveNumber(process.env.GSH_DST_CONTAINER_CPU_QUOTA)
+  const memoryMb = parsePositiveNumber(readBrandEnv('BSP_DST_CONTAINER_MEMORY_MB'))
+  const cpuCores = parsePositiveNumber(readBrandEnv('BSP_DST_CONTAINER_CPU_QUOTA'))
 
   const limits: DstContainerResourceLimits = {}
   if (memoryMb !== undefined) {

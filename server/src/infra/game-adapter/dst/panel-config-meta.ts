@@ -30,7 +30,7 @@ export interface PanelConfigMeta {
 
 function resolveMetaPath(installPath: string): string {
   const clusterRoot = path.join(installPath, DST_STORAGE_DIR, DST_CONF_DIR, DST_CLUSTER_NAME)
-  return path.join(clusterRoot, '.gsh-panel-config.json')
+  return path.join(clusterRoot, '.bsp-panel-config.json')
 }
 
 export function readPanelConfigMeta(installPath: string): PanelConfigMeta {

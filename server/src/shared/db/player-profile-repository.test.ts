@@ -13,7 +13,7 @@ import {
   upsertPlayerProfiles,
 } from './player-profile-repository'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-player-profile-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-player-profile-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 const INSTANCE_A = 'inst-profile-a'

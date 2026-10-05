@@ -59,7 +59,7 @@ describe('buildSelfCheckReport', () => {
         lastSuccessSource: 'official',
         lastSuccessAt: '2026-09-15T11:30:00.000Z',
         proxyEnabled: true,
-        proxySource: 'GSH_STEAM_HTTPS_PROXY',
+        proxySource: 'BSP_STEAM_HTTPS_PROXY',
         proxyHost: 'proxy:7890',
         webApiBaseConfigured: false,
         relayConfigured: false,
@@ -103,7 +103,7 @@ describe('buildSelfCheckReport', () => {
       },
     }), 'steam-workshop')
     assert.equal(neverWorked.status, 'warn')
-    assert.match(neverWorked.hint ?? '', /GSH_STEAM_HTTPS_PROXY/)
+    assert.match(neverWorked.hint ?? '', /BSP_STEAM_HTTPS_PROXY/)
     assert.match(neverWorked.hint ?? '', /host\.docker\.internal/)
   })
 

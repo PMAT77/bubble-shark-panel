@@ -3,13 +3,13 @@ import { parseImageRef } from './image-ref'
 
 /**
  * 通用镜像候选拉取：
- * 1) 若配置了备选 registry（GSH_IMAGE_MIRRORS / 旧 GSH_STEAMCMD_IMAGE_MIRRORS），按顺序优先尝试候选；
+ * 1) 若配置了备选 registry（BSP_IMAGE_MIRRORS / 旧 BSP_STEAMCMD_IMAGE_MIRRORS），按顺序优先尝试候选；
  * 2) 最后尝试完整的已配置镜像引用。
  * v0.2.0 起面板/DST/SteamCMD 共用统一镜像，该模块由 steamcmd-runner 与 game-dst-image 共享。
  */
 
 /** 未配置镜像引用时使用的官方默认仓库（统一镜像）。 */
-export const OFFICIAL_UNIFIED_IMAGE_REPOSITORY = 'ghcr.io/pmat77/game-server-hub'
+export const OFFICIAL_UNIFIED_IMAGE_REPOSITORY = 'ghcr.io/pmat77/bubblesharkpanel'
 
 export function normalizeMirrorRegistries(raw: string | null | undefined): string[] {
   const normalized = (raw || '').trim()
@@ -202,7 +202,7 @@ export async function pullImageWithCandidates(
 }
 
 /** 构建拉取失败的通用提示（网络/权限/镜像不存在分类）。 */
-export function formatPullError(raw: string, image: string, triedImages?: string[], envHint = 'GSH_IMAGE_MIRRORS'): string {
+export function formatPullError(raw: string, image: string, triedImages?: string[], envHint = 'BSP_IMAGE_MIRRORS'): string {
   const text = raw.trim() || `拉取 ${image} 失败`
   const attempted = triedImages?.length ? `已尝试镜像：${triedImages.join(' -> ')}。` : ''
   if (/403 Forbidden|denied|unauthorized/i.test(text)) {

@@ -1,13 +1,13 @@
 # 参与贡献
 
-感谢关注 Game Server Hub。本文说明如何有效地提交 Issue 与 Pull Request。
+感谢关注 BubbleSharkPanel。本文说明如何有效地提交 Issue 与 Pull Request。
 
 ---
 
 ## 开始之前
 
 1. 阅读 [README.md](README.md) 了解项目定位（当前为 **v0.x 公测**，DST 优先）
-2. 大改动请先开 [Issue](https://github.com/PMAT77/game-serve-hub/issues) 讨论，避免重复劳动
+2. 大改动请先开 [Issue](https://github.com/PMAT77/bubble-shark-panel/issues) 讨论，避免重复劳动
 3. 本地开发环境（Node 版本、`pnpm install`、数据库与迁移、开发栈启动方式）在 `docs_local/DEVELOPMENT.md`（内部文档，不在公开仓库内）；面向使用者的部署方式见 [Docker 模式安装](docs/install-docker.md) 与 [Native systemd 模式安装](docs/install-native.md)
 
 ---

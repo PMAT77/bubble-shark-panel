@@ -40,7 +40,7 @@ export type PasswordRecoverBody = z.infer<typeof passwordRecoverBodySchema>
  * 游客（只读预览）免密登录的请求体。
  *
  * 没有账号与密码字段——这是刻意的：**游客凭证不存在**。
- * 面板启动时按 `GSH_GUEST_LOGIN_ACCOUNT` 预置一个口令为随机值且不落盘的账号，
+ * 面板启动时按 `BSP_GUEST_LOGIN_ACCOUNT` 预置一个口令为随机值且不落盘的账号，
  * 登录页的「游客登录」按钮只是让服务端为它签发一个会话。
  *
  * 仍然接受验证码字段：游客入口是匿名的，被刷时也要能升级到验证码（与普通登录同口径）。

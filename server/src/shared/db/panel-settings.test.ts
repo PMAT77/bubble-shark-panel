@@ -8,7 +8,7 @@ import { after, before, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { closeDatabase, getSystemPanelSettings, initDatabase, saveSystemPanelSettings } from './index'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-panel-settings-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-panel-settings-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 function buildSettings(overrides: Partial<DbSystemPanelSettings> = {}): DbSystemPanelSettings {

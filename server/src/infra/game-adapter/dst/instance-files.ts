@@ -12,7 +12,7 @@ export const INSTANCE_TEXT_FILE_MAX_BYTES = 1024 * 1024
 export const INSTANCE_UPLOAD_DEFAULT_MAX_BYTES = 256 * 1024 * 1024
 
 export function resolveInstanceUploadMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
-  const parsed = Number(env.GSH_INSTANCE_UPLOAD_MAX_BYTES)
+  const parsed = Number(env.BSP_INSTANCE_UPLOAD_MAX_BYTES)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : INSTANCE_UPLOAD_DEFAULT_MAX_BYTES
 }
 

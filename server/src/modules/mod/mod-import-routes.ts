@@ -7,7 +7,7 @@ import { businessError, success } from '../../shared/http/response'
 import { commitLocalMods, discardLocalMod, inspectLocalMod, modImportLimits } from './mod-import-service'
 
 export function registerModImportRoutes(app: FastifyInstance, buildDto: (instanceId: string, workshopId: string) => Promise<ModItemDto | null>): void {
-  app.addContentTypeParser('application/x-gsh-mod-archive', (_request, payload, done) => done(null, payload))
+  app.addContentTypeParser('application/x-bsp-mod-archive', (_request, payload, done) => done(null, payload))
   app.get('/app/instances/:instanceId/mods/import/limits', async (request) => {
     const params = modInstanceParamsSchema.parse(request.params)
     const auth = await authorizeInstance(request, params.instanceId, 'mod:install')

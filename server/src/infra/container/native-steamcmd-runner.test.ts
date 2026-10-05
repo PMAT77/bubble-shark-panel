@@ -6,15 +6,15 @@ import { after, it } from 'node:test'
 import { runNativeSteamcmdJob } from './native-steamcmd-runner'
 import { parsePublicBuildIdFromAppInfo } from '../../shared/steam-update/app-info'
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-steamcmd-query-'))
-const previousPath = process.env.GSH_NATIVE_STEAMCMD_PATH
-process.env.GSH_NATIVE_STEAMCMD_PATH = process.execPath
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-steamcmd-query-'))
+const previousPath = process.env.BSP_NATIVE_STEAMCMD_PATH
+process.env.BSP_NATIVE_STEAMCMD_PATH = process.execPath
 after(() => {
   if (previousPath === undefined) {
-    delete process.env.GSH_NATIVE_STEAMCMD_PATH
+    delete process.env.BSP_NATIVE_STEAMCMD_PATH
   }
   else {
-    process.env.GSH_NATIVE_STEAMCMD_PATH = previousPath
+    process.env.BSP_NATIVE_STEAMCMD_PATH = previousPath
   }
   fs.rmSync(root, { recursive: true, force: true })
 })

@@ -20,7 +20,7 @@ export const GUEST_MODE_NOTICE_CONTENT = '此账号只能查看，无法执行�
  */
 export function guestModeNoticeDismissKey(account: string): string {
   const trimmed = account.trim()
-  return trimmed ? `gsh-guest-mode-notice-dismissed:${trimmed}` : ''
+  return trimmed ? `bsp-guest-mode-notice-dismissed:${trimmed}` : ''
 }
 
 export interface GuestModeNoticeState {

@@ -8,12 +8,12 @@
  *
  * 用法：
  *   pnpm exec tsx scripts/plugins/sign-plugin.ts --dir examples/plugins/remote-backup \
- *     --key ~/.gsh-license-keys/plugin-private.gsh-key \
+ *     --key ~/.bsp-license-keys/plugin-private.bsp-key \
  *     [--publisher gsh-official] [--force]
  *
  * 密钥建议与授权许可分开（`generate-keypair.ts --purpose plugin`）：
  * 许可按客户签发、插件按发布流程签发，混用一把私钥会让插件流程的失误波及所有客户授权。
- * 分开后，客户侧需要同时配置 `GSH_LICENSE_PUBLIC_KEY` 与 `GSH_PLUGIN_PUBLIC_KEY`。
+ * 分开后，客户侧需要同时配置 `BSP_LICENSE_PUBLIC_KEY` 与 `BSP_PLUGIN_PUBLIC_KEY`。
  *
  * 签发逻辑写成可导入的函数（`signPluginDirectory`），CLI 只是它的一层壳：
  * 这样测试可以直接调用并断言产物，而不必跨进程跑 tsx。

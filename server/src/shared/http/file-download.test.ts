@@ -13,7 +13,7 @@ const tempDirs: string[] = []
 const apps: FastifyInstance[] = []
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-file-download-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-file-download-'))
   tempDirs.push(dir)
   return dir
 }

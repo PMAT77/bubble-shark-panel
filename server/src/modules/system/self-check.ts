@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -247,9 +248,9 @@ export function buildSelfCheckReport(input: SelfCheckInput, now = new Date()): S
  */
 function buildSteamUpstreamItem(probe: SelfCheckSteamUpstreamProbe | null): SelfCheckItem {
   const hintForProxy = '配置一个能直连 Steam 的代理后重启面板：'
-    + 'Docker 部署写 GSH_STEAM_HTTPS_PROXY=http://host.docker.internal:7890，'
+    + 'Docker 部署写 BSP_STEAM_HTTPS_PROXY=http://host.docker.internal:7890，'
     + 'Native 部署写 http://127.0.0.1:7890；'
-    + '也可以把 Steam 接口反代到自己的域名并配置 GSH_STEAM_WEBAPI_BASE_URL。'
+    + '也可以把 Steam 接口反代到自己的域名并配置 BSP_STEAM_WEBAPI_BASE_URL。'
 
   if (!probe) {
     return {
@@ -304,7 +305,7 @@ function buildSteamUpstreamItem(probe: SelfCheckSteamUpstreamProbe | null): Self
 function probeWritable(label: string, targetPath: string): SelfCheckWritableProbe {
   try {
     fs.mkdirSync(targetPath, { recursive: true })
-    const probePath = path.join(targetPath, `.gsh-selfcheck-${process.pid}`)
+    const probePath = path.join(targetPath, `.bsp-selfcheck-${process.pid}`)
     fs.writeFileSync(probePath, 'ok', 'utf8')
     fs.rmSync(probePath, { force: true })
     return { label, path: targetPath, writable: true }
@@ -356,7 +357,7 @@ function collectSteamUpstreamProbe(): SelfCheckSteamUpstreamProbe {
     proxyEnabled: status.proxy.enabled,
     proxySource: status.proxy.source,
     proxyHost: status.proxy.host,
-    webApiBaseConfigured: Boolean(process.env.GSH_STEAM_WEBAPI_BASE_URL?.trim()),
-    relayConfigured: Boolean(process.env.GSH_STEAM_RELAY_URL?.trim()),
+    webApiBaseConfigured: Boolean(readBrandEnv('BSP_STEAM_WEBAPI_BASE_URL')?.trim()),
+    relayConfigured: Boolean(readBrandEnv('BSP_STEAM_RELAY_URL')?.trim()),
   }
 }

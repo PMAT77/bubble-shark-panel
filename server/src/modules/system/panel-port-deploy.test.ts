@@ -14,7 +14,7 @@ import {
 } from './panel-port-deploy'
 
 function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `gsh-port-${randomUUID()}`))
+  return fs.mkdtempSync(path.join(os.tmpdir(), `bsp-port-${randomUUID()}`))
 }
 
 describe('upsertEnvValueInContent', () => {
@@ -53,12 +53,12 @@ describe('buildPanelPortManualCommand', () => {
   it('Docker 部署给出改配置并重建面板的命令', () => {
     const command = buildPanelPortManualCommand({
       runtimeMode: 'docker',
-      stackDir: '/opt/game-server-hub',
+      stackDir: '/opt/bubblesharkpanel',
       composeFiles: ['docker-compose.yml', 'docker-compose.bind.yml'],
       envKey: 'PANEL_PORT',
       port: 9278,
     })
-    assert.match(command, /cd \/opt\/game-server-hub/)
+    assert.match(command, /cd \/opt\/bubblesharkpanel/)
     assert.match(command, /PANEL_PORT=9278/)
     assert.match(command, /docker compose .* up -d panel/)
   })
@@ -70,7 +70,7 @@ describe('buildPanelPortManualCommand', () => {
       port: 9278,
     })
     assert.match(command, /SERVER_PORT=9278/)
-    assert.match(command, /sudo gsh restart/)
+    assert.match(command, /sudo bsp restart/)
   })
 })
 
@@ -104,6 +104,6 @@ describe('writePanelEnvPort', () => {
 
 describe('buildPanelEnvCandidates', () => {
   it('缺省使用安装目录', () => {
-    assert.deepEqual(buildPanelEnvCandidates(''), [path.join('/opt/game-server-hub', 'panel.env')])
+    assert.deepEqual(buildPanelEnvCandidates(''), [path.join('/opt/bubblesharkpanel', 'panel.env')])
   })
 })

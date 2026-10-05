@@ -8,7 +8,7 @@
 | `main` 分支 HEAD | ✅ 接收报告（修复将随下一版本发布） |
 | 更早版本 / 自行改动的 fork | ❌ 不保证 |
 
-完整版本列表见 [Releases](https://github.com/PMAT77/game-serve-hub/releases)。
+完整版本列表见 [Releases](https://github.com/PMAT77/bubble-shark-panel/releases)。
 
 ---
 
@@ -18,7 +18,7 @@
 
 请通过以下方式私下报告：
 
-1. [GitHub Security Advisories](https://github.com/PMAT77/game-serve-hub/security/advisories/new)（推荐）
+1. [GitHub Security Advisories](https://github.com/PMAT77/bubble-shark-panel/security/advisories/new)（推荐）
 2. 或新建 Issue 标题以 `[Security]` 开头并**仅写概要**，在说明中请求维护者私下联系（不推荐，响应可能较慢）
 
 报告请尽量包含：
@@ -72,34 +72,34 @@
 
 #### 免密「游客登录」
 
-如果希望访客点一下就能进（例如放在 GitHub 上让人试），可在 `panel.env` 设置 `GSH_GUEST_LOGIN_ENABLED=1`。开启后登录页会出现「游客预览」按钮，面板启动时自动预置一个只读账号，它的口令是随机值、不落盘、不出现在任何接口响应里——**面板不提供也不需要任何游客口令**。会话由服务端的 `POST /app/account/guest-login` 直接签发。
+如果希望访客点一下就能进（例如放在 GitHub 上让人试），可在 `panel.env` 设置 `BSP_GUEST_LOGIN_ENABLED=1`。开启后登录页会出现「游客预览」按钮，面板启动时自动预置一个只读账号，它的口令是随机值、不落盘、不出现在任何接口响应里——**面板不提供也不需要任何游客口令**。会话由服务端的 `POST /app/account/guest-login` 直接签发。
 
 这个开关有三道闸门，缺一不可：显式打开、Native 运行时、`production` 环境。**Docker 模式下即使打开也不会生效**，面板会在启动日志里给出原因。此外还有两条限制：
 
-- 游客账号名（`GSH_GUEST_LOGIN_ACCOUNT`，默认 `guest`）不允许与 `ADMIN_USERNAME` 相同；
+- 游客账号名（`BSP_GUEST_LOGIN_ACCOUNT`，默认 `guest`）不允许与 `ADMIN_USERNAME` 相同；
 - 游客入口的限流只按 IP 维度计数，因此任何一个 IP 都无法把其他访客锁在门外。
 
 **只读不等于看不到东西。** 游客能看到实例目录与文件内容、房间与世界配置、玩家名单（含管理员名单）、在线玩家、备份列表与游戏控制台日志。不要在承载真实玩家数据、或有敏感信息的面板上开放公开预览。
 
-**给公开预览站的额外建议**：把 `ADMIN_USERNAME` 从默认的 `superadmin` 改掉，并用 `GSH_DST_AUTO_PUBLIC_IP=0` 配合 `GSH_DST_CONNECT_HOST` 关闭公网自动探测，避免面板把宿主公网 IP 展示给访客。
+**给公开预览站的额外建议**：把 `ADMIN_USERNAME` 从默认的 `superadmin` 改掉，并用 `BSP_DST_AUTO_PUBLIC_IP=0` 配合 `BSP_DST_CONNECT_HOST` 关闭公网自动探测，避免面板把宿主公网 IP 展示给访客。
 
 **安装脚本以 root 执行。** 文档给出的一行式安装是 `curl … | sudo bash`。发布流水线同时产出 `install-<tag>.sh` 与同名 `.sha256`，条件允许时请走「下载 → 校验 → 执行」三步，而不是管道直执行：
 
 ```bash
-curl -fL -o install.sh https://github.com/PMAT77/game-serve-hub/releases/download/v0.14.0/install-v0.14.0.sh
-curl -fL -o install.sh.sha256 https://github.com/PMAT77/game-serve-hub/releases/download/v0.14.0/install-v0.14.0.sh.sha256
+curl -fL -o install.sh https://github.com/PMAT77/bubble-shark-panel/releases/download/v0.15.0/install-v0.15.0.sh
+curl -fL -o install.sh.sha256 https://github.com/PMAT77/bubble-shark-panel/releases/download/v0.15.0/install-v0.15.0.sh.sha256
 sha256sum -c install.sh.sha256
 sudo bash install.sh --mode docker
 ```
 
 脚本内部会校验它下载的 compose 资源摘要，但那只保护脚本之后的下游，保护不了脚本自身。
 
-**Native 模式（systemd）的权限边界不同。** 面板进程以专用非特权用户 `gsh` 运行，不接触容器运行时，因此**一次有效登录并不等于宿主机 root**。「系统设置 → 面板与游戏版本」里的一键更新由安装器布置的后台更新程序完成：它以 root 运行，但只做三件事——校验面板请求的版本号、从 GitHub Release 取官方安装脚本与 Native 包并用官方 `.sha256` 校验、执行安装器切换版本并重启面板。面板能表达的只是「升到某个已发布版本」这一个意图（它预下载的压缩包只是省流量的副本，摘要与官方 `.sha256` 不符时会被丢弃），无法投递可执行内容，因此面板被攻陷不会直接变成 root 代码执行。相应地：
+**Native 模式（systemd）的权限边界不同。** 面板进程以专用非特权用户 `bsp` 运行，不接触容器运行时，因此**一次有效登录并不等于宿主机 root**。「系统设置 → 面板与游戏版本」里的一键更新由安装器布置的后台更新程序完成：它以 root 运行，但只做三件事——校验面板请求的版本号、从 GitHub Release 取官方安装脚本与 Native 包并用官方 `.sha256` 校验、执行安装器切换版本并重启面板。面板能表达的只是「升到某个已发布版本」这一个意图（它预下载的压缩包只是省流量的副本，摘要与官方 `.sha256` 不符时会被丢弃），无法投递可执行内容，因此面板被攻陷不会直接变成 root 代码执行。相应地：
 
 - 拥有 `settings:write` 权限的账号依然能触发更新与重启面板，请按管理员对待；
 - 只接受升级（目标版本必须高于当前版本），同版本重装与降级会被拒绝；
 - 面板能写的是更新请求目录，而执行器的中间产物（锁、日志、校验通过的包、配置备份）位于该目录下 root 专属的子目录 `panel-update/.root`，执行器每次运行都会重新校验属主与权限，避免面板用预先铺好的符号链接把 root 的写入引到别处；
-- 不需要面板内更新时，可在服务器上执行 `sudo systemctl disable --now game-server-hub-update.path` 关掉这条通道，改用安装脚本手动升级。
+- 不需要面板内更新时，可在服务器上执行 `sudo systemctl disable --now bubblesharkpanel-update.path` 关掉这条通道，改用安装脚本手动升级。
 
 ## 安全最佳实践（自托管）
 
@@ -117,7 +117,7 @@ sudo bash install.sh --mode docker
 面板默认只提供 HTTP。放到公网时建议用 Nginx / Caddy 终止 TLS 并反向代理到面板端口，注意三点：
 
 1. 必须转发长连接：控制台日志与实时状态依赖 SSE，Nginx 需要 `proxy_buffering off;` 与 `proxy_read_timeout` 放宽，并转发 `Upgrade` / `Connection` 头。
-2. 在 `panel.env` 设置 `GSH_TRUST_PROXY`（可信代理地址）。不设置时面板只能看到代理的 IP，登录限流与日志来源都会失真。
+2. 在 `panel.env` 设置 `BSP_TRUST_PROXY`（可信代理地址）。不设置时面板只能看到代理的 IP，登录限流与日志来源都会失真。
 3. 代理层再加一层访问控制（IP 白名单、Basic Auth 或 VPN），比只依赖面板登录更稳妥。
 
 更多安装安全提示见[Docker 模式安装](docs/install-docker.md)与 [Native systemd 模式安装](docs/install-native.md)。

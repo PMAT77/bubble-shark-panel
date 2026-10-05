@@ -374,7 +374,7 @@ export function validateSourceTargetDisjoint(sourcePath: string, installPath: st
 /**
  * 递归对齐存档目录属主（Docker 模式 best-effort）：
  * 导入的文件属主是面板进程用户，与安装链路 chown 到 SteamCMD 容器用户的约定对齐，
- * 防游戏镜像未来收紧权限或自定义 GSH_STEAMCMD_RUN_USER 后出现只读写入失败。
+ * 防游戏镜像未来收紧权限或自定义 BSP_STEAMCMD_RUN_USER 后出现只读写入失败。
  */
 export function alignClusterOwnership(clusterRoot: string): void {
   if (getServerContainerConfig().runtimeMode !== 'docker') {
@@ -702,7 +702,7 @@ async function importSaveToInstanceLocked(options: ImportSaveToInstanceOptions):
         // legacy 包在容器网络下常超时失败，玩家进游戏只看到一部分 Mod。
         await syncInstanceModFilesFromDbUnlocked(instanceId, installPath)
         // 缺失内容默认不在导入过程里开跑：几十个 Mod 一起下会长时间占住 SteamCMD 串行锁，
-        // 由用户在 Mod 页显式点「开始下载」，队列再逐批处理（GSH_MOD_DOWNLOAD_AUTO_START=1 恢复自动）
+        // 由用户在 Mod 页显式点「开始下载」，队列再逐批处理（BSP_MOD_DOWNLOAD_AUTO_START=1 恢复自动）
         if (isModDownloadAutoStartEnabled()) {
           await startModDownloadQueue({ instanceId, installPath })
         }

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { closeDatabase, createGameInstance, initDatabase } from './index'
 import { updateGameInstanceRuntime } from './instance-repository'
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-where-status-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-where-status-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 before(async () => {
@@ -25,7 +25,7 @@ describe('updateGameInstanceRuntime whereStatus guard', () => {
       name: 'guard-test',
       gameCode: 'dst',
       status: 'stopped',
-      installPath: path.join(os.tmpdir(), 'gsh-guard-test'),
+      installPath: path.join(os.tmpdir(), 'bsp-guard-test'),
     })
 
     const unchanged = await updateGameInstanceRuntime(instance.id, {
@@ -43,7 +43,7 @@ describe('updateGameInstanceRuntime whereStatus guard', () => {
       name: 'guard-test-hit',
       gameCode: 'dst',
       status: 'installing',
-      installPath: path.join(os.tmpdir(), 'gsh-guard-test-hit'),
+      installPath: path.join(os.tmpdir(), 'bsp-guard-test-hit'),
     })
 
     const single = await updateGameInstanceRuntime(instance.id, {

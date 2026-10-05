@@ -32,9 +32,9 @@ describe('connect-host', () => {
     assert.equal(resolved.isPlaceholder, false)
   })
 
-  it('resolveDstConnectHost prefers GSH_DST_CONNECT_HOST', async () => {
-    const previous = process.env.GSH_DST_CONNECT_HOST
-    process.env.GSH_DST_CONNECT_HOST = '203.0.113.55'
+  it('resolveDstConnectHost prefers BSP_DST_CONNECT_HOST', async () => {
+    const previous = process.env.BSP_DST_CONNECT_HOST
+    process.env.BSP_DST_CONNECT_HOST = '203.0.113.55'
     clearDstConnectHostCache()
     try {
       const resolved = await resolveDstConnectHost()
@@ -45,10 +45,10 @@ describe('connect-host', () => {
     finally {
       clearDstConnectHostCache()
       if (previous === undefined) {
-        delete process.env.GSH_DST_CONNECT_HOST
+        delete process.env.BSP_DST_CONNECT_HOST
       }
       else {
-        process.env.GSH_DST_CONNECT_HOST = previous
+        process.env.BSP_DST_CONNECT_HOST = previous
       }
     }
   })

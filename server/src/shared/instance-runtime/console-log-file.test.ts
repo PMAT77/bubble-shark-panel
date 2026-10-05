@@ -16,7 +16,7 @@ import type { ConsoleLogLine } from './console-log-store'
 const tempDirs: string[] = []
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-console-log-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-console-log-'))
   tempDirs.push(dir)
   return dir
 }
@@ -41,8 +41,8 @@ afterEach(() => {
 describe('console-log-file', () => {
   it('resolves the log directory next to the install logs', () => {
     assert.equal(
-      resolveConsoleLogsDir('/var/lib/game-server-hub/panel.sqlite'),
-      path.join('/var/lib/game-server-hub', 'install-logs', 'console'),
+      resolveConsoleLogsDir('/var/lib/bubblesharkpanel/panel.sqlite'),
+      path.join('/var/lib/bubblesharkpanel', 'install-logs', 'console'),
     )
   })
 

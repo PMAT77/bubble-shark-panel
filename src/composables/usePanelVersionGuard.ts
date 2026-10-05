@@ -7,7 +7,7 @@ import {
   resolvePanelVersionMismatch,
 } from '@/composables/panelVersionGuard'
 
-const PANEL_VERSION_NOTICE_DISMISSED_KEY = 'gsh-panel-version-notice-dismissed'
+const PANEL_VERSION_NOTICE_DISMISSED_KEY = 'bsp-panel-version-notice-dismissed'
 /** 一分钟一次：/health 是同源轻量接口（不查镜像仓库、不需登录），成本可忽略 */
 const PANEL_VERSION_CHECK_INTERVAL_MS = 60 * 1000
 

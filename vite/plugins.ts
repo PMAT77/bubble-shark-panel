@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../shared/brand-env'
 import type { PluginOption } from 'vite'
 import process from 'node:process'
 import { FantasticAutoImports, FantasticComponentsResolver, FantasticComponentsType } from '@fantastic-admin/components/resolver'
@@ -145,7 +146,7 @@ export function warnKeepAliveComponentNameMissing() {}
       } satisfies PluginOption
     })(),
 
-    ...(process.env.GSH_DEV_COMPOSE_QUIET === '1'
+    ...(readBrandEnv('BSP_DEV_COMPOSE_QUIET') === '1'
       ? []
       : createFantasticAdminCopyrightPlugins()),
 

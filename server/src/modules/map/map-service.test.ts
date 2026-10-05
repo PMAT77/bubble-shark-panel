@@ -78,8 +78,8 @@ function createHarness(overrides: {
   tileNames?: string
   renderScale?: number
 } = {}): Harness {
-  const root = createTempDir('gsh-map-svc-')
-  const dbPath = path.join(root, 'game-server-hub.sqlite')
+  const root = createTempDir('bsp-map-svc-')
+  const dbPath = path.join(root, 'bubblesharkpanel.sqlite')
   const width = overrides.width ?? 4
   const height = overrides.height ?? 3
 

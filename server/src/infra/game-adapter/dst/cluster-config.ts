@@ -103,7 +103,7 @@ export function ensureDstClusterConfig(installPath: string, input: EnsureDstClus
   const clusterRoot = path.join(storageRoot, DST_CONF_DIR, DST_CLUSTER_NAME)
   const masterRoot = path.join(clusterRoot, 'Master')
   const gamePort = input.gamePort ?? DST_DEFAULT_GAME_PORT
-  writeFileIfMissing(path.join(clusterRoot, 'cluster.ini'), buildDstClusterIni(input.instanceName ?? 'Game Server Hub'))
+  writeFileIfMissing(path.join(clusterRoot, 'cluster.ini'), buildDstClusterIni(input.instanceName ?? 'BubbleSharkPanel'))
   writeFileIfMissing(path.join(masterRoot, 'server.ini'), buildDstMasterServerIniContent(gamePort))
   writeFileIfMissing(path.join(masterRoot, 'worldgenoverride.lua'), buildDstMasterWorldgenContent())
   return storageRoot

@@ -22,7 +22,7 @@ import { userPermissions, users } from '../../shared/db/schema/index'
  * `settings:read`，而增删改与测试发送仍然要求 `settings:write`。
  */
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-notify-permissions-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-notify-permissions-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 interface ApiEnvelope<T> {

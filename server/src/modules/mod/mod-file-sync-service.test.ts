@@ -63,7 +63,7 @@ afterEach(() => {
 
 describe('syncInstanceModFilesFromDb', () => {
   it('writes lua setup only for ready mods', async () => {
-    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-sync-'))
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-sync-'))
     tempDirs.push(installPath)
     setModFileSyncDbHooksForTest({
       listReadyInstanceMods: async () => [
@@ -93,7 +93,7 @@ describe('syncInstanceModFilesFromDb', () => {
   })
 
   it('writes configuration_options into modoverrides.lua and keeps plain mods intact', async () => {
-    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-sync-'))
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-sync-'))
     tempDirs.push(installPath)
     setModFileSyncDbHooksForTest({
       listReadyInstanceMods: async () => [
@@ -111,7 +111,7 @@ describe('syncInstanceModFilesFromDb', () => {
   })
 
   it('places downloaded mod files into ugc_mods before writing lua', async () => {
-    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-sync-'))
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-sync-'))
     tempDirs.push(installPath)
     writeWorkshopSource(installPath, '111')
     setModFileSyncDbHooksForTest({
@@ -126,7 +126,7 @@ describe('syncInstanceModFilesFromDb', () => {
   })
 
   it('still writes lua files when a mod cannot be placed into ugc_mods', async () => {
-    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-mod-sync-'))
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-mod-sync-'))
     tempDirs.push(installPath)
     writeCorruptLegacySource(installPath, '333')
     setModFileSyncDbHooksForTest({

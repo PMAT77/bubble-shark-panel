@@ -16,7 +16,7 @@ export interface AppHelloProps {
  * 定位收窄到 DST 场景后含义更敏感，所以收敛成单一来源。
  */
 export const DEFAULT_APP_HELLO = {
-  title: 'Game Server Hub',
+  title: 'BubbleSharkPanel',
   subtitle: 'Steam联机专用管理面板',
   description: '3 分钟开服，在浏览器里管理你的饥荒联机版专用服务器。',
 } as const

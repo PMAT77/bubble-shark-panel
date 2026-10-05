@@ -8,9 +8,9 @@
 //
 // 用法：node scripts/check-installer-smoke.mjs（也通过 pnpm run check:installer 调用）
 // bash 来源：Linux/macOS 取 PATH 里的 bash；Windows 自动探测 Git for Windows 自带的 bash，
-//           也可用 GSH_BASH=<bash 路径> 指定。确实找不到 bash 时打印跳过提示并成功退出
+//           也可用 BSP_BASH=<bash 路径> 指定。确实找不到 bash 时打印跳过提示并成功退出
 //           （本地跳过不等于通过，CI 禁止跳过）。
-// 逃生阀：GSH_SKIP_INSTALLER_SMOKE=1 仅在本地跳过。
+// 逃生阀：BSP_SKIP_INSTALLER_SMOKE=1 仅在本地跳过。
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -21,15 +21,15 @@ const repoRoot = path.resolve(import.meta.dirname, '..')
 const SYNTAX_TARGETS = [
   'scripts/install.linux.sh',
   'scripts/install-linux-smoke.sh',
-  'scripts/gsh.sh',
-  'scripts/gsh-native-update.sh',
+  'scripts/bsp.sh',
+  'scripts/bsp-native-update.sh',
 ]
 const SMOKE_TARGET = 'scripts/install-linux-smoke.sh'
 
 function findBash() {
   const candidates = []
-  if (process.env.GSH_BASH) {
-    candidates.push(process.env.GSH_BASH)
+  if ((process.env.BSP_BASH ?? process.env.GSH_BASH)) {
+    candidates.push((process.env.BSP_BASH ?? process.env.GSH_BASH))
   }
   if (process.platform === 'win32') {
     // Git for Windows 的常见安装位置
@@ -66,13 +66,13 @@ function skip(reason) {
   process.exit(0)
 }
 
-if (process.env.GSH_SKIP_INSTALLER_SMOKE === '1') {
-  skip('GSH_SKIP_INSTALLER_SMOKE=1，已跳过安装器语法与冒烟测试')
+if ((process.env.BSP_SKIP_INSTALLER_SMOKE ?? process.env.GSH_SKIP_INSTALLER_SMOKE) === '1') {
+  skip('BSP_SKIP_INSTALLER_SMOKE=1，已跳过安装器语法与冒烟测试')
 }
 
 const bash = findBash()
 if (!bash) {
-  skip('未找到 bash；可用 GSH_BASH=<bash 路径> 指定解释器')
+  skip('未找到 bash；可用 BSP_BASH=<bash 路径> 指定解释器')
 }
 
 console.log(`[installer-smoke] 使用 ${bash}`)

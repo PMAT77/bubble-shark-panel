@@ -1,13 +1,14 @@
+import { readBrandEnv } from '../../../../../shared/brand-env'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runSteamcmdWorkshopDownloadInContainer } from '../../container/steamcmd-runner'
 import { resolveDstSteamWorkshopModDir } from './constants'
 import { resolveDstLegacyModDir, resolveDstUgcModDir } from './ugc-mod-install'
 
-const DEFAULT_WORKSHOP_DOWNLOAD_TIMEOUT_MS = readPositiveIntEnv('GSH_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS', 10 * 60 * 1000)
+const DEFAULT_WORKSHOP_DOWNLOAD_TIMEOUT_MS = readPositiveIntEnv('BSP_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS', 10 * 60 * 1000)
 
 function readPositiveIntEnv(key: string, fallback: number): number {
-  const rawValue = process.env[key]
+  const rawValue = readBrandEnv(key)
   if (!rawValue) {
     return fallback
   }

@@ -15,7 +15,7 @@ describe('diagnoseDstInstallReadiness', () => {
   })
 
   function makeTempInstallDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-install-ready-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-install-ready-'))
     tempDirs.push(dir)
     return dir
   }

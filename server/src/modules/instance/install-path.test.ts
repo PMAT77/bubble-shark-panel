@@ -10,14 +10,14 @@ describe('prepareInstallPathForSteamcmd', () => {
     if (process.platform === 'win32') {
       return
     }
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-install-path-'))
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-install-path-'))
     // 非 root（如 CI runner）无法 chown 到 SteamCMD 容器用户 1000:1000：
     // chown 到当前用户保持同一代码路径，仅目标属主自适配
     if (typeof process.getuid === 'function' && typeof process.getgid === 'function' && process.getuid() !== 0) {
-      process.env.GSH_STEAMCMD_RUN_USER = `${process.getuid()}:${process.getgid()}`
+      process.env.BSP_STEAMCMD_RUN_USER = `${process.getuid()}:${process.getgid()}`
     }
     // instancesRoot 默认 /var/lib/...，CI 无写权限；统一指向临时目录避免污染真实路径
-    process.env.GSH_INSTANCES_ROOT = path.join(root, 'instances-root')
+    process.env.BSP_INSTANCES_ROOT = path.join(root, 'instances-root')
     try {
       const installPath = path.join(root, 'instance-a')
       const binDir = path.join(installPath, 'bin64')
@@ -31,8 +31,8 @@ describe('prepareInstallPathForSteamcmd', () => {
       assert.equal(fs.statSync(binaryPath).mode & 0o111, 0o111)
     }
     finally {
-      delete process.env.GSH_STEAMCMD_RUN_USER
-      delete process.env.GSH_INSTANCES_ROOT
+      delete process.env.BSP_STEAMCMD_RUN_USER
+      delete process.env.BSP_INSTANCES_ROOT
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
@@ -41,11 +41,11 @@ describe('prepareInstallPathForSteamcmd', () => {
     if (process.platform === 'win32') {
       return
     }
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-install-path-resume-'))
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-install-path-resume-'))
     if (typeof process.getuid === 'function' && typeof process.getgid === 'function' && process.getuid() !== 0) {
-      process.env.GSH_STEAMCMD_RUN_USER = `${process.getuid()}:${process.getgid()}`
+      process.env.BSP_STEAMCMD_RUN_USER = `${process.getuid()}:${process.getgid()}`
     }
-    process.env.GSH_INSTANCES_ROOT = path.join(root, 'instances-root')
+    process.env.BSP_INSTANCES_ROOT = path.join(root, 'instances-root')
     try {
       const installPath = path.join(root, 'instance-resume')
       const downloadingDir = path.join(installPath, 'steamapps', 'downloading', '343050')
@@ -57,8 +57,8 @@ describe('prepareInstallPathForSteamcmd', () => {
       assert.ok(fs.existsSync(path.join(downloadingDir, 'chunk.tmp')), 'downloading cache must survive install preparation')
     }
     finally {
-      delete process.env.GSH_STEAMCMD_RUN_USER
-      delete process.env.GSH_INSTANCES_ROOT
+      delete process.env.BSP_STEAMCMD_RUN_USER
+      delete process.env.BSP_INSTANCES_ROOT
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
@@ -69,7 +69,7 @@ describe('prepareInstallPathForRuntime', () => {
     if (process.platform === 'win32') {
       return
     }
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-runtime-path-'))
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-runtime-path-'))
     const installPath = path.join(root, 'instance-b')
     const binDir = path.join(installPath, 'bin64')
     fs.mkdirSync(binDir, { recursive: true })

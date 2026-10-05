@@ -253,7 +253,7 @@ async function finalizeSuccessfulInstall(
   let runtimeImageResult: Awaited<ReturnType<typeof ensureGameRuntimeImageReady>> | undefined
   if (startScriptResult.ok) {
     if (shouldDeferDstImagePullOnInstall()) {
-      logWriter.appendLine('DST 运行镜像将在首次启动实例时拉取（GSH_INSTALL_DEFER_DST_IMAGE_PULL 默认开启）')
+      logWriter.appendLine('DST 运行镜像将在首次启动实例时拉取（BSP_INSTALL_DEFER_DST_IMAGE_PULL 默认开启）')
     }
     else {
       logWriter.appendLine('正在准备游戏运行环境镜像（首次可能需数分钟）…')
@@ -360,7 +360,7 @@ async function runInstallPipeline(
 
   logWriter.appendLine(
     getServerContainerConfig().runtimeMode === 'native'
-      ? '安装任务启动（SteamCMD 将以 gsh 用户直接运行）'
+      ? '安装任务启动（SteamCMD 将以 bsp 用户直接运行）'
       : '安装任务启动（已调整安装目录为 SteamCMD 容器用户可写）',
   )
   await logInstallResourcePhase(logWriter, input.instanceId, 'install_pipeline_start')

@@ -38,7 +38,7 @@ interface ApiEnvelope<T> {
   data: T
 }
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-instance-authorize-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-instance-authorize-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 const INSTANCE_A = 'instance-a'

@@ -370,7 +370,7 @@ export function removeDstLegacyModLinks(installPath: string, workshopIds: string
 }
 
 /** 复制退化时写入目标目录的标记：证明这个目录是面板生成的，可安全重建与删除 */
-const LEGACY_COPY_MARKER = '.gsh-legacy-copy.json'
+const LEGACY_COPY_MARKER = '.bsp-legacy-copy.json'
 
 interface LegacyCopyRecord {
   /** 源目录（ugc_mods 里的落位结果）绝对路径 */

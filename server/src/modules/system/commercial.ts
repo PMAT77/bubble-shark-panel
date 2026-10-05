@@ -1,7 +1,7 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import type { FastifyInstance } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import type { CommercialSupport } from '../../../../shared/contracts/commercial'
-import process from 'node:process'
 import { loadServerConfig } from '../../shared/config'
 import { readLicenseState } from '../../shared/license'
 import { success } from '../../shared/http/response'
@@ -73,20 +73,20 @@ const DEFAULT_CONTACT: CommercialSupportOptions = {
   qqGroup: '1055694763',
   // 默认不给外链：面板里没有下单与支付，默认行为就是给出人工渠道
   feishu: '',
-  repository: 'https://github.com/PMAT77/game-serve-hub',
+  repository: 'https://github.com/PMAT77/bubble-shark-panel',
 }
 
 /**
  * 联系方式直接读环境变量而不是进 panel.env.example：这三项是可选覆盖，
  * 不写也不影响任何功能，没必要为它们增加一份用户需要理解的配置项
- * （新增 GSH_* 变量会牵动面板配置预设一致性检查的使用面）。
+ * （新增 BSP_* 变量会牵动面板配置预设一致性检查的使用面）。
  */
 function resolveContact(): CommercialSupportOptions {
   return {
-    wechat: process.env.GSH_COMMERCIAL_WECHAT?.trim() || DEFAULT_CONTACT.wechat,
-    qqGroup: process.env.GSH_COMMERCIAL_QQ_GROUP?.trim() || DEFAULT_CONTACT.qqGroup,
-    feishu: process.env.GSH_COMMERCIAL_FEISHU?.trim() || DEFAULT_CONTACT.feishu,
-    repository: process.env.GSH_COMMERCIAL_REPOSITORY?.trim() || DEFAULT_CONTACT.repository,
+    wechat: readBrandEnv('BSP_COMMERCIAL_WECHAT')?.trim() || DEFAULT_CONTACT.wechat,
+    qqGroup: readBrandEnv('BSP_COMMERCIAL_QQ_GROUP')?.trim() || DEFAULT_CONTACT.qqGroup,
+    feishu: readBrandEnv('BSP_COMMERCIAL_FEISHU')?.trim() || DEFAULT_CONTACT.feishu,
+    repository: readBrandEnv('BSP_COMMERCIAL_REPOSITORY')?.trim() || DEFAULT_CONTACT.repository,
   }
 }
 

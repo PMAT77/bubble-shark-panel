@@ -1,7 +1,7 @@
+import { readBrandEnv } from '../../../shared/brand-env'
 import type { PluginListItem, PluginListResult, PluginState } from '../../../shared/contracts/plugin'
 import fs from 'node:fs'
 import path from 'node:path'
-import process from 'node:process'
 import { PLUGIN_HOST_API_VERSION } from '../../../shared/contracts/plugin'
 import { loadServerConfig } from '../shared/config'
 import { readLicenseState } from '../shared/license'
@@ -35,7 +35,7 @@ interface PluginsStateFile {
 const EMPTY_STATE: PluginsStateFile = { version: 1, enabled: [] }
 
 export function resolvePluginsRoot(): string {
-  const configured = process.env.GSH_PLUGINS_ROOT?.trim()
+  const configured = readBrandEnv('BSP_PLUGINS_ROOT')?.trim()
   if (configured) {
     return path.resolve(configured)
   }

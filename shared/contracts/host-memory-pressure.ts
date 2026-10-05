@@ -14,7 +14,7 @@ export interface HostMemoryPressureData {
   /**
    * swap 总量（MiB）；0 = 系统没有 swap，null = 读不到 /proc/meminfo。
    *
-   * 「未配置」与「配置了但用满」必须分开：前者执行 `gsh setup-swap` 有用，
+   * 「未配置」与「配置了但用满」必须分开：前者执行 `bsp setup-swap` 有用，
    * 后者会被它直接跳过（检测到已有 swap 就不动），照做一遍只会白跑。
    */
   swapTotalMb: number | null

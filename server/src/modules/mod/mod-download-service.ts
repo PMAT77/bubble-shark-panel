@@ -1,3 +1,4 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import { assertInstanceContentAvailable, beginInstanceContentActivity } from '../../shared/instance-content/operation'
 import type {
   ModDownloadQueueDto,
@@ -112,7 +113,7 @@ const modInstallJobsInFlight = new Map<string, Promise<void>>()
 const queueStates = new Map<string, InstanceQueueState>()
 
 /** 单批上限：一次 SteamCMD 调用最多处理几个 Mod（默认 5，最大 10） */
-const MOD_DOWNLOAD_BATCH_SIZE_ENV = 'GSH_MOD_DOWNLOAD_COALESCE_LIMIT'
+const MOD_DOWNLOAD_BATCH_SIZE_ENV = 'BSP_MOD_DOWNLOAD_COALESCE_LIMIT'
 const MOD_DOWNLOAD_BATCH_SIZE_DEFAULT = 5
 const MOD_DOWNLOAD_BATCH_SIZE_MAX = 10
 
@@ -142,7 +143,7 @@ let updateInstanceModByWorkshopIdFn: UpdateInstanceModByWorkshopIdFn = updateIns
 let fetchWorkshopModMetadataFn: FetchWorkshopModMetadataFn = fetchWorkshopModMetadata
 
 function readPositiveIntEnv(key: string, fallback: number): number {
-  const rawValue = process.env[key]
+  const rawValue = readBrandEnv(key)
   if (!rawValue) {
     return fallback
   }
@@ -165,7 +166,7 @@ function resolveModDownloadBatchSize(): number {
  * 期间面板的其它下载/安装都得排队。用户显式点「开始下载」才跑。
  */
 export function isModDownloadAutoStartEnabled(): boolean {
-  return readPositiveIntEnv('GSH_MOD_DOWNLOAD_AUTO_START', 0) === 1
+  return readPositiveIntEnv('BSP_MOD_DOWNLOAD_AUTO_START', 0) === 1
 }
 
 function sleep(ms: number): Promise<void> {

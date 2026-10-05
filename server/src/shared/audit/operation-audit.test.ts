@@ -23,8 +23,8 @@ import { summarizeAuditParams } from '../http/audit-params'
  *   3. **参数必须脱敏**——审计文件会被打包反馈、贴进群里、交给客户或审计方。
  */
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsh-operation-audit-'))
-process.env.GSH_OPERATION_AUDIT_ROOT = workDir
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-operation-audit-'))
+process.env.BSP_OPERATION_AUDIT_ROOT = workDir
 
 function resetAuditFile(): void {
   fs.rmSync(path.join(workDir, 'operations.ndjson'), { force: true })

@@ -1,8 +1,8 @@
+import { readBrandEnv } from '../../../../shared/brand-env'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import process from 'node:process'
 
 /**
  * 机器指纹：用来把一份授权绑定到一台机器（可选功能）。
@@ -57,12 +57,12 @@ export interface FingerprintSourceOptions {
 /**
  * 计算当前机器的指纹。
  *
- * 优先级：显式配置（`GSH_LICENSE_FINGERPRINT`，用于客户自己管理的绑定标识）→
+ * 优先级：显式配置（`BSP_LICENSE_FINGERPRINT`，用于客户自己管理的绑定标识）→
  * `/etc/machine-id`（Linux 标准，重装系统才会变）→ 数据目录标识文件。
  * 三者都拿不到时返回 null：此时指纹绑定类授权一律判为不匹配，而不是"随便放过"。
  */
 export function resolveMachineFingerprint(options: FingerprintSourceOptions = {}): string | null {
-  const explicit = process.env.GSH_LICENSE_FINGERPRINT?.trim()
+  const explicit = readBrandEnv('BSP_LICENSE_FINGERPRINT')?.trim()
   if (explicit) {
     return explicit
   }

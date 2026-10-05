@@ -31,7 +31,7 @@ const slugify = heading => heading.trim().replace(/`/g, '').toLowerCase().replac
  */
 /** 执行一次 git 并把输出写入临时文件：不接 stdout 管道，与仓库其它脚本保持同一执行方式 */
 function runGitToFile(args) {
-  const listPath = path.join(os.tmpdir(), `gsh-docs-git-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const listPath = path.join(os.tmpdir(), `bsp-docs-git-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   const fd = fs.openSync(listPath, 'w')
   return new Promise((resolve) => {
     const cleanup = () => {

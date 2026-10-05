@@ -100,7 +100,7 @@ export async function bootstrap() {
      * 游客（只读预览）账号：只有开关真的生效时才预置。
      *
      * `config.guestLoginEnabled` 是组合判定的结果（显式开开关 + Native + production），
-     * 因此 Docker 部署即使把 GSH_GUEST_LOGIN_ENABLED 设成 1 也不会在这里建出账号——
+     * 因此 Docker 部署即使把 BSP_GUEST_LOGIN_ENABLED 设成 1 也不会在这里建出账号——
      * 原因写在下面的告警里，不然表现只是"登录页没有游客按钮"。
      */
     guestAccount: {
@@ -112,14 +112,14 @@ export async function bootstrap() {
         /**
          * 开关开着、却没能准备好账号——这条必须在日志里说得足够清楚。
          *
-         * 最可能的成因是**账号名被别的账号占着**（例如 `GSH_GUEST_LOGIN_ACCOUNT=guest`
+         * 最可能的成因是**账号名被别的账号占着**（例如 `BSP_GUEST_LOGIN_ACCOUNT=guest`
          * 而库里已经有一个叫 `guest` 的运维账号）。此时面板不会去改写那个账号，
          * 于是登录页会出现按钮、点了却提示"游客预览当前不可用"。不说明的话，
          * 部署者只能去翻源码才知道要改的是哪个变量。
          */
         app.log.warn(
           `游客预览账号「${outcome.account}」未能就绪：这个账号名已被另一个非游客角色的账号占用（面板不会改写别人的账号）。`
-          + '请改 GSH_GUEST_LOGIN_ACCOUNT 指向一个没被占用的名字，或先把那个账号改成游客角色，然后重启面板。',
+          + '请改 BSP_GUEST_LOGIN_ACCOUNT 指向一个没被占用的名字，或先把那个账号改成游客角色，然后重启面板。',
         )
         return
       }
@@ -139,11 +139,11 @@ export async function bootstrap() {
       )
     }
     else {
-      // 管理员已存在且未开启 GSH_SYNC_ADMIN_PASSWORD_FROM_ENV 时，本次随机密码并没有写进数据库。
+      // 管理员已存在且未开启 BSP_SYNC_ADMIN_PASSWORD_FROM_ENV 时，本次随机密码并没有写进数据库。
       // 此时若照旧落盘，用户会拿到一个永远登录不上的密码，而且每次启动都会被新的随机值覆盖；
       // 已有的凭据文件保持原样 —— 它记录的是首次创建管理员时的初始密码，仍可能是用户唯一的一手记录。
       app.log.warn(
-        `生产环境未配置 ADMIN_PASSWORD，但管理员「${config.adminUsername}」已存在于数据库且未开启 GSH_SYNC_ADMIN_PASSWORD_FROM_ENV，本次自动生成的随机密码未写入数据库，已忽略（不会覆盖初始凭据文件）。如需用环境变量中的密码覆盖数据库密码，请设置 GSH_SYNC_ADMIN_PASSWORD_FROM_ENV=1 后重启面板。`,
+        `生产环境未配置 ADMIN_PASSWORD，但管理员「${config.adminUsername}」已存在于数据库且未开启 BSP_SYNC_ADMIN_PASSWORD_FROM_ENV，本次自动生成的随机密码未写入数据库，已忽略（不会覆盖初始凭据文件）。如需用环境变量中的密码覆盖数据库密码，请设置 BSP_SYNC_ADMIN_PASSWORD_FROM_ENV=1 后重启面板。`,
       )
     }
   }

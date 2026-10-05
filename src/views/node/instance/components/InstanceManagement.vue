@@ -150,10 +150,10 @@ const installNotifyPendingIds = new Set<string>()
 const INSTANCE_TABLE_SCROLL_X = computed(() => (isMobileMode.value ? 1170 : 1240))
 const INSTANCE_INSTALL_POLL_MS = 2000
 /** 用户手动关闭通知后记录签名，避免同一批更新反复弹出 */
-const UPDATE_NOTIFY_DISMISSED_KEY = 'gsh-instance-update-dismissed'
+const UPDATE_NOTIFY_DISMISSED_KEY = 'bsp-instance-update-dismissed'
 /** 记录手动关闭通知，跨会话生效（localStorage） */
 /** @deprecated 旧版在弹出 toast 时即写入，会阻止通知显示，挂载时清理 */
-const UPDATE_NOTIFY_STORAGE_KEY_LEGACY = 'gsh-instance-update-notified'
+const UPDATE_NOTIFY_STORAGE_KEY_LEGACY = 'bsp-instance-update-notified'
 
 /** 统计卡：key 对应 statusCounts 字段与状态筛选值，点击即筛选 */
 const STAT_CARDS = [

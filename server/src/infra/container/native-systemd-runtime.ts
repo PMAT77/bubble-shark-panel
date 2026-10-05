@@ -1,3 +1,4 @@
+import { shardNameCandidates } from './naming'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -128,7 +129,7 @@ export function readFileTailLines(filePath: string, maxLines: number): string[] 
  *
  * 两个 DST 分片各占满一个核时，2 核机上一个核都不剩，面板和 sshd 会一起饿死
  * （线上实测面板出现 69 秒完全无日志的静默期）。这里按「整机核数 − 预留」均分给
- * 两个分片，保证面板始终有一小片 CPU；用户显式设了 GSH_DST_CONTAINER_CPU_QUOTA
+ * 两个分片，保证面板始终有一小片 CPU；用户显式设了 BSP_DST_CONTAINER_CPU_QUOTA
  * 时以用户配置为准。
  */
 export function resolveShardCpuQuotaPercent(cpuCount = os.cpus().length): number | undefined {
@@ -364,7 +365,7 @@ export function buildNativeSystemdUnit(
    * 由面板如实报告失败原因。用户手动启动前会先 reset-failed，正常重启不会撞上限。
    */
   return `[Unit]
-Description=Game Server Hub ${escapeSpecifiers(spec.instanceId)} ${spec.shard}
+Description=BubbleSharkPanel ${escapeSpecifiers(spec.instanceId)} ${spec.shard}
 StartLimitIntervalSec=${NATIVE_UNIT_START_LIMIT_INTERVAL_SEC}
 StartLimitBurst=${NATIVE_UNIT_START_LIMIT_BURST}
 
@@ -486,6 +487,8 @@ export class NativeSystemdRuntime implements ContainerRuntime {
 
   async createShardContainer(spec: ShardContainerSpec): Promise<ContainerRef> {
     assertSafeServiceName(spec.name)
+    const existing = await this.findByName(spec.name)
+    if (existing) spec = { ...spec, name: existing.name }
     if (!path.isAbsolute(spec.cmd[0] ?? '')) {
       throw new Error('Native 游戏可执行文件必须使用绝对路径')
     }
@@ -587,7 +590,7 @@ export class NativeSystemdRuntime implements ContainerRuntime {
   /**
    * 分片日志读取。
    *
-   * 原先走 `journalctl --user-unit`：面板以 gsh 用户跑在系统服务里、不在 systemd-journal
+   * 原先走 `journalctl --user-unit`：面板以 bsp 用户跑在系统服务里、不在 systemd-journal
    * 组内，线上必然报 `No journal files were opened due to insufficient permissions`，
    * 控制台一条游戏输出都看不到，排查只能靠 SSH。改为让 systemd 直接追加到分片日志文件后，
    * 面板自己就能读，且日志跨重启累积，上一轮崩溃的现场不会再被覆盖。
@@ -731,6 +734,7 @@ export class NativeSystemdRuntime implements ContainerRuntime {
 
   async findByName(name: string): Promise<ContainerRef | undefined> {
     assertSafeServiceName(name)
+    name = shardNameCandidates(name).find(candidate => fs.existsSync(this.servicePaths(candidate).unitPath)) ?? name
     const paths = this.servicePaths(name)
     if (!fs.existsSync(paths.unitPath)) {
       return undefined

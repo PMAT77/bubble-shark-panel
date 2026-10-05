@@ -5,7 +5,7 @@ export default defineConfig({
   out: './server/drizzle',
   dialect: 'sqlite',
   dbCredentials: {
-    url: 'file:./server/data/game-server-hub.sqlite',
+    url: 'file:./server/data/bubblesharkpanel.sqlite',
   },
   strict: true,
   verbose: true,

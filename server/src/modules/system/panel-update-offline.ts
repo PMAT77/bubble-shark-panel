@@ -1,3 +1,4 @@
+import { releaseBrandName } from '../../../../shared/release-brand'
 import type DockerClient from 'dockerode'
 import type { Hash } from 'node:crypto'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
@@ -12,7 +13,7 @@ import { createGunzip } from 'node:zlib'
  * Release 离线镜像包的下载与导入。
  *
  * 面板内更新默认走这条路：GHCR 的镜像层域名在国内基本不可达，而 Release 资产
- * （`game-server-hub-<tag>-docker-image.tar.gz`）可以走同一套 GitHub 加速代理，
+ * （`bubblesharkpanel-<tag>-docker-image.tar.gz`）可以走同一套 GitHub 加速代理，
  * 且 HTTP 带 Content-Length，能直接给出准确的「已下载 X / Y」。
  *
  * 下载写入 `<name>.tar.gz.part`，校验通过后才改名为最终文件：中断或换来源都不会
@@ -34,12 +35,12 @@ const PROBE_TIMEOUT_MS = 15_000
 const DISK_SPACE_MARGIN = 1.15
 
 export function buildOfflineArchiveName(releaseTag: string): string {
-  return `game-server-hub-${releaseTag}-docker-image.tar.gz`
+  return `${releaseBrandName(releaseTag)}-${releaseTag}-docker-image.tar.gz`
 }
 
 /**
  * 候选下载地址：加速代理前缀 → 直连。
- * GSH_GITHUB_PROXY 设置时只用该代理 + 直连，与安装脚本的行为一致。
+ * BSP_GITHUB_PROXY 设置时只用该代理 + 直连，与安装脚本的行为一致。
  */
 export function buildOfflineArchiveUrls(input: {
   githubRepo: string

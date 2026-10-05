@@ -9,13 +9,13 @@ describe('buildDstLaunchArgs', () => {
      * 少了这个参数，Mod 一多就会把 CPU、带宽与磁盘占满，小机器陷入
      * 「启动 → 超时 → 崩溃 → 重启」的循环，玩家始终连不上。
      */
-    assert.ok(buildDstLaunchArgs('/srv/gsh/instance-1').includes('-skip_update_server_mods'))
+    assert.ok(buildDstLaunchArgs('/srv/bsp/instance-1').includes('-skip_update_server_mods'))
   })
 
   it('points the shard at its cluster and opens the console', () => {
-    assert.deepEqual(buildDstLaunchArgs('/srv/gsh/instance-1', 'Caves'), [
+    assert.deepEqual(buildDstLaunchArgs('/srv/bsp/instance-1', 'Caves'), [
       '-persistent_storage_root',
-      '/srv/gsh/instance-1',
+      '/srv/bsp/instance-1',
       '-conf_dir',
       'DoNotStarveTogether',
       '-cluster',
@@ -28,7 +28,7 @@ describe('buildDstLaunchArgs', () => {
   })
 
   it('defaults to the master shard', () => {
-    const args = buildDstLaunchArgs('/srv/gsh/instance-1')
+    const args = buildDstLaunchArgs('/srv/bsp/instance-1')
     const shardIndex = args.indexOf('-shard')
     assert.equal(args[shardIndex + 1], 'Master')
   })

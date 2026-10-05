@@ -36,7 +36,7 @@ interface MenuModule {
   children?: MenuModule[]
 }
 
-const dbFilePath = path.join(os.tmpdir(), `gsh-route-list-test-${randomUUID()}.sqlite`)
+const dbFilePath = path.join(os.tmpdir(), `bsp-route-list-test-${randomUUID()}.sqlite`)
 const migrationsFolder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../drizzle')
 
 let app: FastifyInstance

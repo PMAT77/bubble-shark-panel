@@ -4,13 +4,13 @@ import { buildRegistryManifestUrl, normalizeDigest, parseImageRef, shortDigest }
 
 describe('image-ref', () => {
   it('parses ghcr image with tag', () => {
-    const parsed = parseImageRef('ghcr.io/pmat77/game-server-hub:latest')
+    const parsed = parseImageRef('ghcr.io/pmat77/bubblesharkpanel:latest')
     assert.equal(parsed.registry, 'ghcr.io')
-    assert.equal(parsed.repository, 'pmat77/game-server-hub')
+    assert.equal(parsed.repository, 'pmat77/bubblesharkpanel')
     assert.equal(parsed.tag, 'latest')
     assert.equal(
       buildRegistryManifestUrl(parsed),
-      'https://ghcr.io/v2/pmat77/game-server-hub/manifests/latest',
+      'https://ghcr.io/v2/pmat77/bubblesharkpanel/manifests/latest',
     )
   })
 

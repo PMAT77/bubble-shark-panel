@@ -14,12 +14,12 @@ const outputRoot = outputFlagIndex >= 0 && process.argv[outputFlagIndex + 1]
       repoRoot,
       '.artifacts',
       'native',
-      `game-server-hub-native-v${version}-linux-x64`,
+      `bubblesharkpanel-native-v${version}-linux-x64`,
     )
 
 function assertSafeOutputDir(target) {
   const parsed = path.parse(target)
-  if (!parsed.base.startsWith('game-server-hub-native-')) {
+  if (!parsed.base.startsWith('bubblesharkpanel-native-')) {
     throw new Error(`Refusing unsafe native release output directory: ${target}`)
   }
   if (!parsed.dir || parsed.dir === parsed.root || target === repoRoot) {
@@ -91,6 +91,7 @@ if [[ -x "\${bundled_node}" ]]; then
 fi
 exec node "\${release_root}/server/dist/main.mjs"
 `
+fs.writeFileSync(path.join(binDir, 'bubblesharkpanel'), launcher, { encoding: 'utf8', mode: 0o755 })
 fs.writeFileSync(path.join(binDir, 'game-server-hub'), launcher, { encoding: 'utf8', mode: 0o755 })
 
 if (includeNode) {
@@ -111,7 +112,7 @@ fs.writeFileSync(
     arch: 'x64',
     nodeVersion: process.version,
     bundledNode: includeNode,
-    entrypoint: 'bin/game-server-hub',
+    entrypoint: 'bin/bubblesharkpanel',
   }, null, 2)}\n`,
   'utf8',
 )

@@ -108,7 +108,7 @@ export default {
   getImportLimits: (instanceId: string) => api.get(`app/instances/${instanceId}/mods/import/limits`) as Promise<{ data: { maxArchiveBytes: number } }>,
   inspectImport: (instanceId: string, file: File, signal: AbortSignal, progress: (percent: number) => void) => api.post(`app/instances/${instanceId}/mods/import/inspect`, file, {
     params: { fileName: file.name },
-    headers: { 'Content-Type': 'application/x-gsh-mod-archive' },
+    headers: { 'Content-Type': 'application/x-bsp-mod-archive' },
     signal,
     timeout: 0,
     onUploadProgress: event => progress(Math.min(100, Math.round(event.loaded / (event.total || file.size) * 100))),

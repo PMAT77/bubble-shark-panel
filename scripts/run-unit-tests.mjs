@@ -1,4 +1,4 @@
-process.env.GSH_UNIT_TEST = '1'
+process.env.BSP_UNIT_TEST = '1'
 
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'

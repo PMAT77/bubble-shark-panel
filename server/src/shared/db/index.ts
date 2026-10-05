@@ -512,7 +512,7 @@ function normalizeSteamcmdConfig(raw: unknown): DbSystemSteamcmdConfig {
     steamcmdPath: process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd',
     installRoot: process.platform === 'win32'
       ? path.resolve(process.cwd(), 'data', 'instances')
-      : '/var/lib/game-server-hub/instances',
+      : '/var/lib/bubblesharkpanel/instances',
   }
   if (!raw || typeof raw !== 'object') {
     return defaultConfig

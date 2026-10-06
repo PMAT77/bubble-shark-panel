@@ -231,8 +231,8 @@ describe('backup service', () => {
       hotSaveDelayMs: 0,
     })
     assert.equal(first.ok, true)
-    // 文件名时间戳精确到秒：跨秒创建，避免同名覆盖
-    await sleep(1100)
+    // 拉开创建时间，明确验证旧记录的淘汰顺序
+    await sleep(5)
     const second = await createInstanceBackup({
       instanceId: instance.id,
       kind: 'manual',
@@ -240,7 +240,7 @@ describe('backup service', () => {
       hotSaveDelayMs: 0,
     })
     assert.equal(second.ok, true)
-    await sleep(1100)
+    await sleep(5)
     const third = await createInstanceBackup({
       instanceId: instance.id,
       kind: 'manual',
@@ -255,4 +255,39 @@ describe('backup service', () => {
     assert.ok(await getBackupById(second.backup!.id))
     assert.ok(await getBackupById(third.backup!.id))
   })
+})
+
+it('keeps same-second backups distinct and the newest archive restorable with retention one', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 10000 })
+  await saveSystemBackupSettings({ perInstanceRetention: 1 })
+  t.after(async () => { await saveSystemBackupSettings({ perInstanceRetention: 20 }) })
+  const first = await createInstanceBackup({ instanceId: instance.id, kind: 'manual', saveBeforeArchive: false })
+  const second = await createInstanceBackup({ instanceId: instance.id, kind: 'manual', saveBeforeArchive: false })
+  assert.ok(first.backup)
+  assert.ok(second.backup)
+  assert.notEqual(first.backup.filePath, second.backup.filePath)
+  assert.equal(fs.existsSync(first.backup.filePath), false)
+  assert.ok(fs.readFileSync(second.backup.filePath).length > 0)
+  const restored = await restoreInstanceBackup({ app: { log: { info() {}, warn() {}, error() {} } } as never, backupId: second.backup.id })
+  assert.equal(restored.ok, true, restored.message)
+})
+
+it('removes the partial archive when the packer fails', async (t) => {
+  const childProcess = (await import('node:child_process')).default
+  const { EventEmitter } = await import('node:events')
+  const { syncBuiltinESMExports } = await import('node:module')
+  let target = ''
+  t.mock.method(childProcess, 'spawn', (_command: string, args: string[]) => {
+    target = args[1]
+    fs.writeFileSync(target, 'partial')
+    const child = new EventEmitter()
+    queueMicrotask(() => child.emit('close', 1))
+    return child
+  })
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  const result = await createInstanceBackup({ instanceId: instance.id, saveBeforeArchive: false })
+  assert.equal(result.ok, false)
+  assert.ok(target.endsWith('.tar.gz'))
+  assert.equal(fs.existsSync(target), false)
 })

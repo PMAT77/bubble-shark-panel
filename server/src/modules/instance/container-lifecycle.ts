@@ -342,7 +342,8 @@ export async function inspectInstanceShardRuntime(
     return { unitExists: false, snapshot: null }
   }
   try {
-    return { unitExists: true, snapshot: await getContainerRuntime().inspect(ref) }
+    const snapshot = await getContainerRuntime().inspect(ref)
+    return { unitExists: true, snapshot: snapshot.probeFailed ? null : snapshot }
   }
   catch {
     return { unitExists: true, snapshot: null }

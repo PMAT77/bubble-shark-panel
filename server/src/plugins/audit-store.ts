@@ -41,6 +41,13 @@ function auditFilePath(pluginId: string): string {
  * 重启后从头开始没关系——审计是追加文件，`at` + `id` 足以表达先后。
  */
 let sequence = 0
+const fileCounts = new Map<string, { count: number, size: number, ino: number, mtimeMs: number }>()
+function countAuditLines(filePath: string) {
+  const stat = fs.statSync(filePath, { throwIfNoEntry: false })
+  const cached = fileCounts.get(filePath)
+  if (stat && cached && stat.ino === cached.ino && stat.size === cached.size && stat.mtimeMs === cached.mtimeMs) return cached.count
+  return stat ? fs.readFileSync(filePath, 'utf8').split('\n').filter(line => line.trim()).length : 0
+}
 
 /** 追加一条审计记录；任何写盘异常都只告警不影响调用方 */
 export function appendPluginAudit(input: {
@@ -68,8 +75,11 @@ export function appendPluginAudit(input: {
   try {
     const filePath = auditFilePath(input.pluginId)
     fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    const count = countAuditLines(filePath) + 1
     fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, 'utf8')
-    enforceRetention(filePath)
+    const retained = count > MAX_RECORDS_PER_PLUGIN ? enforceRetention(filePath) : count
+    const stat = fs.statSync(filePath)
+    fileCounts.set(filePath, { count: retained, size: stat.size, ino: stat.ino, mtimeMs: stat.mtimeMs })
   }
   catch (error) {
     input.onError?.(error instanceof Error ? error : new Error(String(error)))
@@ -78,19 +88,15 @@ export function appendPluginAudit(input: {
 }
 
 /** 超过上限时保留最新的一半：审计是「最近发生了什么」，不是永久档案 */
-function enforceRetention(filePath: string): void {
-  try {
-    const content = fs.readFileSync(filePath, 'utf8')
-    const lines = content.split('\n').filter(line => line.trim().length > 0)
-    if (lines.length <= MAX_RECORDS_PER_PLUGIN) {
-      return
-    }
-    const kept = lines.slice(Math.floor(lines.length / 2))
-    fs.writeFileSync(filePath, `${kept.join('\n')}\n`, 'utf8')
+function enforceRetention(filePath: string): number {
+  const content = fs.readFileSync(filePath, 'utf8')
+  const lines = content.split('\n').filter(line => line.trim().length > 0)
+  if (lines.length <= MAX_RECORDS_PER_PLUGIN) {
+    return lines.length
   }
-  catch {
-    // 保留策略失败不影响审计写入本身
-  }
+  const kept = lines.slice(Math.floor(lines.length / 2))
+  fs.writeFileSync(filePath, `${kept.join('\n')}\n`, 'utf8')
+  return kept.length
 }
 
 /** 读取审计记录（最近的在前）；pluginId 缺省时读取全部插件 */

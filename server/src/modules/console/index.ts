@@ -34,6 +34,7 @@ import { sendFileDownload } from '../../shared/http/file-download'
 import { businessError, success } from '../../shared/http/response'
 import { authorizeInstance } from '../system/auth'
 import { consoleStreamTicketStore } from './stream-ticket'
+import { createConsoleStreamSession } from './stream-session'
 
 const LOCAL_NODE_ID = 'local-node'
 
@@ -56,11 +57,6 @@ async function resolveLocalInstance(
     return { ok: false, error: businessError('当前仅支持本地节点实例控制台', request) }
   }
   return { ok: true, instance }
-}
-
-function writeSse(reply: FastifyReply, event: string, data: unknown) {
-  reply.raw.write(`event: ${event}\n`)
-  reply.raw.write(`data: ${JSON.stringify(data)}\n\n`)
 }
 
 function filterConsoleLines(lines: ConsoleLogLine[], filter: InstanceConsoleLogFilter): ConsoleLogLine[] {
@@ -295,67 +291,44 @@ export function registerConsoleModule(app: FastifyInstance) {
       return
     }
 
-    /**
-     * 从这里开始"名额已占用"，**每条出口都必须释放**。
-     *
-     * 下面所有提前 return 与异常都走 `releaseStream()`；正式建立流之后交给
-     * `request.raw` 的 `close` 事件释放。少释放一次的后果不是"少一条日志"，
-     * 而是那个账号的名额被永久占住——重启面板才能恢复。
-     */
-    let streamReleased = false
-    const releaseStream = () => {
-      if (streamReleased) {
-        return
-      }
-      streamReleased = true
-      consoleStreamTicketStore.closeStream(streamOwner)
-    }
-
-    let resolved: Awaited<ReturnType<typeof resolveLocalInstance>>
-    try {
-      resolved = await resolveLocalInstance(instanceId, request)
-    }
-    catch (error) {
-      releaseStream()
-      throw error
-    }
-    if (!resolved.ok) {
-      releaseStream()
-      reply.status(400).send(resolved.error)
+    const session = createConsoleStreamSession(reply.raw, () => consoleStreamTicketStore.closeStream(streamOwner))
+    request.raw.once('aborted', session.close)
+    session.onCleanup(() => request.raw.off('aborted', session.close))
+    if (request.raw.aborted || session.closed) {
+      session.close()
       return
     }
-
-    reply.hijack()
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-    })
-
-    const running = await isInstanceContainerRunning(instanceId)
-    writeSse(reply, 'ready', {
-      instanceId,
-      running,
-    })
-    for (const line of instanceConsoleLogStore.listLogs(instanceId)) {
-      writeSse(reply, 'log', line)
+    try {
+      const resolved = await resolveLocalInstance(instanceId, request)
+      if (session.closed) return
+      if (!resolved.ok) {
+        session.dispose()
+        reply.status(400).send(resolved.error)
+        return
+      }
+      const running = await isInstanceContainerRunning(instanceId)
+      if (session.closed) return
+      reply.hijack()
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+      })
+      const write = (event: string, data: unknown) => session.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      write('ready', { instanceId, running })
+      for (const line of instanceConsoleLogStore.listLogs(instanceId)) {
+        if (!write('log', line)) break
+      }
+      if (session.closed) return
+      session.onCleanup(instanceConsoleLogStore.subscribe(instanceId, line => { write('log', line) }))
+      const heartbeat = setInterval(() => { session.write(': heartbeat\n\n') }, 15000)
+      session.onCleanup(() => clearInterval(heartbeat))
     }
-
-    const unsubscribe = instanceConsoleLogStore.subscribe(instanceId, (line) => {
-      writeSse(reply, 'log', line)
-    })
-
-    const heartbeat = setInterval(() => {
-      reply.raw.write(': heartbeat\n\n')
-    }, 15000)
-
-    request.raw.on('close', () => {
-      clearInterval(heartbeat)
-      unsubscribe()
-      // 名额释放必须和 openStream 配对：漏掉一处，那个账号就再也开不了日志流
-      releaseStream()
-      reply.raw.end()
-    })
+    catch (error) {
+      session.dispose()
+      if (reply.raw.headersSent) reply.raw.destroy()
+      throw error
+    }
   })
 
   registerMaintenanceAnnounceRoutes(app)

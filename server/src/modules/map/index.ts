@@ -66,7 +66,13 @@ function createMapService(): MapService {
   })
 }
 
-export function registerMapModule(app: FastifyInstance) {
+export function registerMapModule(app: FastifyInstance, deps: {
+  createService?: () => MapService
+  isShardRunning?: typeof isShardRunning
+  ensureRuntimeReady?: typeof ensureContainerRuntimeReady
+} = {}) {
+  let service: MapService | undefined
+  const getService = () => service ??= (deps.createService ?? createMapService)()
   app.get('/app/instance/map', async (request): Promise<ApiSuccessResponse<MapDto> | ApiErrorResponse> => {
     const query = mapQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
@@ -80,8 +86,7 @@ export function registerMapModule(app: FastifyInstance) {
     if (!resolved.ok) {
       return resolved.error
     }
-    const service = createMapService()
-    return success(service.getState(query.data.instanceId, query.data.shard), request)
+    return success(getService().getState(query.data.instanceId, query.data.shard), request)
   })
 
   app.post('/app/instance/map/refresh', async (request): Promise<ApiSuccessResponse<MapDto> | ApiErrorResponse> => {
@@ -112,17 +117,17 @@ export function registerMapModule(app: FastifyInstance) {
      * （这个顺序是发布当天暴露的：版本号一 bump，新 tag 在镜像仓库上还不存在，
      *   凡是先做镜像检查的路径都会先撞 404，把真正的原因盖掉。）
      */
-    if (!await isShardRunning(instanceId, shard)) {
+    if (!await (deps.isShardRunning ?? isShardRunning)(instanceId, shard)) {
       return businessError(
         shard === 'caves' ? '洞穴分片未运行，无法导出地形' : '实例未运行，无法导出地形',
         request,
       )
     }
-    const runtimeReady = await ensureContainerRuntimeReady()
+    const runtimeReady = await (deps.ensureRuntimeReady ?? ensureContainerRuntimeReady)()
     if (!runtimeReady.ok) {
       return businessError(runtimeReady.message ?? '容器运行时未就绪，无法导出地形', request)
     }
-    const service = createMapService()
+    const service = getService()
     const result = service.refresh({ instanceId, shard, force: force ?? false })
     if (!result.accepted) {
       return businessError(result.message, request)

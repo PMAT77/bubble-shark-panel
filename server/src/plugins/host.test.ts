@@ -64,6 +64,7 @@ async function main() {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ pluginId }),
   })
+  await noToken.arrayBuffer()
   fs.writeFileSync(path.join(pluginDir, 'result.json'), JSON.stringify({
     allowedStatus: allowed.status,
     instanceCount: Array.isArray(allowed.body?.data) ? allowed.body.data.length : -1,
@@ -72,12 +73,13 @@ async function main() {
     noTokenStatus: noToken.status,
     apiVersion: process.env.BSP_PLUGIN_API_VERSION ?? null,
   }), 'utf8')
-  process.exit(0)
+  // 让 HTTP 句柄正常释放；强制退出可能在 Windows 的 libuv 清理期间崩溃。
+  process.exitCode = 0
 }
 
 main().catch((error) => {
   fs.writeFileSync(path.join(pluginDir, 'result.json'), JSON.stringify({ error: String(error) }), 'utf8')
-  process.exit(1)
+  process.exitCode = 1
 })
 `
 

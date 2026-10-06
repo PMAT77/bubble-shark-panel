@@ -97,7 +97,7 @@ export async function createInstanceBackup(options: CreateInstanceBackupOptions)
  * 备份主体，不含存档文件锁。
  * 只供已经在锁内的流程调用（恢复与存档导入的安全备份）；锁不可重入，直接调外层会自锁。
  */
-export async function createInstanceBackupUnlocked(options: CreateInstanceBackupOptions): Promise<CreateInstanceBackupResult> {
+export async function createInstanceBackupUnlocked(options: CreateInstanceBackupOptions, protectedBackupId?: string): Promise<CreateInstanceBackupResult> {
   const {
     app,
     instanceId,
@@ -139,7 +139,8 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
 
   const settings = await getSystemBackupSettings()
   const backupsRoot = path.join(loadServerConfig().backupsRoot, instanceId)
-  const fileName = `${formatTimestampForFile(new Date())}-${kind}.tar.gz`
+  const backupId = newBackupId()
+  const fileName = `${formatTimestampForFile(new Date())}-${kind}-${backupId}.tar.gz`
   const targetPath = path.join(backupsRoot, fileName)
 
   try {
@@ -147,6 +148,8 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
   }
   catch (error) {
     const message = error instanceof Error ? error.message : '打包存档失败'
+    try { fs.rmSync(targetPath, { force: true }) }
+    catch (cleanupError) { app?.log.warn({ targetPath, error: cleanupError }, '清理未完成备份失败') }
     app?.log.error({ instanceId, targetPath, error: message }, '备份打包失败')
     return { ok: false, message: `备份打包失败: ${message}` }
   }
@@ -160,7 +163,7 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
   }
 
   const backup = await createBackupRecord({
-    id: newBackupId(),
+    id: backupId,
     instanceId,
     filePath: targetPath,
     sizeBytes,
@@ -171,7 +174,7 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
     createdBy,
   })
 
-  await enforceBackupRetention(app, instanceId, settings.perInstanceRetention)
+  await enforceBackupRetention(app, instanceId, settings.perInstanceRetention, [backupId, ...(protectedBackupId ? [protectedBackupId] : [])])
   return { ok: true, backup }
 }
 
@@ -180,6 +183,7 @@ async function enforceBackupRetention(
   app: FastifyInstance | undefined,
   instanceId: string,
   retention: number,
+  protectedIds: string[] = [],
 ): Promise<void> {
   if (retention <= 0) {
     return
@@ -188,7 +192,7 @@ async function enforceBackupRetention(
   if (rows.length <= retention) {
     return
   }
-  const excess = rows.slice(0, rows.length - retention)
+  const excess = rows.filter(row => !protectedIds.includes(row.id)).slice(0, rows.length - retention)
   for (const item of excess) {
     try {
       if (fs.existsSync(item.filePath)) {
@@ -273,7 +277,7 @@ async function restoreInstanceBackupLocked(
       note: `恢复 ${record.createdAt} 备份前的自动安全备份`,
       createdBy: record.createdBy,
       saveBeforeArchive: false,
-    })
+    }, record.id)
     if (!safety.ok || !safety.backup) {
       return { ok: false, message: safety.message ?? '恢复前安全备份失败，已中止恢复' }
     }
@@ -310,6 +314,8 @@ async function restoreInstanceBackupLocked(
   }
   fs.rmSync(stagingRoot, { recursive: true, force: true })
 
+  const settings = await getSystemBackupSettings()
+  await enforceBackupRetention(app, instanceId, settings.perInstanceRetention, safetyBackup ? [safetyBackup.id] : [])
   app?.log.info({ instanceId, backupId }, '实例存档恢复完成')
   return { ok: true, safetyBackup }
 }

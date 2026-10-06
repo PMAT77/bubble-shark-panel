@@ -31,8 +31,8 @@ services:
       BSP_BACKUPS_ROOT: /var/lib/bubblesharkpanel/backups
       DOCKER_HOST: unix:///var/run/docker.sock
       # v0.2.2 起面板/DST/SteamCMD 合并为同一统一镜像
-      BSP_GAME_DST_IMAGE: ${BSP_GAME_DST_IMAGE:-${GSH_GAME_DST_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.15.1}}
-      BSP_STEAMCMD_IMAGE: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.15.1}}
+      BSP_GAME_DST_IMAGE: ${BSP_GAME_DST_IMAGE:-${GSH_GAME_DST_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.15.2}}
+      BSP_STEAMCMD_IMAGE: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.15.2}}
       # 面板内一键更新的 updater 容器镜像（留空自动挑选）
       BSP_PANEL_UPDATER_IMAGE: ${BSP_PANEL_UPDATER_IMAGE:-${GSH_PANEL_UPDATER_IMAGE:-}}
       # 面板更新下载源与 Release 离线包的加速代理（与生产 compose 一致，便于本地验证）

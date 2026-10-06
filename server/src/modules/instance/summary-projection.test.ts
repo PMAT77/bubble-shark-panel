@@ -192,4 +192,27 @@ describe('DST 投影接口与实例标识选项', () => {
     assert.equal(anonymous.status, 0, '未登录是 status:0')
     assert.ok(anonymous.error.length > 0)
   })
+  it('并行列表、统计和模块请求只执行一轮探测，生命周期写入后重新探测', async (t) => {
+    const { getContainerRuntime } = await import('../../infra/container')
+    const { updateGameInstanceRuntime } = await import('../../shared/db/index')
+    const runtime = getContainerRuntime()
+    t.mock.method(runtime, 'findByName', async (name: string) => ({ id: name, name }))
+    const probe = t.mock.method(runtime, 'inspect', async (ref: { id: string, name: string }) => ({ ...ref, running: false }))
+    await setPermissions(['instance:read', 'room:read'])
+    await updateGameInstanceRuntime(GRANTED_INSTANCE_ID, { status: 'stopped' })
+    const results = await Promise.all([
+      post<Array<{ id: string }>>('/app/instance/list'),
+      post<{ total: number }>('/app/instance/status-counts'),
+      post<{ items: Array<{ instance: { id: string } }> }>('/app/instance/room-summaries'),
+    ])
+    for (const result of results) assert.equal(isOk<unknown>(result), true)
+    assert.deepEqual(results[0].data.map(item => item.id), [GRANTED_INSTANCE_ID])
+    assert.equal(results[1].data.total, 1)
+    assert.deepEqual(results[2].data.items.map(item => item.instance.id), [GRANTED_INSTANCE_ID])
+    assert.equal(probe.mock.callCount(), 2, '两个实例各探测一次，共用一轮对账')
+    await updateGameInstanceRuntime(GRANTED_INSTANCE_ID, { status: 'error' })
+    await post('/app/instance/list')
+    assert.equal(probe.mock.callCount(), 4)
+  })
+
 })

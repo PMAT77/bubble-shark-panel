@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createConsoleLogBuffer } from './consoleLogBuffer'
 import type { InstanceConnectInfo, InstanceConsoleLogFilter, InstanceConsoleLogLine, InstanceItem, InstanceMaintenancePushLog } from '@/api/modules/instance'
 import apiInstance from '@/api/modules/instance'
 import { routeToNodeInstance } from '@/navigation/game-routes'
@@ -142,23 +143,11 @@ function scrollToBottom() {
   })
 }
 
-function appendLines(lines: InstanceConsoleLogLine[]) {
-  if (lines.length === 0) {
-    return
-  }
-  const existing = new Set(logs.value.map(item => item.id))
-  const merged = [...logs.value]
-  for (const line of lines) {
-    if (!existing.has(line.id)) {
-      merged.push(line)
-      existing.add(line.id)
-    }
-  }
-  logs.value = merged
-  if (activeTab.value === 'console') {
-    scrollToBottom()
-  }
-}
+const logBuffer = createConsoleLogBuffer<InstanceConsoleLogLine>((lines) => {
+  logs.value = lines
+  if (activeTab.value === 'console') scrollToBottom()
+})
+const appendLines = logBuffer.append
 
 async function loadInstanceMeta() {
   const res = await apiInstance.getInstanceList()
@@ -367,6 +356,7 @@ async function connectStream() {
   }
   eventSource = source
   source.addEventListener('ready', (event) => {
+    if (eventSource !== source || requestVersion !== streamRequestVersion) return
     clearStreamReconnect()
     try {
       const payload = JSON.parse((event as MessageEvent<string>).data) as { running?: boolean }
@@ -377,6 +367,7 @@ async function connectStream() {
     }
   })
   source.addEventListener('log', (event) => {
+    if (eventSource !== source || requestVersion !== streamRequestVersion) return
     try {
       const line = JSON.parse((event as MessageEvent<string>).data) as InstanceConsoleLogLine
       appendLines([line])
@@ -427,6 +418,7 @@ function startRealtimeJobs() {
 }
 
 function stopRealtimeJobs() {
+  logBuffer.flush()
   realtimeActive = false
   clearStreamReconnect()
   streamRequestVersion += 1
@@ -445,7 +437,7 @@ function stopRealtimeJobs() {
 function resetInstanceRuntimeState() {
   instanceName.value = ''
   instanceStatus.value = null
-  logs.value = []
+  logBuffer.clear()
   connectInfo.value = null
   connectModeApplied = false
   running.value = false
@@ -528,7 +520,7 @@ const quickCommands = [
 
 async function clearLogs() {
   await apiInstance.clearInstanceConsoleLogs(instanceId.value)
-  logs.value = []
+  logBuffer.clear()
 }
 
 async function copyLogs() {

@@ -47,7 +47,7 @@ function resolveLoginInitialValues() {
   if (import.meta.env.DEV) {
     return {
       account: saved.account || String(import.meta.env.VITE_DEV_LOGIN_ACCOUNT ?? '').trim() || 'superadmin',
-      password: String(import.meta.env.VITE_DEV_LOGIN_PASSWORD ?? '') || '123456',
+      password: '',
       remember: saved.remember,
       challengeAnswer: '',
     }

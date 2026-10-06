@@ -83,7 +83,7 @@ export default {
    */
   getInstanceOptions: (data?: InstanceListQuery) => api.post('app/instance/options', data) as Promise<{ data: InstanceSummaryItem[] }>,
   getInstanceStatusCounts: (data?: InstanceStatusCountsQuery) => api.post('app/instance/status-counts', data) as Promise<{ data: InstanceStatusCounts }>,
-  getInstanceMetrics: (ids?: string[]) => api.post('app/instance/metrics', ids?.length ? { ids } : {}) as Promise<{ data: InstanceMetricsPayload }>,
+  getInstanceMetrics: (ids?: string[], options?: { signal?: AbortSignal }) => api.post('app/instance/metrics', ids?.length ? { ids } : {}, options) as Promise<{ data: InstanceMetricsPayload }>,
   getInstallableGames: () => api.get('app/instance/games') as Promise<{ data: InstallableGameItem[] }>,
   getInstanceInstallLog: (id: string) => api.get('app/instance/install-log', {
     params: { id },

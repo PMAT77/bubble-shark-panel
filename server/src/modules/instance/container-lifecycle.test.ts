@@ -490,3 +490,18 @@ describe('summarizeLoadedMods', () => {
     assert.deepEqual(summarizeLoadedMods(logText).workshopIds, ['1'])
   })
 })
+
+it('normalizes caves probe failure to unknown and preserves confirmed states', async (t) => {
+  const { getContainerRuntime } = await import('../../infra/container/index.ts')
+  const { inspectInstanceShardRuntime } = await import('./container-lifecycle.ts')
+  const runtime = getContainerRuntime()
+  t.mock.method(runtime, 'findByName', async () => ({ id: 'test-ref', name: 'test-ref' }))
+  t.mock.method(runtime, 'inspect', async () => ({ running: false, probeFailed: true }))
+  assert.deepEqual(await inspectInstanceShardRuntime('probe-test', 'caves'), { unitExists: true, snapshot: null })
+  t.mock.method(runtime, 'inspect', async () => ({ running: false }))
+  assert.deepEqual(await inspectInstanceShardRuntime('probe-test', 'caves'), { unitExists: true, snapshot: { running: false } })
+  t.mock.method(runtime, 'inspect', async () => ({ running: true }))
+  assert.equal((await inspectInstanceShardRuntime('probe-test', 'caves')).snapshot?.running, true)
+  t.mock.method(runtime, 'findByName', async () => undefined)
+  assert.deepEqual(await inspectInstanceShardRuntime('probe-test', 'caves'), { unitExists: false, snapshot: null })
+})

@@ -1,86 +1,57 @@
-import type { Ref } from 'vue'
+import { ref, watch, type Ref } from 'vue'
 import type { InstanceItem, InstanceRuntimeMetrics } from '@/api/modules/instance'
 import apiInstance from '@/api/modules/instance'
-
-const INSTANCE_METRICS_POLL_MS = 5000
+import { createRuntimeMetricsPoller } from './runtimeMetricsPoller'
 
 export function useInstanceRuntimeObservability(instances: Ref<InstanceItem[]>) {
   const instanceMetrics = ref<Record<string, InstanceRuntimeMetrics | null>>({})
   const uptimeNowMs = ref(Date.now())
-
-  let metricsPollingTimer: ReturnType<typeof setInterval> | undefined
+  let enabled = false
+  let silent = true
   let uptimeTickTimer: ReturnType<typeof setInterval> | undefined
-
-  function stopMetricsPolling() {
-    if (metricsPollingTimer) {
-      clearInterval(metricsPollingTimer)
-      metricsPollingTimer = undefined
-    }
-  }
-
-  function stopUptimeTick() {
-    if (uptimeTickTimer) {
-      clearInterval(uptimeTickTimer)
-      uptimeTickTimer = undefined
-    }
-  }
+  const runningIds = () => instances.value.filter(item => item.status === 'running').map(item => item.id).sort()
+  const poller = createRuntimeMetricsPoller({
+    request: signal => apiInstance.getInstanceMetrics(runningIds(), { signal }),
+    commit: res => { instanceMetrics.value = res.data?.items ?? {} },
+    onError: () => { if (!silent) faToast.error('实例资源指标刷新失败') },
+  })
 
   function stopRuntimeObservability() {
-    stopMetricsPolling()
-    stopUptimeTick()
+    enabled = false
+    poller.stop()
+    clearInterval(uptimeTickTimer)
+    uptimeTickTimer = undefined
   }
 
   async function fetchInstanceMetrics(options?: { silent?: boolean }) {
-    const runningIds = instances.value
-      .filter(item => item.status === 'running')
-      .map(item => item.id)
-    if (runningIds.length === 0) {
+    if (!runningIds().length) {
       instanceMetrics.value = {}
       return
     }
-    try {
-      const res = await apiInstance.getInstanceMetrics(runningIds)
-      // data 形状异常时兜成空表：instanceMetrics 若变成 undefined，下游取值会抛错
-      instanceMetrics.value = res.data?.items ?? {}
-    }
-    catch {
-      if (!options?.silent) {
-        faToast.error('实例资源指标刷新失败')
-      }
-    }
+    silent = options?.silent ?? false
+    await poller.refresh()
   }
 
   function syncRuntimeObservabilityPolling() {
-    const hasRunning = instances.value.some(item => item.status === 'running')
-    if (!hasRunning) {
-      stopRuntimeObservability()
+    enabled = true
+    if (!runningIds().length) {
+      poller.stop()
       instanceMetrics.value = {}
+      clearInterval(uptimeTickTimer)
+      uptimeTickTimer = undefined
       return
     }
+    silent = true
     uptimeNowMs.value = Date.now()
-    if (!metricsPollingTimer) {
-      void fetchInstanceMetrics({ silent: true })
-      metricsPollingTimer = setInterval(() => {
-        if (!instances.value.some(item => item.status === 'running')) {
-          syncRuntimeObservabilityPolling()
-          return
-        }
-        void fetchInstanceMetrics({ silent: true })
-      }, INSTANCE_METRICS_POLL_MS)
-    }
-    if (!uptimeTickTimer) {
-      uptimeTickTimer = setInterval(() => {
-        uptimeNowMs.value = Date.now()
-        if (!instances.value.some(item => item.status === 'running')) {
-          syncRuntimeObservabilityPolling()
-        }
-      }, 1000)
-    }
+    poller.start()
+    uptimeTickTimer ??= setInterval(() => { uptimeNowMs.value = Date.now() }, 1000)
   }
 
-  function getMetricsForInstance(instanceId: string) {
-    return instanceMetrics.value[instanceId] ?? null
-  }
+  watch(() => runningIds().join(','), () => {
+    poller.stop()
+    instanceMetrics.value = {}
+    if (enabled) syncRuntimeObservabilityPolling()
+  }, { flush: 'sync' })
 
   return {
     instanceMetrics,
@@ -88,6 +59,6 @@ export function useInstanceRuntimeObservability(instances: Ref<InstanceItem[]>) 
     fetchInstanceMetrics,
     syncRuntimeObservabilityPolling,
     stopRuntimeObservability,
-    getMetricsForInstance,
+    getMetricsForInstance: (id: string) => instanceMetrics.value[id] ?? null,
   }
 }

@@ -33,3 +33,32 @@ describe('withSteamcmdAppUpdateLock', () => {
     assert.deepEqual(order, [1, -1, 2, -2])
   })
 })
+
+for (const mode of ['sync', 'async', 'body']) {
+  it('releases ' + mode + ' failure without overtaking the preceding job', async () => {
+    const { isSteamcmdAppUpdateBusy } = await import('./steamcmd-app-update-queue.ts')
+    const order: string[] = []
+    let release!: () => void
+    const first = withSteamcmdAppUpdateLock('first', async () => {
+      order.push('first')
+      await new Promise<void>(resolve => { release = resolve })
+      order.push('first finished')
+    })
+    await Promise.resolve()
+    const failed = withSteamcmdAppUpdateLock('failed', async () => {
+      throw new Error('body failed')
+    }, { onQueued: () => {
+      if (mode === 'sync') throw new Error('sync failed')
+      if (mode === 'async') return Promise.reject(new Error('async failed'))
+    } })
+    const rejected = assert.rejects(failed, /failed/)
+    const last = withSteamcmdAppUpdateLock('last', async () => { order.push('last') })
+    await Promise.resolve()
+    assert.deepEqual(order, ['first'])
+    release()
+    await Promise.all([first, rejected, last])
+    assert.deepEqual(order, ['first', 'first finished', 'last'])
+    assert.equal(isSteamcmdAppUpdateBusy(), false)
+    assert.equal(isSteamcmdAppUpdateQueued(), false)
+  })
+}

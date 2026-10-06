@@ -154,6 +154,50 @@ describe('map routes', () => {
     fs.rmSync(workDir, { recursive: true, force: true })
   })
 
+  it('shares generation locks and failures across independent HTTP requests', async () => {
+    const { MapService } = await import('./map-service')
+    const secondId = 'inst-' + randomUUID()
+    await createGameInstance({ id: secondId, nodeId: 'local-node', name: 'parallel-map', gameCode: '343050', status: 'stopped', installPath: workDir })
+    const admin = await findUserByAccount('superadmin')
+    await addUserInstanceGrants(admin!.id, [secondId], null)
+    let calls = 0
+    let created = 0
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const service = new MapService({
+      dbPath: path.join(workDir, 'shared-map-test', 'db.sqlite'),
+      isShardRunning: async () => true,
+      sendCommand: async () => { calls++; await gate; throw new Error('controlled failure') },
+      currentLogId: () => 0,
+      readLogLines: () => [],
+    })
+    const server = Fastify({ logger: false })
+    registerMapModule(server, {
+      createService: () => { created++; return service },
+      isShardRunning: async () => true,
+      ensureRuntimeReady: async () => ({ ok: true }),
+    })
+    try {
+      const refresh = (shard = 'master', instanceId = INSTANCE_ID) => server.inject({ method: 'POST', url: '/app/instance/map/refresh', headers: { token }, payload: { instanceId, shard, force: true } })
+      const query = () => server.inject({ method: 'GET', url: '/app/instance/map?instanceId=' + INSTANCE_ID + '&shard=master', headers: { token } })
+      assert.equal(parseBody<MapDtoShape>((await refresh()).body).data.status, 'generating')
+      assert.equal(parseBody<MapDtoShape>((await query()).body).data.status, 'generating')
+      await refresh()
+      assert.equal(calls, 1)
+      await refresh('caves')
+      assert.equal(calls, 2)
+      await refresh('master', secondId)
+      assert.equal(calls, 3)
+      assert.equal(created, 1)
+      release()
+      await Promise.all([service.waitForIdle(INSTANCE_ID), service.waitForIdle(secondId)])
+      const failed = parseBody<MapDtoShape>((await query()).body).data
+      assert.equal(failed.status, 'failed')
+      assert.match(failed.message ?? '', /controlled failure/)
+    }
+    finally { release(); await server.close() }
+  })
+
   describe('鉴权', () => {
     it('未登录一律拒绝', async () => {
       /**

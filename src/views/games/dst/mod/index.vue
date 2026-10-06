@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createInstanceActionScope, updateModSubscription } from './modSubscriptionActions'
 /** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
 const { auth: hasPermission } = useAppAuth()
 
@@ -95,6 +96,19 @@ const modInstanceStatus = ref('')
 const configTarget = ref<{ workshopId: string, name: string } | null>(null)
 const instances = ref<InstanceSummaryItem[]>([])
 const selectedInstanceId = ref('')
+const actionScope = createInstanceActionScope(() => selectedInstanceId.value)
+watch(selectedInstanceId, () => {
+  actionScope.invalidate()
+  configModalShow.value = false
+  configTarget.value = null
+  localImportShow.value = false
+  unsubscribingWorkshopIds.value = new Set()
+  batchUpdating.value = false
+  retryingFailedMods.value = false
+  queueActionPending.value = false
+  checkingUpdates.value = false
+  reorderingMods.value = false
+}, { flush: 'sync' })
 const queueDetailsOpen = ref(false)
 watch(selectedInstanceId, () => { queueDetailsOpen.value = false })
 const {
@@ -1077,6 +1091,7 @@ async function handleInstallJobTerminal(job: Awaited<ReturnType<typeof apiMod.po
 
 /** 已订阅列表的启用/关闭开关（与 ShardModsSection 一致：重启后生效） */
 async function toggleSubscribedMod(item: ModItemDto) {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || unsubscribingWorkshopIds.value.has(item.workshopId) || item.installStatus !== 'ready') {
     return
   }
@@ -1084,34 +1099,38 @@ async function toggleSubscribedMod(item: ModItemDto) {
   nextMutating.add(item.workshopId)
   unsubscribingWorkshopIds.value = nextMutating
   try {
-    const response = await apiMod.updateMod(selectedInstanceId.value, item.workshopId, {
-      enabled: !item.enabled,
-    })
+    const result = await updateModSubscription(action, item, apiMod.updateMod)
+    if (!result) return
+    const { response, enabled } = result
     const riskTip = response.data.riskTip?.trim()
-    message.success(`${item.enabled ? '已关闭' : '已开启'}该 Mod，重启实例后生效（可在实例管理执行重启）`)
+    message.success(`${enabled ? '已开启' : '已关闭'}该 Mod，重启实例后生效（可在实例管理执行重启）`)
     if (riskTip) {
       riskTipBanner.value = riskTip
     }
     installedMods.value = installedMods.value.map(row => (
       row.workshopId === item.workshopId
-        ? { ...row, enabled: !row.enabled }
+        ? { ...row, enabled }
         : row
     ))
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
     message.error(getErrorMessage(error, '更新 Mod 状态失败，请稍后重试'))
   }
   finally {
-    const next = new Set(unsubscribingWorkshopIds.value)
-    next.delete(item.workshopId)
-    unsubscribingWorkshopIds.value = next
+    if (action.isCurrent()) {
+      const next = new Set(unsubscribingWorkshopIds.value)
+      next.delete(item.workshopId)
+      unsubscribingWorkshopIds.value = next
+    }
   }
 }
 
 async function retryFromMarket(row: SteamModListQueryResultItem) {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || isPendingWorkshop(row.workshopId)) {
     return
   }
@@ -1123,10 +1142,11 @@ async function retryFromMarket(row: SteamModListQueryResultItem) {
       name: row.title,
       previewImage: row.previewImage ?? undefined,
     }, {
-      onTerminal: job => void handleInstallJobTerminal(job),
+      onTerminal: job => { if (action.isCurrent()) void handleInstallJobTerminal(job) },
     })
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
@@ -1135,6 +1155,7 @@ async function retryFromMarket(row: SteamModListQueryResultItem) {
 }
 
 async function retryFailedInstall(row: ModItemDto) {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || isPendingWorkshop(row.workshopId)) {
     return
   }
@@ -1144,10 +1165,11 @@ async function retryFailedInstall(row: ModItemDto) {
       name: row.name,
       previewImage: row.previewImage ?? undefined,
     }, {
-      onTerminal: job => void handleInstallJobTerminal(job),
+      onTerminal: job => { if (action.isCurrent()) void handleInstallJobTerminal(job) },
     })
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
@@ -1172,6 +1194,7 @@ function onModConfigSaved(riskTip: string | null) {
 
 /** 单独更新：强制重新下载已就绪的 Mod（订阅保持不变） */
 async function updateInstalledMod(row: ModItemDto) {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || isPendingWorkshop(row.workshopId)) {
     return
   }
@@ -1182,10 +1205,11 @@ async function updateInstalledMod(row: ModItemDto) {
       previewImage: row.previewImage ?? undefined,
       force: true,
     }, {
-      onTerminal: job => void handleInstallJobTerminal(job),
+      onTerminal: job => { if (action.isCurrent()) void handleInstallJobTerminal(job) },
     })
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
@@ -1198,6 +1222,7 @@ async function updateInstalledMod(row: ModItemDto) {
  * 只接受「创意工坊上有新版本」的 Mod，避免把更新按钮做成对任何 Mod 都能按的空操作。
  */
 async function runBatchUpdate(workshopIds: string[], options?: { skippedCount?: number }) {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || workshopIds.length === 0 || batchUpdating.value) {
     return
   }
@@ -1207,6 +1232,7 @@ async function runBatchUpdate(workshopIds: string[], options?: { skippedCount?: 
     const response = await apiMod.batchUpdateMods(selectedInstanceId.value, {
       workshopIds,
     })
+    if (!action.isCurrent()) return
     const downloadingIds = response.data
       .filter(job => job.status === 'downloading')
       .map(job => job.workshopId)
@@ -1226,13 +1252,14 @@ async function runBatchUpdate(workshopIds: string[], options?: { skippedCount?: 
     await loadInstalledMods()
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
     message.error(getErrorMessage(error, '批量更新失败，请稍后重试'))
   }
   finally {
-    batchUpdating.value = false
+    if (action.isCurrent()) batchUpdating.value = false
   }
 }
 
@@ -1262,6 +1289,7 @@ async function updateAllOutdatedMods() {
 
 /** 全部重试失败的 Mod：交给下载队列处理（服务端会把退避计数归零），不再逐个入队与轮询 */
 async function retryAllFailedMods() {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || retryingFailedMods.value) {
     return
   }
@@ -1272,17 +1300,20 @@ async function retryAllFailedMods() {
   retryingFailedMods.value = true
   try {
     await apiMod.startModDownloadQueue(selectedInstanceId.value, { retryFailed: true })
+    if (!action.isCurrent()) return
     await refreshQueue()
+    if (!action.isCurrent()) return
     message.success(`已重新排队 ${targetCount} 个失败的 Mod`)
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
     message.error(getErrorMessage(error, '重新下载失败，请稍后重试'))
   }
   finally {
-    retryingFailedMods.value = false
+    if (action.isCurrent()) retryingFailedMods.value = false
   }
 }
 
@@ -1326,10 +1357,12 @@ let lastIneffectiveNoticeAt = 0
  * 提示一次原因，避免用户对着「全部更新 (N)」反复点。
  */
 function handleQueueChange(queue: ModDownloadQueueDto) {
+  const action = actionScope.capture()
   const running = queue.status === 'running' || queue.status === 'pausing'
   const wasRunning = queueWasRunning
   queueWasRunning = running
   void loadInstalledMods().then(() => {
+    if (!action.isCurrent()) return
     const notice = resolveUpdateIneffectiveNotice({
       wasRunning,
       status: queue.status,
@@ -1346,26 +1379,31 @@ function handleQueueChange(queue: ModDownloadQueueDto) {
 const queueActionPending = ref(false)
 
 /** 队列操作：开始/继续、暂停（批次边界生效）、取消当前批次 */
-async function runQueueAction(action: 'start' | 'pause' | 'cancel') {
+async function runQueueAction(queueAction: 'start' | 'pause' | 'cancel') {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || queueActionPending.value) {
     return
   }
   queueActionPending.value = true
   try {
-    if (action === 'start') {
-      await apiMod.startModDownloadQueue(selectedInstanceId.value, { retryFailed: false })
+    if (queueAction === 'start') {
+      await apiMod.startModDownloadQueue(action.instanceId, { retryFailed: false })
+      if (!action.isCurrent()) return
     }
-    else if (action === 'pause') {
-      await apiMod.pauseModDownloadQueue(selectedInstanceId.value)
+    else if (queueAction === 'pause') {
+      await apiMod.pauseModDownloadQueue(action.instanceId)
+      if (!action.isCurrent()) return
     }
     else {
-      await apiMod.cancelModDownloadQueue(selectedInstanceId.value)
+      await apiMod.cancelModDownloadQueue(action.instanceId)
+      if (!action.isCurrent()) return
     }
     await refreshQueue()
-    if (action === 'start') {
+    if (!action.isCurrent()) return
+    if (queueAction === 'start') {
       message.success('已开始下载 Mod')
     }
-    else if (action === 'pause') {
+    else if (queueAction === 'pause') {
       message.info(downloadQueue.value?.status === 'paused' ? '下载已暂停' : '当前下载完成后暂停')
     }
     else {
@@ -1373,25 +1411,29 @@ async function runQueueAction(action: 'start' | 'pause' | 'cancel') {
     }
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
     message.error(getErrorMessage(error, '下载队列操作失败，请稍后重试'))
   }
   finally {
-    queueActionPending.value = false
+    if (action.isCurrent()) queueActionPending.value = false
   }
 }
 
 /** 检查更新：判断哪些 Mod 不是创意工坊上的最新版，顺带按工坊标题补全名称与缩略图 */
 async function checkModUpdates() {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || checkingUpdates.value) {
     return
   }
   checkingUpdates.value = true
   try {
     const response = await apiMod.checkModUpdates(selectedInstanceId.value, { force: true })
+    if (!action.isCurrent()) return
     await loadInstalledMods()
+    if (!action.isCurrent()) return
     // 无法判断的 Mod 绝不能被说成「已是最新」：提示口径集中在 modUpdateCheckPresentation.ts
     const notice = resolveModUpdateCheckNotice(response.data)
     if (notice.kind === 'notification') {
@@ -1417,6 +1459,7 @@ async function checkModUpdates() {
     }
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
@@ -1424,7 +1467,7 @@ async function checkModUpdates() {
     message.error(getErrorMessage(error, '检查 Mod 更新失败，已沿用上次结果'))
   }
   finally {
-    checkingUpdates.value = false
+    if (action.isCurrent()) checkingUpdates.value = false
   }
 }
 
@@ -1453,6 +1496,7 @@ function canMoveInstalledMod(row: ModItemDto, index: number, offset: number): bo
 
 /** 上移/下移一位：提交调整后的完整顺序，成功后以服务端返回的列表为准 */
 async function moveInstalledMod(index: number, offset: number) {
+  const action = actionScope.capture()
   const current = installedMods.value
   const target = index + offset
   const instanceId = selectedInstanceId.value
@@ -1476,6 +1520,7 @@ async function moveInstalledMod(index: number, offset: number) {
     const response = await apiMod.reorderMods(instanceId, {
       workshopIds: reordered.filter(mod => isReorderableInstalledMod(mod)).map(mod => mod.workshopId),
     })
+    if (!action.isCurrent()) return
     installedMods.value = response.data.mods
     const riskTip = response.data.riskTip?.trim()
     if (riskTip) {
@@ -1484,13 +1529,14 @@ async function moveInstalledMod(index: number, offset: number) {
     message.success('已调整 Mod 加载顺序，重启实例后生效（可在实例管理执行重启）')
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
     message.error(getErrorMessage(error, '调整 Mod 加载顺序失败，请稍后重试'))
   }
   finally {
-    reorderingMods.value = false
+    if (action.isCurrent()) reorderingMods.value = false
   }
 }
 
@@ -1498,6 +1544,7 @@ async function loadSteamMods(
   resetPage = false,
   options?: { isRetry?: boolean, suppressErrorToast?: boolean },
 ) {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value) {
     steamMods.value = []
     steamHasMore.value = false
@@ -1568,7 +1615,7 @@ async function loadSteamMods(
     steamPageSize.value = response.data.pageSize > 0 ? response.data.pageSize : steamPageSize.value
     steamMeta.value = response.data.meta
     syncPendingWorkshopIds(response.data.pendingWorkshopIds ?? [], {
-      onTerminal: job => void handleInstallJobTerminal(job),
+      onTerminal: job => { if (action.isCurrent()) void handleInstallJobTerminal(job) },
     })
   }
   catch (error: unknown) {
@@ -1643,6 +1690,7 @@ function ensurePendingInInstalledList(item: Pick<SteamModListQueryResultItem, 'w
 }
 
 async function installFromSteam(item: SteamModListQueryResultItem) {
+  const action = actionScope.capture()
   const status = resolveMarketSubscribeStatus(item)
   if (!selectedInstanceId.value || status === 'ready' || status === 'pending') {
     return
@@ -1655,10 +1703,11 @@ async function installFromSteam(item: SteamModListQueryResultItem) {
       name: item.title,
       previewImage: item.previewImage ?? undefined,
     }, {
-      onTerminal: job => void handleInstallJobTerminal(job),
+      onTerminal: job => { if (action.isCurrent()) void handleInstallJobTerminal(job) },
     })
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
@@ -1711,6 +1760,7 @@ function confirmUnsubscribeFromMarket(row: SteamModListQueryResultItem) {
 }
 
 function openUnsubscribeConfirm(workshopId: string, modName: string) {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value) {
     message.warning('请先选择实例')
     return
@@ -1721,12 +1771,14 @@ function openUnsubscribeConfirm(workshopId: string, modName: string) {
     positiveText: '取消订阅',
     negativeText: '保留',
     onPositiveClick: () => {
+      if (!action.isCurrent()) return
       void unsubscribeMod(workshopId)
     },
   })
 }
 
 async function unsubscribeMod(workshopId: string) {
+  const action = actionScope.capture()
   if (!selectedInstanceId.value || unsubscribingWorkshopIds.value.has(workshopId)) {
     return
   }
@@ -1735,6 +1787,7 @@ async function unsubscribeMod(workshopId: string) {
   unsubscribingWorkshopIds.value = nextUnsubscribing
   try {
     await apiMod.deleteMod(selectedInstanceId.value, workshopId)
+    if (!action.isCurrent()) return
     installedMods.value = installedMods.value.filter(item => item.workshopId !== workshopId)
     steamMods.value = steamMods.value.map(item => (
       item.workshopId === workshopId
@@ -1750,15 +1803,18 @@ async function unsubscribeMod(workshopId: string) {
     message.success('已取消订阅')
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
     message.error(getErrorMessage(error, '取消订阅失败，请稍后重试'))
   }
   finally {
+    if (action.isCurrent()) {
     const next = new Set(unsubscribingWorkshopIds.value)
-    next.delete(workshopId)
-    unsubscribingWorkshopIds.value = next
+      next.delete(workshopId)
+      unsubscribingWorkshopIds.value = next
+    }
   }
 }
 
@@ -1780,6 +1836,7 @@ function extractWorkshopId(input: string): string | null {
 
 /** 粘贴工坊 ID/链接直接订阅（不依赖创意工坊列表可用） */
 async function subscribeManualWorkshop() {
+  const action = actionScope.capture()
   const workshopId = extractWorkshopId(manualWorkshopInput.value)
   if (!workshopId) {
     message.warning('请输入有效的创意工坊 ID 或 Mod 详情页链接')
@@ -1800,11 +1857,13 @@ async function subscribeManualWorkshop() {
       workshopId,
       name: `工坊 ${workshopId}`,
     }, {
-      onTerminal: job => void handleInstallJobTerminal(job),
+      onTerminal: job => { if (action.isCurrent()) void handleInstallJobTerminal(job) },
     })
+    if (!action.isCurrent()) return
     manualWorkshopInput.value = ''
   }
   catch (error: unknown) {
+    if (!action.isCurrent()) return
     if (isAuthUnauthorizedError(error)) {
       return
     }
@@ -2355,6 +2414,7 @@ onMounted(async () => {
       </NCard>
 
       <ModConfigModal
+        :key="`config-${selectedInstanceId}`"
         v-model:show="configModalShow"
         :instance-id="selectedInstanceId"
         :workshop-id="configTarget?.workshopId ?? ''"
@@ -2362,6 +2422,7 @@ onMounted(async () => {
         @saved="onModConfigSaved"
       />
       <LocalModImportModal
+        :key="`import-${selectedInstanceId}`"
         v-model:show="localImportShow"
         :instance-id="selectedInstanceId"
         :stopped="modInstanceStatus === 'stopped'"

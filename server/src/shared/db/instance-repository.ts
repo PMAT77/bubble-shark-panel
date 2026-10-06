@@ -174,6 +174,7 @@ export async function createGameInstance(input: CreateGameInstanceInput): Promis
   if (!created) {
     throw new Error(`create game instance failed: ${id}`)
   }
+  runtimeRevision++
   return created
 }
 
@@ -578,6 +579,7 @@ export async function updateGameInstanceStatus(id: string, status: DbGameInstanc
       updatedAt: nowIso(),
     })
     .where(eq(gameInstances.id, id))
+  runtimeRevision++
   return getGameInstanceById(id)
 }
 
@@ -694,6 +696,7 @@ export async function updateGameInstanceRuntime(
     .update(gameInstances)
     .set(setPayload)
     .where(condition)
+  runtimeRevision++
   return getGameInstanceById(id)
 }
 
@@ -706,6 +709,7 @@ export async function deleteGameInstanceById(id: string): Promise<boolean> {
   await drizzleDb
     .delete(gameInstances)
     .where(eq(gameInstances.id, id))
+  runtimeRevision++
   return true
 }
 
@@ -824,3 +828,7 @@ export function replaceInstanceModRecords(instanceId: string, mods: DbInstanceMo
     throw error
   }
 }
+
+let runtimeRevision = 0
+/** 实例生命周期写入后，使应用级运行态快照失效。 */
+export function getInstanceRuntimeRevision(): number { return runtimeRevision }

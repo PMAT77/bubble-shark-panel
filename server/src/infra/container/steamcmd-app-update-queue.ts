@@ -46,16 +46,16 @@ export async function withSteamcmdAppUpdateLock<T>(
     release = resolve
   })
   inFlight++
-  if (inFlight > 1 && options?.onQueued) {
-    await options.onQueued()
-  }
-
-  await previous
-
   try {
+    if (inFlight > 1 && options?.onQueued) {
+      await options.onQueued()
+    }
+    await previous
     return await fn()
   }
   finally {
+    // 通知失败也必须等前序任务结束，不能提前放行下一项。
+    await previous
     inFlight--
     const cooldownMs = resolveInterJobCooldownMs()
     if (cooldownMs > 0) {

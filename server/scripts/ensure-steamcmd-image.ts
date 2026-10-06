@@ -36,7 +36,7 @@ loadPanelEnvFile()
 
 // 兜底默认值必须与其它镜像引用（compose、panel.env.example、配置默认值）保持同一版本；
 // 这里曾长期停在 v0.2.0，而它又不在发布校验的扫描清单里，于是没人发现。
-const image = readBrandEnv('BSP_STEAMCMD_IMAGE')?.trim() || 'ghcr.io/pmat77/bubblesharkpanel:v0.15.1'
+const image = readBrandEnv('BSP_STEAMCMD_IMAGE')?.trim() || 'ghcr.io/pmat77/bubblesharkpanel:v0.15.2'
 const FALLBACK_IMAGE = 'cm2network/steamcmd:steam-bookworm'
 
 function imageExists(target: string): boolean {

@@ -74,7 +74,7 @@ export class InstanceInstallLogWriter {
       .split('\n')
       .map(line => line.trimEnd())
       .filter(line => line.length > 0)
-    const trimmed = lines.slice(-MAX_LINES)
+    const trimmed = lines.slice(-Math.floor(MAX_LINES / 2))
     fs.writeFileSync(this.filePath, trimmed.length > 0 ? `${trimmed.join('\n')}\n` : '', 'utf8')
     this.lineCount = trimmed.length
   }

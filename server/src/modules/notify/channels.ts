@@ -217,7 +217,9 @@ export async function sendNotification(outgoing: OutgoingNotification): Promise<
       ...outgoing.headers,
     },
     body: outgoing.body,
+    signal: AbortSignal.timeout(15_000),
   })
+  await response.body?.cancel()
   if (!response.ok) {
     throw new Error(`通知服务返回 HTTP ${response.status}`)
   }

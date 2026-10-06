@@ -363,6 +363,34 @@ jobs:
 
             统一镜像的不可变 digest 见附件 `release-images.json`；Native 包与离线镜像包使用同名 `.sha256` 校验。安装与升级请使用版本 tag 或附件中的 digest，不要依赖 `latest`。
 
+  notify-nexus:
+    name: Notify Nexus of published release
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dispatch Nexus baseline sync
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.NEXUS_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Skipping non-formal release tag ${GITHUB_REF_NAME}."
+            exit 0
+          fi
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "::error::Set NEXUS_DISPATCH_TOKEN with Contents write access to bubble-shark-nexus."
+            exit 1
+          fi
+          sha="$(git rev-parse HEAD)"
+          jq -n --arg tag "${GITHUB_REF_NAME}" --arg sha "${sha}" \
+            '{event_type: "panel-release", client_payload: {tag: $tag, sha: $sha}}' \
+            | gh api --method POST repos/PMAT77/bubble-shark-nexus/dispatches --input -
+
   cleanup-candidates:
     name: Clean up promoted candidate images
     needs: release

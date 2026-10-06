@@ -10,7 +10,7 @@
 
 支持 Docker 与 Native（裸机）systemd 两种部署方式。
 
-**开始使用：[在线体验](#在线体验) · [立即安装](#快速安装) · [存档导入](#存档导入)**
+**开始使用： [官方社区](https://bubble-shark.online/) · [在线体验](#在线体验) · [立即安装](#快速安装) · [存档导入](#存档导入)**
 
 ![BubbleSharkPanel 面板预览](https://cdn.jsdelivr.net/gh/PMAT77/PMAT77CDN@main/imgs/game-server-hub/GameServer_B_1005.png)
 
@@ -69,6 +69,8 @@ Docker 模式运行面板与游戏容器；Native 模式使用 systemd 管理面
 支持分片端口重写、玩家名单与 Mod 清单带入，可选包含 Mod 文件供离线恢复；安全组需手工放行 6 个 UDP 端口。支持范围与手工步骤见[从其他面板或裸机迁入](docs/migrate-from-other-panel.md)。
 
 ## 快速安装
+
+**强烈建议使用：[安装指南](https://bubble-shark.online/install)**
 
 ### Docker
 

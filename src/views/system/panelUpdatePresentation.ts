@@ -148,6 +148,9 @@ function resolveAction(status: PanelUpdateStatus): Pick<PanelUpdatePresentation,
   if (busyLabel) {
     return { action: 'busy', actionLabel: busyLabel }
   }
+  if (status.checkError || status.image.checkError) {
+    return { action: 'none', actionLabel: '下载更新' }
+  }
   // Native（systemd）与 Docker 的安装机制不同，但对用户都是「下载 → 立即安装」两段
   const installable = status.image.updateAvailable
     && (status.imageApplySupported || status.nativeUpdateSupported === true)
@@ -214,10 +217,14 @@ export function buildPanelUpdatePresentation(status: PanelUpdateStatus | null): 
       suffix = '已是最新'
       break
   }
+  const checkFailed = Boolean(status.checkError || image.checkError)
+  if (checkFailed) {
+    suffix = '检查失败，无法确认是否最新'
+  }
 
   return {
     versionLine: buildVersionLine(version, suffix),
-    needsManualCommand: image.updateAvailable
+    needsManualCommand: !checkFailed && image.updateAvailable
       && !status.imageApplySupported
       && status.nativeUpdateSupported !== true,
     phaseLine,

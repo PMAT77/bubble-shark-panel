@@ -400,6 +400,9 @@ jobs:
     permissions:
       packages: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Delete candidate package versions
         env:
           GH_TOKEN: ${{ github.token }}
@@ -412,9 +415,10 @@ jobs:
           candidate_tag="candidate-${{ github.run_id }}-${{ github.run_attempt }}"
           images=(bubblesharkpanel)
           for image in "${images[@]}"; do
-            version_ids="$(gh api --paginate \
+            # 正式 tag 与 candidate 可能共用一个 version；删除 version 会删除所有标签。
+            version_ids="$(gh api --paginate --slurp \
               "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/${image}/versions?per_page=100" \
-              --jq ".[] | select(.metadata.container.tags | index(\"${candidate_tag}\")) | .id")"
+              | node scripts/select-ghcr-candidates.mjs "${candidate_tag}")"
             for version_id in ${version_ids}; do
               gh api --method DELETE \
                 "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/${image}/versions/${version_id}"

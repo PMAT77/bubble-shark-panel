@@ -61,6 +61,27 @@ function buildStatus(overrides: StatusOverrides = {}): PanelUpdateStatus {
 }
 
 describe('buildPanelUpdatePresentation', () => {
+  it('does not report latest or offer an update after a failed check', () => {
+    for (const updateAvailable of [false, true]) {
+      for (const errorSource of ['status', 'image']) {
+        const view = buildPanelUpdatePresentation(buildStatus({
+          updateKind: updateAvailable ? 'newer' : 'none',
+          checkError: errorSource === 'status' ? 'Registry 返回 404' : null,
+          imageApplySupported: true,
+          targetImageReady: true,
+          image: {
+            updateAvailable,
+            remoteDigest: null,
+            checkError: errorSource === 'image' ? 'Registry 返回 404' : null,
+          },
+        }))
+        assert.equal(view.versionLine, '当前版本：v0.2.2 · 检查失败，无法确认是否最新')
+        assert.equal(view.action, 'none')
+        assert.equal(view.needsManualCommand, false)
+      }
+    }
+  })
+
   it('reports a higher release as a new version', () => {
     const view = buildPanelUpdatePresentation(buildStatus({
       updateKind: 'newer',

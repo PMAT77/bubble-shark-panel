@@ -1,0 +1,105 @@
+name: Restore missing release images
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only verify v0.15.3 and v0.15.4; do not write tags
+        type: boolean
+        default: true
+
+concurrency:
+  group: restore-release-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify release digests and restore missing tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_digest() {
+            docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er '.digest'
+          }
+          anonymous_digest() {
+            local tag="$1" token headers
+            token="$(curl -fsSL 'https://ghcr.io/token?service=ghcr.io&scope=repository:pmat77/bubblesharkpanel:pull' | jq -er '.token')"
+            headers="$(curl -fsSI \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/pmat77/bubblesharkpanel/manifests/${tag}")"
+            printf '%s\n' "$headers" | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }'
+          }
+
+          # Validate both releases before changing either tag.
+          plan="${RUNNER_TEMP}/restore-release-images.tsv"
+          : > "$plan"
+          for tag in v0.15.3 v0.15.4; do
+            dir="${RUNNER_TEMP}/restore-${tag}"
+            mkdir -p "$dir"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern release-images.json --dir "$dir" --clobber
+            expected="$(jq -er --arg tag "$tag" \
+              '.images[] | select(.name == "bubblesharkpanel" and .reference == ("ghcr.io/pmat77/bubblesharkpanel:" + $tag)) | .digest' \
+              "$dir/release-images.json")"
+            legacy_expected="$(jq -er --arg tag "$tag" \
+              '.images[] | select(.name == "game-server-hub" and .reference == ("ghcr.io/pmat77/game-server-hub:" + $tag)) | .digest' \
+              "$dir/release-images.json")"
+            [[ "$expected" =~ ^sha256:[a-f0-9]{64}$ && "$legacy_expected" == "$expected" ]]
+            source="ghcr.io/pmat77/game-server-hub:${tag}"
+            target="ghcr.io/pmat77/bubblesharkpanel:${tag}"
+            [[ "$(remote_digest "$source")" == "$expected" ]]
+            if current="$(remote_digest "$target" 2>/dev/null)"; then
+              [[ "$current" == "$expected" ]] || { echo "Refusing to overwrite ${target}" >&2; exit 1; }
+              echo "${target} already exists with the expected digest."
+            else
+              # Only a confirmed missing manifest is eligible; network/auth errors abort.
+              token="$(curl -fsSL 'https://ghcr.io/token?service=ghcr.io&scope=repository:pmat77/bubblesharkpanel:pull' | jq -er '.token')"
+              code="$(curl -sS -o /dev/null -w '%{http_code}' -I \
+                -H "Authorization: Bearer ${token}" \
+                "https://ghcr.io/v2/pmat77/bubblesharkpanel/manifests/${tag}")"
+              [[ "$code" == 404 ]] || { echo "Cannot establish that ${target} is missing (HTTP ${code})." >&2; exit 1; }
+              printf '%s\t%s\n' "$tag" "$expected" >> "$plan"
+              echo "Verified missing ${target}; source digest ${expected}."
+            fi
+          done
+
+          if [[ "$DRY_RUN" == true ]]; then
+            echo 'Dry run complete; no tags written.'
+            exit 0
+          fi
+          while IFS=$'\t' read -r tag expected; do
+            target="ghcr.io/pmat77/bubblesharkpanel:${tag}"
+            if current="$(remote_digest "$target" 2>/dev/null)"; then
+              [[ "$current" == "$expected" ]] || { echo "Refusing to overwrite ${target}" >&2; exit 1; }
+              continue
+            fi
+            docker buildx imagetools create --prefer-index=false --tag "$target" \
+              "ghcr.io/pmat77/game-server-hub@${expected}"
+            [[ "$(remote_digest "$target")" == "$expected" ]]
+          done < "$plan"
+          for tag in v0.15.3 v0.15.4; do
+            expected="$(remote_digest "ghcr.io/pmat77/game-server-hub:${tag}")"
+            [[ "$(anonymous_digest "$tag")" == "$expected" ]]
+            echo "Anonymous access verified: bubblesharkpanel:${tag}@${expected}"
+          done

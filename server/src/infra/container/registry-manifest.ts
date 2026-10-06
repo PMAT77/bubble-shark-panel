@@ -210,7 +210,7 @@ async function registryRequest(
   }
 
   if (!response.ok) {
-    throw new Error(`Registry 返回 ${response.status}`)
+    throw new Error(`Registry 返回 ${response.status}：${url}`)
   }
   return response
 }
@@ -222,7 +222,12 @@ async function fetchRegistryManifest(
   reference?: string,
 ): Promise<Response> {
   const parsed = parseImageRef(image)
-  return registryRequest(buildRegistryManifestUrl(parsed, reference), method, MANIFEST_ACCEPT, auth)
+  try {
+    return await registryRequest(buildRegistryManifestUrl(parsed, reference), method, MANIFEST_ACCEPT, auth)
+  }
+  catch (error) {
+    throw new Error(`检查镜像 ${image} 失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 async function fetchRegistryBlob(

@@ -3,6 +3,7 @@ import { afterEach, describe, it } from 'node:test'
 import {
   buildSteamcmdContainerEnv,
   loadSteamcmdRuntimeConfig,
+  formatSteamcmdDownloadRegionForLog,
   resolveSteamcmdAppUpdateTimeoutMs,
   resolveSteamcmdInstallMaxAttempts,
   resolveSteamcmdInstallRetryDelaysMs,
@@ -10,6 +11,7 @@ import {
 
 const ENV_KEYS = [
   'BSP_STEAMCMD_DOWNLOAD_REGION',
+  'GSH_STEAMCMD_DOWNLOAD_REGION',
   'BSP_STEAMCMD_HTTP_PROXY',
   'BSP_STEAMCMD_HTTPS_PROXY',
   'BSP_STEAMCMD_NO_PROXY',
@@ -60,6 +62,13 @@ describe('loadSteamcmdRuntimeConfig', () => {
     process.env.BSP_STEAMCMD_DOWNLOAD_REGION = 'cn'
     const env = buildSteamcmdContainerEnv()
     assert.ok(env.includes('https_proxy=http://127.0.0.1:7890'))
-    assert.ok(env.includes('STEAMCMD_FORCE_DOWNLOAD_REGION=china'))
+    assert.ok(!env.some(value => value.startsWith('STEAMCMD_FORCE_DOWNLOAD_REGION=')))
+  })
+
+  it('reads legacy region aliases only for a deprecation notice', () => {
+    process.env.GSH_STEAMCMD_DOWNLOAD_REGION = 'cn'
+    assert.equal(loadSteamcmdRuntimeConfig().downloadRegion, 'cn')
+    assert.match(formatSteamcmdDownloadRegionForLog('cn'), /已忽略/)
+    assert.match(formatSteamcmdDownloadRegionForLog(''), /自动选择/)
   })
 })

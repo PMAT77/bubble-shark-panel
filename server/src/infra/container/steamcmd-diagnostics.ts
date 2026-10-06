@@ -2,7 +2,7 @@ import { readBrandEnv } from '../../../../shared/brand-env'
 import fs from 'node:fs'
 import { resolveDockerStatus } from '../docker'
 import { resolveRuntimeStatus } from '../runtime'
-import { loadSteamcmdRuntimeConfig } from '../../shared/config/steamcmd'
+import { formatSteamcmdDownloadRegionForLog, loadSteamcmdRuntimeConfig } from '../../shared/config/steamcmd'
 import { getServerContainerConfig } from '../../shared/config/container'
 
 const STEAMCDN_PROBE_URL = 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz'
@@ -65,22 +65,19 @@ function buildSuggestions(input: {
       : 'Docker 不可用：请确认 docker.sock 已挂载且 Docker 服务已启动。')
   }
   if (!input.cdnOk) {
-    if (!input.config.downloadRegion) {
-      suggestions.push('在 panel.env 设置 BSP_STEAMCMD_DOWNLOAD_REGION=cn（或 shanghai/beijing）强制国内 CDN 节点。')
-    }
     if (!input.config.httpsProxy && !input.config.httpProxy) {
-      suggestions.push('若区域强制仍失败，可配置 BSP_STEAMCMD_HTTPS_PROXY 使用 HTTP/SOCKS 代理。')
+      suggestions.push('可配置 BSP_STEAMCMD_HTTPS_PROXY；游戏 CDN 是否走代理需实际验证。')
     }
     suggestions.push('检查宿主机 DNS（建议 223.5.5.5 / 114.114.114.114）与系统时间同步（chrony）。')
-    if (input.config.networkMode !== 'host') {
+    if (input.runtimeMode === 'docker' && input.config.networkMode !== 'host') {
       suggestions.push('持续超时时可尝试 BSP_STEAMCMD_NETWORK_MODE=host 后重启面板。')
     }
   }
-  if (input.config.downloadRegion && input.cdnOk) {
-    suggestions.push(`当前已强制 Steam 下载区域：${input.config.downloadRegion}。`)
+  if (input.config.downloadRegion) {
+    suggestions.push(formatSteamcmdDownloadRegionForLog(input.config.downloadRegion))
   }
   if (suggestions.length === 0) {
-    suggestions.push('基础连通性正常；若安装仍失败，请查看实例安装日志中的 SteamCMD 输出。')
+    suggestions.push('SteamCMD 安装包地址探测通过；游戏和 Workshop 内容服务器尚未验证。安装失败时请查看任务日志中的 SteamCMD 诊断。')
   }
   return suggestions
 }
@@ -125,14 +122,12 @@ export async function runSteamcmdDiagnostics(): Promise<SteamcmdDiagnosticsResul
     {
       id: 'steam_store_dns',
       ok: true,
-      message: `Steam 商店域名：${STEAM_STORE_HOST}（HTTPS 443，由 SteamCMD 安装时使用）`,
+      message: `Steam 商店参考域名：${STEAM_STORE_HOST}（未执行 DNS 探测，不代表游戏内容服务器可达）`,
     },
     {
       id: 'download_region',
-      ok: Boolean(steamcmdConfig.downloadRegion),
-      message: steamcmdConfig.downloadRegion
-        ? `已配置下载区域：${steamcmdConfig.downloadRegion}`
-        : '未配置 BSP_STEAMCMD_DOWNLOAD_REGION（国内服务器建议设为 cn）',
+      ok: !steamcmdConfig.downloadRegion,
+      message: formatSteamcmdDownloadRegionForLog(steamcmdConfig.downloadRegion),
     },
     {
       id: 'network_mode',

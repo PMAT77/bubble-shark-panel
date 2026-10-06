@@ -18,7 +18,7 @@ export function sanitizeSteamcmdLogLine(line: string): string {
     .replace(/\r/g, '')
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
     .replace(/^[\u0001\u0002\u0003]+/, '')
-    .replace(/\s{2,}/g, ' ')
+    .replace(/[^\S\n]{2,}/g, ' ')
     .trim()
 }
 
@@ -27,6 +27,9 @@ export type SteamcmdInstallFailureKind
     | 'timeout'
     | 'permission'
     | 'subscription'
+    | 'disk'
+    | 'oom'
+    | 'incomplete'
     | 'unknown'
 
 /**
@@ -35,6 +38,38 @@ export type SteamcmdInstallFailureKind
  * 并让安装流程按「可重试」处理（重试走 Steam 断点续传，不清理下载缓存）。
  */
 export const STEAMCMD_TIMEOUT_MARKER = 'GSH-STEAMCMD-TIMEOUT'
+export const STEAMCMD_OOM_MARKER = 'BSP-STEAMCMD-OOM'
+
+/** 保留可用于诊断的主错误，避免后续进度/卸载输出挤掉它。 */
+export const STEAMCMD_FAILURE_LINE = /error|failed|failure|missing|denied|timeout|timed?\s*out|invalid|no subscription|fatal|not enough disk|no space left|disk write|out of memory|BSP-STEAMCMD-OOM/i
+
+export function redactSteamcmdLogLine(line: string, secrets: string[] = []): string {
+  let text = sanitizeSteamcmdLogLine(line)
+  for (const secret of secrets.filter(Boolean).sort((a, b) => b.length - a.length)) {
+    text = text.split(secret).join('[REDACTED]')
+  }
+  return text
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@')
+    .replace(/([?&](?:[^=&\s]*(?:token|key|secret|password|ticket|auth)[^=&\s]*)=)[^&\s]+/gi, '$1[REDACTED]')
+}
+
+export function steamcmdLogSecrets(args: string[], proxies: string[]): string[] {
+  const login = args.indexOf('+login')
+  const secrets = login >= 0 && args[login + 1] !== 'anonymous'
+    ? args.slice(login + 1, login + 3).filter(value => value && !value.startsWith('+'))
+    : []
+  for (const proxy of proxies.filter(Boolean)) {
+    secrets.push(proxy)
+    try {
+      const url = new URL(proxy)
+      for (const value of [url.username, url.password]) {
+        if (value) secrets.push(value, decodeURIComponent(value))
+      }
+    }
+    catch { /* malformed proxy must not prevent collecting diagnostics */ }
+  }
+  return secrets
+}
 
 export {
   resolveSteamcmdInstallMaxAttempts,
@@ -43,18 +78,25 @@ export {
 
 /**
  * 根据 SteamCMD 输出归类失败原因。
- * Missing configuration / 0x602 在 bind 已修复后仍偶发，运行时证据指向 Steam 侧瞬时故障，归入 network。
+ * 明确的失败证据优先于应用状态；状态码本身不证明网络或本地文件损坏。
  */
 export function classifySteamcmdInstallFailure(output: string): SteamcmdInstallFailureKind {
-  const text = sanitizeSteamcmdLogLine(output) || output.trim()
-  if (text.includes(STEAMCMD_TIMEOUT_MARKER)) {
-    return 'timeout'
+  const text = sanitizeSteamcmdLogLine(output).split('\n')
+    .filter(line => !line.startsWith('[SteamCMD 诊断]')).join('\n')
+  if (text.includes(STEAMCMD_OOM_MARKER)) {
+    return 'oom'
   }
-  if (/Missing file permissions/i.test(text)) {
+  if (/not enough disk|no space left|disk full|out of disk space|insufficient disk|ENOSPC|disk write failure/i.test(text)) {
+    return 'disk'
+  }
+  if (/Missing file permissions|permission denied|EACCES|read-only file system/i.test(text)) {
     return 'permission'
   }
   if (/No subscription/i.test(text)) {
     return 'subscription'
+  }
+  if (text.includes(STEAMCMD_TIMEOUT_MARKER)) {
+    return 'timeout'
   }
   if (
     /needs to be online/i.test(text)
@@ -63,13 +105,13 @@ export function classifySteamcmdInstallFailure(output: string): SteamcmdInstallF
     || /timed?\s*out/i.test(text)
     || /ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(text)
     || /Could not connect|failed to connect|Unable to connect/i.test(text)
-    || /content server|CDN|Secure connection failed/i.test(text)
-    || /Fatal Error/i.test(text)
-    || /Missing configuration/i.test(text)
-    || /state is 0x602/i.test(text)
-    || /Illegal termination of worker thread/i.test(text)
+    || /(?:content server|CDN).*?(?:failed|unavailable|unreachable|timeout)|Secure connection failed/i.test(text)
+    || /HTTP (?:error[: ]*)?(?:429|5\d\d)\b/i.test(text)
   ) {
     return 'network'
+  }
+  if (/Missing configuration|state is 0x(?:402|602)\b/i.test(text)) {
+    return 'incomplete'
   }
   return 'unknown'
 }
@@ -77,19 +119,7 @@ export function classifySteamcmdInstallFailure(output: string): SteamcmdInstallF
 export function isRetriableSteamcmdInstallOutput(output: string): boolean {
   const kind = classifySteamcmdInstallFailure(output)
   // timeout 也重试：已下载内容保留在 steamapps/downloading，下一轮 app_update 断点续传
-  return kind === 'network' || kind === 'timeout'
-}
-
-/**
- * Steam 本地状态损坏特征（Missing configuration / 0x602 / worker thread 异常终止）。
- * 仅这类失败需要清空半成品 Steam 目录后重试；普通网络中断必须保留
- * steamapps/downloading 下载缓存，否则会失去 SteamCMD 的断点续传。
- */
-export function isSteamcmdCorruptStateOutput(output: string): boolean {
-  const text = sanitizeSteamcmdLogLine(output) || output.trim()
-  return /Missing configuration/i.test(text)
-    || /state is 0x602/i.test(text)
-    || /Illegal termination of worker thread/i.test(text)
+  return kind === 'network' || kind === 'timeout' || kind === 'incomplete'
 }
 
 function extractSteamcmdFailureSnippet(output: string): string {
@@ -99,7 +129,7 @@ function extractSteamcmdFailureSnippet(output: string): string {
   }
   const lines = sanitized.split('\n').map(line => line.trim()).filter(Boolean)
   const errorLine = [...lines].reverse().find(line =>
-    /error|failed|failure|missing|denied|timeout|invalid|not available|no subscription|fatal|online/i.test(line),
+    STEAMCMD_FAILURE_LINE.test(line) && !line.startsWith('[SteamCMD 诊断]'),
   )
   if (errorLine) {
     return errorLine
@@ -119,6 +149,15 @@ export function formatSteamcmdAppUpdateFailureMessage(input: {
   const output = sanitizeSteamcmdLogLine(input.output) || input.output.trim()
   const failureSnippet = extractSteamcmdFailureSnippet(input.output)
   const kind = classifySteamcmdInstallFailure(input.output)
+
+  if (kind === 'disk' || kind === 'oom' || kind === 'incomplete') {
+    const detail = {
+      disk: '磁盘空间不足或写入失败。请检查实例目录和容器存储所在磁盘。',
+      oom: 'Docker 确认容器被 OOM 终止。请检查内存上限及宿主机内存。',
+      incomplete: '更新未完成，具体原因尚未确定。已保留下载缓存，请查看本次 content_log.txt 和 stderr.txt 诊断后重试。',
+    }[kind]
+    return `SteamCMD 安装 ${input.appId} 失败：${detail}SteamCMD 输出：${failureSnippet}`
+  }
 
   if (kind === 'subscription') {
     const steamClientSelfUpdate = /app\s*['"]?8['"]?/i.test(output)
@@ -151,9 +190,8 @@ export function formatSteamcmdAppUpdateFailureMessage(input: {
     return [
       `SteamCMD 安装 ${input.appId} 失败（下载超时）。`,
       '面板在单次 app_update 超过 BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS（默认 60 分钟）后终止了任务；',
-      '已下载内容保留在 steamapps/downloading，重新安装会断点续传（共享内存不足与本次失败无关）。',
+      '已下载内容保留在 steamapps/downloading，重新安装会断点续传。',
       '建议：在 panel.env 调大 BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS（毫秒，例如 7200000），',
-      '并设置 BSP_STEAMCMD_DOWNLOAD_REGION=cn 提升下载速度。',
       `SteamCMD 输出：${failureSnippet}`,
     ].join('')
   }
@@ -161,8 +199,7 @@ export function formatSteamcmdAppUpdateFailureMessage(input: {
   if (kind === 'network') {
     return [
       `SteamCMD 安装 ${input.appId} 失败（网络或 Steam 服务不稳定）。`,
-      '可能原因：访问 Steam CDN/API 超时、连续安装触发限速、Docker 出网抖动，或 Steam 返回瞬时错误（如 Missing configuration）。',
-      '建议：在 panel.env 设置 BSP_STEAMCMD_DOWNLOAD_REGION=cn；必要时配置 BSP_STEAMCMD_HTTPS_PROXY；',
+      '请检查 Steam 内容服务器连接、DNS 和 Docker 出网；必要时配置 BSP_STEAMCMD_HTTPS_PROXY（游戏 CDN 是否走代理需实际验证）；',
       '等待数分钟后点击「更新服务端」重试；在系统设置查看 SteamCMD 诊断；避免 dev:compose 与 dev:server 同时运行。',
       `SteamCMD 输出：${failureSnippet}`,
     ].join('')

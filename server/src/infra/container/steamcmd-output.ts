@@ -1,9 +1,13 @@
+import { STEAMCMD_FAILURE_LINE } from './steamcmd-errors'
+
 /** app-info 是待解析的数据，不能按安装日志的尾部截断。 */
 export const STEAMCMD_APP_INFO_MAX_BYTES = 1024 * 1024
 
 export class SteamcmdOutput {
   private lines: string[] = []
   private bytes = 0
+  private failures: string[] = []
+  private diagnostics: string[] = []
   private readonly full: boolean
   overflowed = false
 
@@ -32,15 +36,25 @@ export class SteamcmdOutput {
       return
     }
     this.lines.push(line)
+    if (!this.full && STEAMCMD_FAILURE_LINE.test(line) && !line.startsWith('[SteamCMD 诊断]')) {
+      this.failures.push(line)
+      if (this.failures.length > 20) this.failures.shift()
+    }
     if (!this.full && this.lines.length > 80) {
       this.lines.shift()
     }
+  }
+
+  pushDiagnostic(line: string): void {
+    this.diagnostics.push(line)
   }
 
   get output(): string {
     if (this.overflowed) {
       return 'SteamCMD 版本查询输出超过 1 MiB，无法判断版本'
     }
-    return (this.full ? this.lines : this.lines.slice(-20)).join('\n')
+    return (this.full ? this.lines : [...new Set([
+      ...this.failures, ...this.lines.slice(-20), ...this.diagnostics,
+    ])]).join('\n')
   }
 }

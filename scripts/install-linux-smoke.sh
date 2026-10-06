@@ -18,22 +18,22 @@ SMOKE_INSTALLED_TAG='v0.6.0'
 # 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
 SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.15.3 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${BSP_RELEASE_TAG}" == "v0.15.3" ]]
+# v0.15.4 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${BSP_RELEASE_TAG}" == "v0.15.4" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${BSP_GAME_DST_IMAGE}" == "" ]]
 [[ "${BSP_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.15.3"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.15.4"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.15.3" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.15.4" ]]
 [[ "${BSP_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${BSP_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 
@@ -52,6 +52,12 @@ NETWORK_PROFILE=cn
 resolve_network_profile
 [[ "${RESOLVED_NETWORK_PROFILE}" == "cn" ]]
 [[ "${USE_CN_DEBIAN_MIRROR}" == "1" ]]
+
+# 新配置不再生成 SteamCMD 不支持的区域选项；旧文件的兼容由面板负责。
+if grep -Fq 'BSP_STEAMCMD_DOWNLOAD_REGION=' "${SCRIPT_DIR}/install.linux.sh"; then
+  printf 'installer must not generate deprecated SteamCMD region configuration\n' >&2
+  exit 1
+fi
 
 SMOKE_TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${SMOKE_TMP_DIR}" "${SMOKE_ASSET_DIR}"' EXIT

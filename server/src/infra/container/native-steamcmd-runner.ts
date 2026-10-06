@@ -3,20 +3,22 @@ import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { buildSteamcmdAppUpdateArgs, buildSteamcmdWorkshopDownloadArgs } from './steamcmd-args'
 import { withSteamcmdAppUpdateLock } from './steamcmd-app-update-queue'
-import { sanitizeSteamcmdLogLine, STEAMCMD_TIMEOUT_MARKER } from './steamcmd-errors'
+import { redactSteamcmdLogLine, steamcmdLogSecrets, STEAMCMD_TIMEOUT_MARKER } from './steamcmd-errors'
 import { getServerContainerConfig } from '../../shared/config/container'
 import {
   formatSteamcmdTimeoutForLog,
+  formatSteamcmdDownloadRegionForLog,
   loadSteamcmdRuntimeConfig,
   resolveSteamcmdAppUpdateTimeoutMs,
 } from '../../shared/config/steamcmd'
 import { DST_WORKSHOP_APP_ID } from '../game-adapter/dst/constants'
 import { SteamcmdOutput } from './steamcmd-output'
+import { NativeSteamcmdLogDiagnostics } from './steamcmd-log-diagnostics'
 
 const STEAMCMD_APP_INFO_TIMEOUT_MS = 90_000
 const DEFAULT_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
 
-const activeNativeSteamcmdJobs = new Map<string, ChildProcess>()
+const activeNativeSteamcmdJobs = new Map<string, { child: ChildProcess, terminate: () => void }>()
 const cancelledNativeSteamcmdJobs = new Set<string>()
 
 interface NativeSteamcmdJobInput {
@@ -42,9 +44,7 @@ function buildSteamcmdEnv(): NodeJS.ProcessEnv {
     env.no_proxy = config.noProxy
     env.NO_PROXY = config.noProxy
   }
-  if (config.downloadRegion) {
-    env.STEAMCMD_FORCE_DOWNLOAD_REGION = 'china'
-  }
+  delete env.STEAMCMD_FORCE_DOWNLOAD_REGION
   return env
 }
 
@@ -70,6 +70,11 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
   cancelled?: boolean
   timedOut?: boolean
 }> {
+  const jobId = input.cancelKey?.trim()
+  if (jobId && cancelledNativeSteamcmdJobs.has(jobId)) {
+    cancelledNativeSteamcmdJobs.delete(jobId)
+    return { ok: false, output: 'SteamCMD 任务已取消（启动前被取消）', cancelled: true }
+  }
   const { nativeSteamcmdPath } = getServerContainerConfig()
   if (!fs.existsSync(nativeSteamcmdPath)) {
     return {
@@ -78,26 +83,46 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
     }
   }
   const collected = new SteamcmdOutput(input.kind === 'app-info')
+  const config = loadSteamcmdRuntimeConfig()
+  const secrets = steamcmdLogSecrets(input.args, [config.httpProxy, config.httpsProxy])
+  const diagnostics = input.kind === 'app-info' ? undefined : new NativeSteamcmdLogDiagnostics(nativeSteamcmdPath)
   const pushLine = (raw: string) => {
-    const line = sanitizeSteamcmdLogLine(raw)
+    diagnostics?.observe(raw)
+    const line = redactSteamcmdLogLine(raw, secrets)
     if (!line) {
       return
     }
     collected.push(line)
     input.onLogLine?.(line)
   }
-  const jobId = input.cancelKey?.trim()
   // 取消标记不在这里清除：排队取消依赖锁出队时检查（取消标记存活到出队）；
   // 重试场景的残留标记由 install-service.startInstallJob 在新任务启动时清理。
   const child = spawn(nativeSteamcmdPath, input.args, {
     cwd: path.dirname(nativeSteamcmdPath),
     env: buildSteamcmdEnv(),
+    detached: process.platform === 'linux',
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })
-  if (jobId) {
-    activeNativeSteamcmdJobs.set(jobId, child)
+  let killTimer: ReturnType<typeof setTimeout> | undefined
+  let termination: Promise<void> | undefined
+  const signal = (value: NodeJS.Signals) => {
+    try {
+      if (process.platform === 'linux' && child.pid) process.kill(-child.pid, value)
+      else child.kill(value)
+    }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
   }
+  const terminate = () => {
+    if (killTimer) return
+    signal('SIGTERM')
+    termination = new Promise(resolve => {
+      killTimer = setTimeout(() => { signal('SIGKILL'); resolve() }, 5000)
+    })
+  }
+  if (jobId) activeNativeSteamcmdJobs.set(jobId, { child, terminate })
 
   let timedOut = false
   let spawnError: Error | undefined
@@ -128,9 +153,7 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
 
   const timeout = setTimeout(() => {
     timedOut = true
-    child.kill('SIGTERM')
-    const killTimer = setTimeout(() => child.kill('SIGKILL'), 5_000)
-    killTimer.unref()
+    terminate()
   }, input.timeoutMs)
   timeout.unref()
 
@@ -138,6 +161,17 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
     child.once('close', code => resolve(code ?? -1))
   })
   clearTimeout(timeout)
+  if (termination && process.platform === 'linux' && child.pid) {
+    try {
+      // 父进程退出不代表进程组内忽略 SIGTERM 的子进程也已退出。
+      process.kill(-child.pid, 0)
+      await termination
+    }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+  }
+  clearTimeout(killTimer)
   if (stdoutCarry.trim()) {
     pushLine(stdoutCarry)
   }
@@ -158,6 +192,15 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
     pushLine(
       `${STEAMCMD_TIMEOUT_MARKER}: SteamCMD 任务超过 ${formatSteamcmdTimeoutForLog(input.timeoutMs)} 上限，已终止进程；已下载内容保留，重试将断点续传`,
     )
+  }
+  if ((exitCode !== 0 && !spawnError || timedOut) && !cancelled) {
+    diagnostics?.collect(raw => {
+      const line = redactSteamcmdLogLine(raw, secrets)
+      if (line) {
+        collected.pushDiagnostic(line)
+        input.onLogLine?.(line)
+      }
+    })
   }
   const output = collected.output
     || (timedOut ? 'SteamCMD 任务超时' : cancelled ? 'SteamCMD 任务已取消' : 'SteamCMD 任务执行失败')
@@ -187,12 +230,12 @@ export async function runSteamcmdAppUpdateNative(input: {
     const steamcmdConfig = loadSteamcmdRuntimeConfig()
     input.onLogLine?.(`使用 Native SteamCMD: ${getServerContainerConfig().nativeSteamcmdPath}`)
     input.onLogLine?.(`安装目录: ${input.hostInstallPath}`)
+    input.onLogLine?.(formatSteamcmdDownloadRegionForLog(steamcmdConfig.downloadRegion))
     const result = await runNativeSteamcmdJob({
       args: buildSteamcmdAppUpdateArgs(
         input.hostInstallPath,
         input.appId,
         input.loginArgs,
-        { downloadRegion: steamcmdConfig.downloadRegion || undefined },
       ),
       cancelKey: input.cancelKey,
       timeoutMs: resolveSteamcmdAppUpdateTimeoutMs(),
@@ -228,13 +271,13 @@ export async function runSteamcmdWorkshopDownloadNative(input: {
     }
     await input.onDownloadStart?.()
     const config = loadSteamcmdRuntimeConfig()
+    input.onLogLine?.(formatSteamcmdDownloadRegionForLog(config.downloadRegion))
     const result = await runNativeSteamcmdJob({
       args: buildSteamcmdWorkshopDownloadArgs(
         input.hostInstallPath,
         DST_WORKSHOP_APP_ID,
         workshopIds,
         ['+login', 'anonymous'],
-        { downloadRegion: config.downloadRegion || undefined },
       ),
       cancelKey: input.cancelKey,
       timeoutMs: input.timeoutMs ?? DEFAULT_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS,
@@ -266,10 +309,10 @@ export function clearNativeSteamcmdCancelFlag(cancelKey: string): void {
 
 export async function cancelNativeSteamcmdJob(cancelKey: string): Promise<void> {
   cancelledNativeSteamcmdJobs.add(cancelKey)
-  activeNativeSteamcmdJobs.get(cancelKey)?.kill('SIGTERM')
+  activeNativeSteamcmdJobs.get(cancelKey)?.terminate()
 }
 
 export function isNativeSteamcmdJobRunning(jobId: string): boolean {
-  const child = activeNativeSteamcmdJobs.get(jobId)
-  return Boolean(child && child.exitCode === null && !child.killed)
+  const child = activeNativeSteamcmdJobs.get(jobId)?.child
+  return Boolean(child && child.exitCode === null && child.signalCode === null)
 }

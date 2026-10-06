@@ -4,7 +4,9 @@ import {
   classifySteamcmdInstallFailure,
   formatSteamcmdAppUpdateFailureMessage,
   isRetriableSteamcmdInstallOutput,
-  isSteamcmdCorruptStateOutput,
+  redactSteamcmdLogLine,
+  steamcmdLogSecrets,
+  STEAMCMD_OOM_MARKER,
   sanitizeSteamcmdLogLine,
   STEAMCMD_TIMEOUT_MARKER,
 } from './steamcmd-errors.ts'
@@ -37,31 +39,31 @@ describe('classifySteamcmdInstallFailure', () => {
     )
   })
 
-  it('treats Missing configuration as network (transient Steam)', () => {
+  it('treats Missing configuration as incomplete without asserting a root cause', () => {
     assert.equal(
       classifySteamcmdInstallFailure('ERROR! Failed to install app \'343050\' (Missing configuration)'),
-      'network',
+      'incomplete',
     )
   })
 
-  it('treats 0x602 as network', () => {
+  it('treats 0x602 as incomplete', () => {
     assert.equal(
       classifySteamcmdInstallFailure('Error! App \'343050\' state is 0x602 after update job'),
-      'network',
+      'incomplete',
     )
   })
 })
 
 describe('formatSteamcmdAppUpdateFailureMessage', () => {
-  it('explains Missing configuration as network instability', () => {
+  it('explains Missing configuration without assuming network instability', () => {
     const message = formatSteamcmdAppUpdateFailureMessage({
       appId: '343050',
       output: 'ERROR! Failed to install app \'343050\' (Missing configuration)',
       mode: 'anonymous',
       hasAccountCredentials: false,
     })
-    assert.match(message, /网络或 Steam 服务不稳定/)
-    assert.match(message, /BSP_STEAMCMD_DOWNLOAD_REGION=cn/)
+    assert.match(message, /更新未完成/)
+    assert.doesNotMatch(message, /BSP_STEAMCMD_DOWNLOAD_REGION/)
     assert.doesNotMatch(message, /bind/)
     assert.doesNotMatch(message, /STEAMCMD_USERNAME/)
   })
@@ -100,7 +102,6 @@ describe('isRetriableSteamcmdInstallOutput', () => {
     const output = `${STEAMCMD_TIMEOUT_MARKER}: app_update 超过 60 分钟上限，已终止容器`
     assert.equal(classifySteamcmdInstallFailure(output), 'timeout')
     assert.equal(isRetriableSteamcmdInstallOutput(output), true)
-    assert.equal(isSteamcmdCorruptStateOutput(output), false)
 
     const message = formatSteamcmdAppUpdateFailureMessage({
       appId: '343050',
@@ -114,16 +115,28 @@ describe('isRetriableSteamcmdInstallOutput', () => {
   })
 })
 
-describe('isSteamcmdCorruptStateOutput', () => {
-  it('flags corrupt local Steam state that needs directory cleanup', () => {
-    assert.equal(isSteamcmdCorruptStateOutput("ERROR! Failed to install app '343050' (Missing configuration)"), true)
-    assert.equal(isSteamcmdCorruptStateOutput("Error! App '343050' state is 0x602 after update job"), true)
-    assert.equal(isSteamcmdCorruptStateOutput('Illegal termination of worker thread, individuals can ignore'), true)
+describe('failure evidence and redaction', () => {
+  it('retries the reported 0x402 failure but prioritizes explicit causes', () => {
+    const output = "Update state (0x61) downloading, progress: 2.43\nError! App '343050' state is 0x402 after update job."
+    assert.equal(classifySteamcmdInstallFailure(output), 'incomplete')
+    assert.equal(isRetriableSteamcmdInstallOutput(output), true)
+    for (const [evidence, kind] of [
+      ['Not enough disk space', 'disk'], ['Permission denied', 'permission'],
+      ['No subscription', 'subscription'], [STEAMCMD_OOM_MARKER, 'oom'],
+    ]) {
+      assert.equal(classifySteamcmdInstallFailure(`${output}\n${evidence}\n${STEAMCMD_TIMEOUT_MARKER}`), kind)
+      assert.equal(isRetriableSteamcmdInstallOutput(`${output}\n${evidence}`), false)
+    }
+    assert.equal(classifySteamcmdInstallFailure('Fatal Error: unexpected local failure'), 'unknown')
+    assert.equal(classifySteamcmdInstallFailure('CDN selected: good.example'), 'unknown')
+    assert.equal(classifySteamcmdInstallFailure('Illegal termination of worker thread, individuals can ignore'), 'unknown')
+    assert.equal(classifySteamcmdInstallFailure(`${output}\n[SteamCMD 诊断] stderr.txt 未采集：Permission denied`), 'incomplete')
   })
 
-  it('does not flag transient network errors (keep downloading cache for resume)', () => {
-    assert.equal(isSteamcmdCorruptStateOutput('Error! ... timed out'), false)
-    assert.equal(isSteamcmdCorruptStateOutput('Check your network connection and try again'), false)
-    assert.equal(isSteamcmdCorruptStateOutput(''), false)
+  it('removes login and proxy secrets, URL credentials and query tokens', () => {
+    const secrets = steamcmdLogSecrets(['+login', 'private-user', 'private-password'], ['http://proxy-user:proxy-password@host:7890'])
+    const text = redactSteamcmdLogLine('private-user private-password proxy-password https://u:p@cdn/file?token=abc&foo=ok&authKey=def', secrets)
+    assert.doesNotMatch(text, /private-user|private-password|proxy-password|u:p|abc|def/)
+    assert.match(text, /foo=ok/)
   })
 })

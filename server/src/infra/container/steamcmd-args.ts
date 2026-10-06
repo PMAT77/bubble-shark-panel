@@ -1,9 +1,9 @@
 export interface BuildSteamcmdAppUpdateArgsOptions {
-  /** Steam 下载区域代码，如 cn / shanghai / beijing */
+  /** @deprecated 旧配置仅保留兼容，SteamCMD 不支持该区域参数。 */
   downloadRegion?: string
 }
 
-export function buildSteamcmdCommandPrefix(options?: BuildSteamcmdAppUpdateArgsOptions): string[] {
+export function buildSteamcmdCommandPrefix(): string[] {
   const prefix: string[] = [
     '+@ShutdownOnFailedCommand',
     '1',
@@ -12,10 +12,6 @@ export function buildSteamcmdCommandPrefix(options?: BuildSteamcmdAppUpdateArgsO
     '+@sSteamCmdForcePlatformType',
     'linux',
   ]
-  const region = options?.downloadRegion?.trim()
-  if (region) {
-    prefix.push('+@sSteamCmdForceRegion', region)
-  }
   return prefix
 }
 
@@ -24,10 +20,10 @@ export function buildSteamcmdAppUpdateArgs(
   installPath: string,
   appId: string,
   loginArgs: string[],
-  options?: BuildSteamcmdAppUpdateArgsOptions,
+  _options?: BuildSteamcmdAppUpdateArgsOptions,
 ) {
   return [
-    ...buildSteamcmdCommandPrefix(options),
+    ...buildSteamcmdCommandPrefix(),
     '+force_install_dir',
     installPath,
     ...loginArgs,
@@ -43,7 +39,7 @@ export function buildSteamcmdWorkshopDownloadArgs(
   workshopAppId: string,
   workshopIds: string[],
   loginArgs: string[],
-  options?: BuildSteamcmdAppUpdateArgsOptions,
+  _options?: BuildSteamcmdAppUpdateArgsOptions,
 ) {
   const downloadArgs = workshopIds.flatMap(workshopId => [
     '+workshop_download_item',
@@ -52,7 +48,7 @@ export function buildSteamcmdWorkshopDownloadArgs(
     'validate',
   ])
   return [
-    ...buildSteamcmdCommandPrefix(options),
+    ...buildSteamcmdCommandPrefix(),
     '+force_install_dir',
     installPath,
     ...loginArgs,

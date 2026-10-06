@@ -39,5 +39,5 @@ export function resolveUpdateIneffectiveNotice(input: {
   if (!input.wasRunning || input.status !== 'idle' || input.updatableCount === 0) {
     return null
   }
-  return `更新已执行，但仍有 ${input.updatableCount} 个 Mod 显示有新版本：本机内容没有追平创意工坊，多为 SteamCMD 的网络问题（可在面板配置里调整下载区域或代理）后重试。`
+  return `更新已执行，但仍有 ${input.updatableCount} 个 Mod 显示有新版本：本机内容没有追平创意工坊，请查看 SteamCMD 下载日志，检查网络和代理配置后重试。`
 }

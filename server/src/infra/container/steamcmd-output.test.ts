@@ -36,3 +36,17 @@ it('counts untrimmed chunks and rejects excess before a line is complete', () =>
   assert.equal(info.overflowed, true)
   assert.match(info.output, /超过 1 MiB/)
 })
+
+it('keeps the principal error and timeout marker alongside bounded diagnostics', () => {
+  const output = new SteamcmdOutput(false)
+  output.push("Error! App '343050' state is 0x402 after update job.")
+  output.push('GSH-STEAMCMD-TIMEOUT: failed after timeout')
+  output.push('BSP-STEAMCMD-OOM: Docker 确认容器被 OOM 终止')
+  for (let i = 0; i < 100; i++) output.push(`progress ${i}`)
+  output.pushDiagnostic('[SteamCMD 诊断] content_log.txt')
+  output.pushDiagnostic('Not enough disk space')
+  assert.match(output.output, /0x402/)
+  assert.match(output.output, /GSH-STEAMCMD-TIMEOUT/)
+  assert.match(output.output, /BSP-STEAMCMD-OOM/)
+  assert.match(output.output, /Not enough disk space/)
+})

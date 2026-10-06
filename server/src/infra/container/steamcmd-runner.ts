@@ -11,6 +11,7 @@ import { withSteamcmdAppUpdateLock } from './steamcmd-app-update-queue'
 import { loadServerConfig, resolveInstallLogsDir } from '../../shared/config'
 import {
   formatSteamcmdTimeoutForLog,
+  formatSteamcmdDownloadRegionForLog,
   loadSteamcmdRuntimeConfig,
   resolveSteamcmdAppUpdateTimeoutMs,
 } from '../../shared/config/steamcmd'
@@ -145,11 +146,9 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
   }
 
   const steamcmdConfig = loadSteamcmdRuntimeConfig()
-  if (steamcmdConfig.downloadRegion) {
-    pushLine(`Steam 下载区域：${steamcmdConfig.downloadRegion}`)
-  }
+  pushLine(formatSteamcmdDownloadRegionForLog(steamcmdConfig.downloadRegion))
   if (steamcmdConfig.httpProxy || steamcmdConfig.httpsProxy) {
-    pushLine('SteamCMD 代理：已配置（HTTP/HTTPS）')
+    pushLine('SteamCMD 代理：已配置（HTTP/HTTPS；游戏 CDN 是否走代理需实际验证）')
   }
   if (steamcmdConfig.networkMode === 'host') {
     pushLine('SteamCMD 网络模式：host')
@@ -159,7 +158,6 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
     bindPlan.containerInstallPath,
     input.appId,
     input.loginArgs,
-    { downloadRegion: steamcmdConfig.downloadRegion || undefined },
   )
 
   const memoryLimits = resolveSteamcmdContainerMemoryLimits('app-update')
@@ -205,8 +203,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
     pushLine('SteamCMD app_update 已完成')
   }
 
-  // 超时与取消也走 SIGKILL（137）：只有面板没主动杀容器时，137 才是真的 OOM
-  const oomKilled = result.exitCode === 137 && !result.timedOut && !result.cancelled
+  const oomKilled = result.oomKilled
 
   if (instanceId) {
     try {
@@ -219,14 +216,14 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
           exitCode: result.exitCode,
           cancelled: result.cancelled ?? false,
           timedOut: result.timedOut ?? false,
-          oomKilled,
+          oomKilled: oomKilled ?? null,
         },
       })
       for (const line of resourceLines) {
         pushLine(line)
       }
       if (oomKilled) {
-        pushLine('SteamCMD 容器因内存硬上限 OOM 被终止（exit 137）；可在 panel.env 酌情调高 BSP_STEAMCMD_CONTAINER_MEMORY_MB，并避免与运行中实例同时安装')
+        pushLine('Docker 确认 SteamCMD 容器被 OOM 终止；请检查 BSP_STEAMCMD_CONTAINER_MEMORY_MB 和宿主机内存，并避免与运行中实例同时安装')
       }
     }
     catch {
@@ -297,12 +294,12 @@ async function runSteamcmdWorkshopDownloadInContainerUnlocked(input: {
   }
 
   const steamcmdConfig = loadSteamcmdRuntimeConfig()
+  pushLine(formatSteamcmdDownloadRegionForLog(steamcmdConfig.downloadRegion))
   const steamcmdArgs = buildSteamcmdWorkshopDownloadArgs(
     bindPlan.containerInstallPath,
     DST_WORKSHOP_APP_ID,
     workshopIds,
     ['+login', 'anonymous'],
-    { downloadRegion: steamcmdConfig.downloadRegion || undefined },
   )
 
   const memoryLimits = resolveSteamcmdContainerMemoryLimits('app-update')

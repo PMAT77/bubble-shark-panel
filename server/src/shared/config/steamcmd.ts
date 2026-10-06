@@ -1,6 +1,7 @@
 import { readBrandEnv } from '../../../../shared/brand-env'
 
 export interface SteamcmdRuntimeConfig {
+  /** @deprecated 兼容读取，实际由 SteamCMD 自动选择下载节点。 */
   downloadRegion: string
   httpProxy: string
   httpsProxy: string
@@ -90,7 +91,13 @@ export function formatSteamcmdTimeoutForLog(timeoutMs: number): string {
   return `${Math.round(timeoutMs / 60000)} 分钟`
 }
 
-/** 注入 SteamCMD 临时容器的代理与区域环境变量 */
+export function formatSteamcmdDownloadRegionForLog(region: string): string {
+  return region
+    ? `BSP_STEAMCMD_DOWNLOAD_REGION=${region} 已废弃，已忽略；下载节点由 SteamCMD 自动选择`
+    : '下载节点由 SteamCMD 自动选择'
+}
+
+/** 注入 SteamCMD 临时容器的代理环境变量。配置不代表游戏 CDN 已验证走代理。 */
 export function buildSteamcmdContainerEnv(config: SteamcmdRuntimeConfig = loadSteamcmdRuntimeConfig()): string[] {
   const env: string[] = []
   if (config.httpProxy) {
@@ -101,9 +108,6 @@ export function buildSteamcmdContainerEnv(config: SteamcmdRuntimeConfig = loadSt
   }
   if (config.noProxy) {
     env.push(`no_proxy=${config.noProxy}`, `NO_PROXY=${config.noProxy}`)
-  }
-  if (config.downloadRegion) {
-    env.push('STEAMCMD_FORCE_DOWNLOAD_REGION=china')
   }
   return env
 }

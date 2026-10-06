@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 import { describe, it } from 'node:test'
 
-import { buildSteamcmdAppUpdateArgs } from './steamcmd-args.ts'
+import { buildSteamcmdAppUpdateArgs, buildSteamcmdWorkshopDownloadArgs } from './steamcmd-args.ts'
 
 
 
@@ -38,16 +38,15 @@ describe('buildSteamcmdAppUpdateArgs', () => {
 
   })
 
-  it('inserts force region before force_install_dir when configured', () => {
+  it('ignores legacy region options for both game and workshop commands', () => {
     const args = buildSteamcmdAppUpdateArgs('/game', '343050', ['+login', 'anonymous'], {
       downloadRegion: 'cn',
     })
-    const regionIdx = args.indexOf('+@sSteamCmdForceRegion')
-    const forceIdx = args.indexOf('+force_install_dir')
-    assert.ok(regionIdx >= 0)
-    assert.ok(forceIdx >= 0)
-    assert.ok(regionIdx < forceIdx)
-    assert.equal(args[regionIdx + 1], 'cn')
+    assert.deepEqual(args, buildSteamcmdAppUpdateArgs('/game', '343050', ['+login', 'anonymous']))
+    const workshop = buildSteamcmdWorkshopDownloadArgs('/game', '322330', ['123'], ['+login', 'anonymous'], { downloadRegion: 'cn' })
+    assert.deepEqual(workshop, buildSteamcmdWorkshopDownloadArgs('/game', '322330', ['123'], ['+login', 'anonymous']))
+    assert.ok(workshop.indexOf('+force_install_dir') < workshop.indexOf('+login'))
+    assert.ok(workshop.includes('validate'))
   })
 
 })

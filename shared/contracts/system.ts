@@ -85,6 +85,7 @@ export const steamcmdConfigResponseSchema = steamcmdConfigPayloadSchema.extend({
   isSteamcmdInstalled: z.boolean(),
   isGameDstImageInstalled: z.boolean(),
   detectedSteamcmdPath: z.string(),
+  /** @deprecated 原始旧配置，仅兼容返回，不影响下载节点。 */
   downloadRegion: z.string(),
   networkMode: z.string(),
   installMaxAttempts: z.number().int().positive(),

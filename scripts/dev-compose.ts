@@ -37,7 +37,7 @@ const panelPort = process.env.PANEL_PORT?.trim() || readEnvFileVar('PANEL_PORT')
 const webPort = process.env.VITE_DEV_WEB_PORT?.trim() || readEnvFileVar('VITE_DEV_WEB_PORT') || '9527'
 const panelUrl = `http://127.0.0.1:${panelPort}`
 const webUrl = `http://127.0.0.1:${webPort}`
-const steamcmdImage = readBrandEnv('BSP_STEAMCMD_IMAGE')?.trim() || 'ghcr.io/pmat77/bubblesharkpanel:v0.15.2'
+const steamcmdImage = readBrandEnv('BSP_STEAMCMD_IMAGE')?.trim() || 'ghcr.io/pmat77/bubblesharkpanel:v0.15.3'
 const account = process.env.ADMIN_USERNAME?.trim() || 'superadmin'
 const password = process.env.ADMIN_PASSWORD ?? '123456'
 

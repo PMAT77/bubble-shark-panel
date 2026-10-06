@@ -69,7 +69,7 @@ PANEL_DB_FILENAME="${PANEL_DB_FILENAME:-bubblesharkpanel.sqlite}"
 PANEL_NATIVE_SERVICE="${BSP_NATIVE_SERVICE:-bubblesharkpanel.service}"
 
 SCRIPT_NAME="$(basename "$0")" # 当前脚本名称（用于日志展示）。
-BSP_RELEASE_TAG="${BSP_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.15.2}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
+BSP_RELEASE_TAG="${BSP_RELEASE_TAG:-${PANEL_IMAGE_TAG:-v0.15.3}}" # 默认安装的不可变 Release；同时锁定安装资源与镜像版本。
 INSTALLER_REPO_RAW="${INSTALLER_REPO_RAW:-}" # 兼容旧变量：指定单一安装资源源（为空时使用 INSTALLER_REPO_MIRRORS）。
 # GitHub 资源加速代理（前缀拼接型）：安装资源与 Native 包共用；BSP_GITHUB_PROXY 可强制指定单一节点。
 GITHUB_PROXY_SITES="${GITHUB_PROXY_SITES:-https://gh-proxy.com/,https://ghfast.top/,https://ghproxy.com/}"
@@ -77,7 +77,7 @@ BSP_GITHUB_PROXY="${BSP_GITHUB_PROXY:-}" # 强制指定 GitHub 加速代理（�
 INSTALLER_REPO_MIRRORS="${INSTALLER_REPO_MIRRORS:-}" # 安装资源镜像池；为空时由 init_installer_repo_pool 按代理清单生成。
 # 校验对象是镜像源提供的 git blob 原始字节（LF）；改动 compose 后必须同步更新此处。
 # 历史 pin eb30aeae... 与 v0.1.4 tag 内 compose blob（a34665e2...）不匹配，导致严格校验必然失败。
-INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-9786022fa53eda475bcc55af3aff87790ffcee3bbb63b1b2cbf6ca7091429fb4}"
+INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_YML:-7e91ee25a42436402d5a2bb34e6f5885e398d31eaae9931717c84f6f0c32f1cc}"
 INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML="${INSTALLER_ASSET_SHA256_DOCKER_COMPOSE_BIND_YML:-2ca65c80ee02cfb08e3aec26ae17dabb38296e825147a43896bc7daf1cb07d65}"
 # Debian 12 等发行版源不含 Compose v2 时，从 docker/compose GitHub Release 自动补装 CLI 插件。
 # 摘要与官方 .sha256 / checksums.txt 资产双源核对；升级插件版本时需同步替换版本号与两个摘要。
@@ -322,16 +322,22 @@ probe_ghcr_layer_access() {
 
   token="$(curl -fsSL --connect-timeout 5 --max-time "${max_seconds}" \
     "https://ghcr.io/token?scope=repository:${repository}:pull&service=ghcr.io" 2>/dev/null \
-    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || {
+    log_warn "GHCR token 探测失败（退出码 $?），按不可达处理。"
+    return 0
+  }
   if [[ -z "${token}" ]]; then
-    return
+    return 0
   fi
 
   digest="$(curl -fsSL --connect-timeout 5 --max-time "${max_seconds}" \
     -H "Authorization: Bearer ${token}" -H "${accept}" "${manifest_url}" 2>/dev/null \
-    | tr ',' '\n' | sed -n 's/.*"digest":"\(sha256:[0-9a-f]*\)".*/\1/p' | head -1)"
+    | tr ',' '\n' | sed -n 's/.*"digest":"\(sha256:[0-9a-f]*\)".*/\1/p' | head -1)" || {
+    log_warn "GHCR manifest 探测失败（退出码 $?），按不可达处理。"
+    return 0
+  }
   if [[ -z "${digest}" ]]; then
-    return
+    return 0
   fi
 
   started="$(date +%s)"
@@ -343,7 +349,10 @@ probe_ghcr_layer_access() {
     if (( elapsed <= max_seconds )); then
       GHCR_LAYER_ACCESSIBLE=1
     fi
+  else
+    log_warn "GHCR blob 探测失败（退出码 $?），按不可达处理。"
   fi
+  return 0
 }
 
 # 探测每项独立超时并各自打点：弱网下最坏耗时 = 各项超时之和 * 站点数，不能无限等。
@@ -356,28 +365,29 @@ probe_reachability() {
   SYSTEMCTL_AVAILABLE=0
   HOST_IPV4="$(resolve_host_ipv4)"
 
-  if [[ -z "${PANEL_IMAGE_OVERRIDE}" ]]; then
-    if check_registry_reachability "ghcr.io" >/dev/null 2>&1; then
-      GHCR_REACHABLE=1
-      # 元数据可达才值得再花时间测层数据：探不通就没必要测。
-      probe_ghcr_layer_access
-    fi
-  fi
-
-  # 这两个开关此前只有定义、没有调用点：预检永远走不到它们，只能等 install_docker 自己失败。
-  local docker_repo_status
-  docker_repo_status="$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" --max-time "${DOCKER_REPO_CHECK_TIMEOUT_SECONDS}" "https://download.docker.com/linux/" 2>/dev/null || true)"
-  case "${docker_repo_status}" in
-    200|30[0-9])
-      DOCKER_REPO_REACHABLE=1
-      ;;
-    *)
-      # 解析命令缺失时也走这里：宁可报「不可达」由上层提示回退，也不要让用户以为预检过了。
-      if [[ "${docker_repo_status}" != "" ]]; then
-        log_warn "Docker 官方源预检未通过（HTTP ${docker_repo_status}）：将回退到发行版自带的 docker.io 包。"
+  if [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
+    if [[ -z "${PANEL_IMAGE_OVERRIDE}" ]]; then
+      if check_registry_reachability "ghcr.io" >/dev/null 2>&1; then
+        GHCR_REACHABLE=1
+        # 元数据可达才值得再花时间测层数据：探不通就没必要测。
+        probe_ghcr_layer_access
       fi
-      ;;
-  esac
+    fi
+
+    local docker_repo_status
+    docker_repo_status="$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout "${REPO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" --max-time "${DOCKER_REPO_CHECK_TIMEOUT_SECONDS}" "https://download.docker.com/linux/" 2>/dev/null || true)"
+    case "${docker_repo_status}" in
+      200|30[0-9])
+        DOCKER_REPO_REACHABLE=1
+        ;;
+      *)
+        # 解析命令缺失时也走这里：宁可报「不可达」由上层提示回退，也不要让用户以为预检过了。
+        if [[ "${docker_repo_status}" != "" ]]; then
+          log_warn "Docker 官方源预检未通过（HTTP ${docker_repo_status}）：将回退到发行版自带的 docker.io 包。"
+        fi
+        ;;
+    esac
+  fi
 
   if command -v systemctl >/dev/null 2>&1; then
     SYSTEMCTL_AVAILABLE=1
@@ -2549,12 +2559,12 @@ preflight_checks() {
     esac
   fi
 
-  if [[ "${DOCKER_REPO_REACHABLE}" -eq 1 ]]; then
-    report_item 0 "Docker 官方源" "可达"
-  elif [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
-    report_item 1 "Docker 官方源" "不可达，安装阶段回退到发行版自带的 docker.io 包"
-  else
-    report_item 0 "Docker 官方源" "不可达（native 模式不依赖）"
+  if [[ "${RESOLVED_INSTALL_MODE}" == "docker" ]]; then
+    if [[ "${DOCKER_REPO_REACHABLE}" -eq 1 ]]; then
+      report_item 0 "Docker 官方源" "可达"
+    else
+      report_item 1 "Docker 官方源" "不可达，安装阶段回退到发行版自带的 docker.io 包"
+    fi
   fi
 
   if [[ "${STEAM_CDN_REACHABLE}" -eq 1 ]]; then

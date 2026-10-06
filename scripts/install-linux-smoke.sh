@@ -18,22 +18,22 @@ SMOKE_INSTALLED_TAG='v0.6.0'
 # 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
 SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.15.2 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${BSP_RELEASE_TAG}" == "v0.15.2" ]]
+# v0.15.3 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${BSP_RELEASE_TAG}" == "v0.15.3" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${BSP_GAME_DST_IMAGE}" == "" ]]
 [[ "${BSP_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.15.2"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.15.3"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.15.2" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.15.3" ]]
 [[ "${BSP_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${BSP_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 
@@ -391,6 +391,123 @@ fi
 rm -rf "${NATIVE_HELPER_TEST_DIR}"
 
 rm -rf "${COMPOSE_PLUGIN_TEST_DIR}"
+
+# ---- 网络探测：独立 Bash 保留 errexit，不能用 if/|| 调用被测函数 ----
+for probe_case in native override success token-timeout manifest-timeout blob-timeout \
+  token-http manifest-http blob-http token-empty manifest-empty; do
+  bash -s -- "${SCRIPT_DIR}/install.linux.sh" "${SMOKE_TMP_DIR}" "${probe_case}" <<'BASH'
+set -Eeuo pipefail
+BSP_INSTALLER_LIB_ONLY=1
+source "$1"
+trap 'printf "unexpected probe failure: %s at line %s\n" "$?" "$LINENO" >&2; exit 99' ERR
+scenario="$3"
+request_log="$2/${scenario}.requests"
+warning_log="$2/${scenario}.warnings"
+: > "${request_log}"
+: > "${warning_log}"
+RESOLVED_INSTALL_MODE='docker'
+RESOLVED_NETWORK_PROFILE='global'
+PANEL_IMAGE_OVERRIDE=''
+BSP_IMAGE_SOURCE='auto'
+BSP_FORCE_IMAGE_PULL=0
+log_warn() { printf '%s\n' "$*" >> "${warning_log}"; }
+resolve_host_ipv4() { printf '192.0.2.1'; }
+systemctl() { :; }
+docker() { return 1; }
+run_as_root() { "$@"; }
+assert_absent() {
+  if grep -Fq "$1" "$2"; then
+    printf 'unexpected %s in %s\n' "$1" "$2" >&2
+    exit 1
+  fi
+}
+curl() {
+  local url="${!#}" step=''
+  printf '%s\n' "${url}" >> "${request_log}"
+  case "${url}" in
+    https://ghcr.io/v2/) printf '401'; return 0 ;;
+    https://ghcr.io/token*) step='token' ;;
+    https://ghcr.io/v2/*/manifests/*) step='manifest' ;;
+    https://ghcr.io/v2/*/blobs/*) step='blob' ;;
+    https://download.docker.com/linux/) printf '200'; return 0 ;;
+    https://steamcdn-a.akamaihd.net/) return 0 ;;
+    *) return 1 ;;
+  esac
+  case "${scenario}" in
+    "${step}-timeout") return 28 ;;
+    "${step}-http") return 22 ;;
+    "${step}-empty") printf '{}'; return 0 ;;
+  esac
+  case "${step}" in
+    token) printf '{"token":"secret-smoke-token"}' ;;
+    manifest) printf '{"config":{"digest":"sha256:abcd"}}' ;;
+    blob) return 0 ;;
+  esac
+}
+case "${scenario}" in
+  native) RESOLVED_INSTALL_MODE='native' ;;
+  override) PANEL_IMAGE_OVERRIDE='registry.example.com/bsp:test' ;;
+esac
+
+# 普通调用：失败必须真的触发 errexit，不能被测试的条件上下文吞掉。
+probe_reachability
+[[ "${HOST_IPV4}" == '192.0.2.1' ]]
+[[ "${SYSTEMCTL_AVAILABLE}" == '1' ]]
+[[ "${STEAM_CDN_REACHABLE}" == '1' ]]
+grep -Fq 'https://steamcdn-a.akamaihd.net/' "${request_log}"
+assert_absent 'secret-smoke-token' "${warning_log}"
+assert_absent 'Authorization' "${warning_log}"
+
+if [[ "${scenario}" == native || "${scenario}" == override ]]; then
+  assert_absent 'ghcr.io' "${request_log}"
+  [[ "${GHCR_REACHABLE}" == '0' ]]
+  [[ "${GHCR_LAYER_ACCESSIBLE}" == '0' ]]
+  [[ "${GHCR_LAYER_PROBE_SECONDS}" == '-1' ]]
+else
+  [[ "${GHCR_REACHABLE}" == '1' ]]
+  if [[ "${scenario}" == success ]]; then
+    [[ "${GHCR_LAYER_ACCESSIBLE}" == '1' ]]
+    [[ "${GHCR_LAYER_PROBE_SECONDS}" -ge 0 ]]
+  else
+    [[ "${GHCR_LAYER_ACCESSIBLE}" == '0' ]]
+    [[ "${GHCR_LAYER_PROBE_SECONDS}" == '-1' ]]
+    case "${scenario}" in
+      *-timeout) grep -Fq "GHCR ${scenario%-*} 探测失败（退出码 28）" "${warning_log}" ;;
+      *-http) grep -Fq "GHCR ${scenario%-*} 探测失败（退出码 22）" "${warning_log}" ;;
+    esac
+  fi
+fi
+
+resolve_image_route
+case "${scenario}" in
+  native)
+    assert_absent 'download.docker.com' "${request_log}"
+    [[ "${DOCKER_REPO_REACHABLE}" == '0' ]]
+    [[ -z "${IMAGE_ROUTE}" ]]
+    # 只测报告，不接触主机状态或安装目录。
+    CHECK_ONLY=1
+    uname() { printf 'x86_64\n'; }
+    df() { printf 'Filesystem MB Used Available Mounted\nfixture 20000 0 20000 /\n'; }
+    read_host_mem_total_mb() { printf '8192'; }
+    has_active_swap() { return 0; }
+    write_status() { :; }
+    panel_port_in_use() { return 1; }
+    preflight_checks > "$2/native.report"
+    assert_absent 'Docker 官方源' "$2/native.report"
+    grep -Fq 'systemd' "$2/native.report"
+    ;;
+  override)
+    [[ "${IMAGE_ROUTE}" == 'custom' ]]
+    grep -Fq 'download.docker.com' "${request_log}"
+    ;;
+  success) [[ "${IMAGE_ROUTE}" == 'ghcr' ]] ;;
+  *)
+    [[ "${IMAGE_ROUTE}" == 'offline' ]]
+    [[ "${OFFLINE_IMAGE_ROUTE}" == '1' ]]
+    ;;
+esac
+BASH
+done
 
 # ---- 镜像路线判定 ----
 # resolve_image_route 会读网络档、BSP_IMAGE_SOURCE 与层数据探测结论，并问一次本地镜像。

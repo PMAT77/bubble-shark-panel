@@ -478,6 +478,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         status: mapDbInstallLogStatusToResponse(instance.installLogStatus, instance.status),
         updatedAt: instance.installLogUpdatedAt ?? instance.updatedAt,
         source: 'install_log',
+        phase: instance.status === 'installing' ? instance.lastCommand : null,
       }, request)
     }
     if (isInstallJobActive(id)) {
@@ -486,6 +487,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         status: 'running',
         updatedAt: instance.installLogUpdatedAt ?? instance.updatedAt,
         source: 'install_log',
+        phase: instance.lastCommand,
       }, request)
     }
     const summaryLines = [instance.lastCommand, instance.lastError]
@@ -673,7 +675,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     const status = enqueueInstanceUpdateCheck({
       steamcmdCommand,
       instanceIds,
-      force: true,
+      force: false,
       validateRuntime: checkContainerInstallReady,
     })
     return success(status, request)
@@ -751,13 +753,17 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       status: current.status,
       gameCode: current.gameCode,
       updateAvailable: current.updateAvailable,
+      lastErrorPhase: current.lastErrorPhase,
     }, installPath, body.data.force)
     const localBuildId = readLocalBuildId(installPath, current.gameCode)
     if (!forceReinstall) {
       const checked = await refreshInstanceUpdateStatus(current, {
         steamcmdCommand,
-        forceRemote: true,
+        forceRemote: false,
       })
+      if (checked.updateCheckError || !checked.localBuildId || !checked.remoteBuildId) {
+        return businessError(`无法确认服务端版本：${checked.updateCheckError ?? '请先检查更新'}`, request)
+      }
       if (
         checked.localBuildId
         && checked.remoteBuildId

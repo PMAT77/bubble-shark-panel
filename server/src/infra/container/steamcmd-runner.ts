@@ -1,4 +1,5 @@
 import { readBrandEnv } from '../../../../shared/brand-env'
+import { validateSteamcmdAppUpdateResult } from './steamcmd-app-update-result'
 import fs from 'node:fs'
 import DockerClient from 'dockerode'
 import { resolveDockerConnectOptions } from '../docker-connect'
@@ -185,7 +186,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
     }
   }
 
-  const result = await runSteamcmdJob({
+  const result = validateSteamcmdAppUpdateResult(await runSteamcmdJob({
     image: steamcmdImage,
     cmd: [
       '/home/steam/steamcmd/steamcmd.sh',
@@ -197,7 +198,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
     kind: 'app-update',
     timeoutMs: appUpdateTimeoutMs,
     onLogLine: input.onLogLine,
-  })
+  }), input.hostInstallPath, input.appId)
 
   if (result.ok) {
     pushLine('SteamCMD app_update 已完成')

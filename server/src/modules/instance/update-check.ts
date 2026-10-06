@@ -6,6 +6,7 @@ import type {
   InstanceUpdateStatusItem,
 } from '../../../../shared/contracts/instance'
 import fs from 'node:fs'
+import { resolveInstanceUpdateState } from '../../../../shared/instance-update-state'
 import process from 'node:process'
 import type { InstallSeedDonor } from './install-seed'
 import type { PublicAppInfo } from '../../shared/steam-update/app-info'
@@ -151,6 +152,7 @@ export async function refreshInstanceUpdateStatus(
       localBuildId: null,
       remoteBuildId: null,
       updateCheckedAt: new Date().toISOString(),
+      updateCheckError: '实例安装目录不存在，无法判断版本',
     })
     return (await getGameInstanceById(instance.id)) ?? instance
   }
@@ -164,11 +166,14 @@ export async function refreshInstanceUpdateStatus(
     steamcmdCommand: input.steamcmdCommand,
     forceRemote: input.forceRemote,
   })
+  const latest = await getGameInstanceById(instance.id)
+  if (!latest || !canCheckInstanceUpdate(latest) || latest.installLogUpdatedAt !== instance.installLogUpdatedAt) return latest ?? instance
   await updateGameInstanceRuntime(instance.id, {
     updateAvailable: result.updateAvailable,
     localBuildId: result.localBuildId,
     remoteBuildId: result.remoteBuildId,
     updateCheckedAt: result.checkedAt,
+    updateCheckError: result.updateAvailable ? null : result.message ?? null,
   })
   const updated = await getGameInstanceById(instance.id)
   // 仅在「无更新 → 有更新」跃迁时发布事件，重复检查不会反复推送（通知侧冷却窗口兜底）
@@ -188,6 +193,8 @@ function toStatusItem(instance: DbGameInstance, message?: string): InstanceUpdat
     localBuildId: instance.localBuildId,
     remoteBuildId: instance.remoteBuildId,
     updateCheckedAt: instance.updateCheckedAt,
+    updateState: resolveInstanceUpdateState(instance),
+    updateCheckError: instance.updateCheckError ?? null,
     message,
   }
 }
@@ -219,10 +226,14 @@ export async function checkInstancesForUpdates(input: {
     }
   }
   const remoteInfoByAppId = new Map<string, PublicAppInfo | null>()
+  const remoteErrors = new Map<string, string>()
   for (const appId of uniqueAppIds) {
     remoteInfoByAppId.set(
       appId,
-      await fetchRemoteAppInfo(input.steamcmdCommand, appId, { force: forceRemote }),
+      await fetchRemoteAppInfo(input.steamcmdCommand, appId, {
+        force: forceRemote,
+        onFailure: message => remoteErrors.set(appId, message),
+      }),
     )
   }
   for (const instance of targets) {
@@ -233,6 +244,7 @@ export async function checkInstancesForUpdates(input: {
         localBuildId: null,
         remoteBuildId: null,
         updateCheckedAt: new Date().toISOString(),
+        updateCheckError: '实例安装目录不存在，无法判断版本',
       })
       const updated = await getGameInstanceById(instance.id)
       items.push(toStatusItem(updated ?? instance, '实例安装目录不存在，无法判断版本'))
@@ -244,11 +256,20 @@ export async function checkInstancesForUpdates(input: {
       steamcmdCommand: input.steamcmdCommand,
       remoteInfo: remoteInfoByAppId.get(instance.gameCode.trim()) ?? null,
     })
+    const checkError = result.localBuildId && !result.remoteBuildId
+      ? remoteErrors.get(instance.gameCode.trim()) ?? result.message
+      : result.message
+    const latest = await getGameInstanceById(instance.id)
+    if (!latest || !canCheckInstanceUpdate(latest) || latest.installLogUpdatedAt !== instance.installLogUpdatedAt) {
+      items.push(toStatusItem(latest ?? instance, '安装状态已变化，请稍后检查版本'))
+      continue
+    }
     await updateGameInstanceRuntime(instance.id, {
       updateAvailable: result.updateAvailable,
       localBuildId: result.localBuildId,
       remoteBuildId: result.remoteBuildId,
       updateCheckedAt: result.checkedAt,
+      updateCheckError: result.updateAvailable ? null : checkError ?? null,
     })
     const updated = await getGameInstanceById(instance.id)
     // 批量检查（定时任务/6 小时周期）同样走「无更新 → 有更新」跃迁推送
@@ -257,7 +278,7 @@ export async function checkInstancesForUpdates(input: {
       result,
       updated,
     )
-    items.push(toStatusItem(updated ?? instance, result.message))
+    items.push(toStatusItem(updated ?? instance, checkError))
   }
   return {
     items,
@@ -336,6 +357,7 @@ export async function refreshInstanceUpdateStatusAfterSeed(
     localBuildId: result.localBuildId,
     remoteBuildId: result.remoteBuildId,
     updateCheckedAt: result.checkedAt,
+    updateCheckError: result.updateAvailable ? null : result.message ?? null,
   })
 }
 
@@ -345,13 +367,19 @@ export async function refreshInstanceUpdateStatusAfterInstall(
   appId: string,
   steamcmdCommand: string,
 ) {
+  const before = await getGameInstanceById(instanceId)
   clearRemoteBuildCache(appId)
   const result = await checkGameUpdateAvailable({ installPath, appId, steamcmdCommand, forceRemote: true })
+  const current = await getGameInstanceById(instanceId)
+  if (!current || current.installLogUpdatedAt !== before?.installLogUpdatedAt
+    || (!canCheckInstanceUpdate(current) && current.status !== before?.status)) return
   await updateGameInstanceRuntime(instanceId, {
     updateAvailable: result.updateAvailable,
     localBuildId: result.localBuildId,
     remoteBuildId: result.remoteBuildId,
     updateCheckedAt: result.checkedAt,
+    updateCheckError: result.updateAvailable ? null : result.message ?? null,
+    whereStatus: current.status,
   })
 }
 

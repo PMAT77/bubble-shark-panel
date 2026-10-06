@@ -4,6 +4,11 @@ import { getInstanceState, looksLikeRuntimeCommand } from './instanceDisplay.ts'
 import { INSTANCE_STATE, INSTANCE_STATUS, MOD_ENABLED_STATUS, MOD_INSTALL_STATUS, resolveShardDisplayStatus, SHARD_CONTAINER_STATUS, statusTagType } from '@/constants/statusDictionary'
 
 describe('statusDictionary', () => {
+  it('未就绪显示启动中，就绪后才显示运行中', () => {
+    assert.equal(getInstanceState({ status: 'running', lastErrorPhase: null, runtimeReadyAt: null }).label, '启动中')
+    assert.equal(getInstanceState({ status: 'running', lastErrorPhase: null, runtimeReadyAt: '2026-10-06T11:00:00Z' }).label, '运行中')
+    assert.equal(getInstanceState({ status: 'error', lastErrorPhase: 'runtime', lastError: '启动失败：主世界分片发生 Lua 致命错误' }).label, '启动失败')
+  })
   it('every descriptor has a non-empty label and a valid tone', () => {
     const groups = [
       Object.values(INSTANCE_STATE),

@@ -14,6 +14,7 @@ import {
   bumpCavesStartGeneration,
   classifyMasterProbe,
   ensureContainerRuntimeReady,
+  findShardLuaFailure,
   hasMasterReadyMarker,
   isCurrentCavesStartGeneration,
   isHealthyRuntimeForResurrect,
@@ -398,6 +399,30 @@ describe('waitForMasterShardReady', () => {
     held.close()
     return port
   }
+
+  it('Lua 致命错误优先于已绑定端口或旧的就绪标记', async () => {
+    const installPath = createTempDir()
+    writeMasterLog(installPath, `${REAL_MASTER_READY_LOG}\n[00:01:08]: [string "scripts/prefabs/blueprint.lua"]:201: attempt to concatenate field '?' (a nil value)\nLUA ERROR stack traceback:\n`)
+    const outcome = await waitForMasterShardReady(fakeApp, freshInstanceId(), masterRef, 10888, installPath)
+    assert.equal(outcome.kind, 'lua-error')
+    if (outcome.kind === 'lua-error') assert.match(outcome.detail, /blueprint.lua/)
+  })
+
+  it('普通 Mod 警告不判失败，忽略上轮文件与面板消息，识别洞穴致命错误', () => {
+    const instanceId = freshInstanceId()
+    const installPath = createTempDir()
+    writeMasterLog(installPath, 'Could not preload undefined prefab (tea)\n')
+    assert.equal(findShardLuaFailure(instanceId, installPath), null)
+    instanceConsoleLogStore.appendSystem(instanceId, 'LUA ERROR stack traceback:', 'master')
+    assert.equal(findShardLuaFailure(instanceId, installPath), null)
+    writeMasterLog(installPath, 'LUA ERROR stack traceback:\n')
+    const oldTime = new Date('2020-01-01')
+    fs.utimesSync(path.join(resolveShardRoot(installPath, 'master'), 'server_log.txt'), oldTime, oldTime)
+    assert.equal(findShardLuaFailure(instanceId, installPath, new Date().toISOString()), null)
+    instanceConsoleLogStore.appendDockerLine(instanceId, 'LUA ERROR stack traceback:', 'caves')
+    assert.match(findShardLuaFailure(instanceId) ?? '', /洞穴/)
+    instanceConsoleLogStore.removeInstance(instanceId)
+  })
 
   it('端口探测不到时靠主世界自己的就绪标记立即放行（Docker 模式）', async () => {
     const installPath = createTempDir()

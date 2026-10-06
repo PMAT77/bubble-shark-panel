@@ -11,7 +11,7 @@ import { shouldDeferDstImagePullOnInstall } from '../../shared/config/install'
 import {
   InstanceInstallLogWriter,
 } from '../../shared/instance-install/log-store'
-import { parseSteamcmdProgressPercent } from '../../shared/instance-install/log-format'
+import { resolveSteamcmdInstallPhase } from '../../shared/instance-install/log-format'
 import { resolveSteamcmdLoginMode } from '../../shared/instance-install/steamcmd-login-mode'
 import {
   assessHostMemoryForHeavyOperation,
@@ -36,9 +36,9 @@ import { ensureDstLayout } from '../../infra/game-adapter/dst/cluster-config'
 import { prepareInstallPathForSteamcmd } from './install-path'
 import { retrySteamcmdInstall } from './steamcmd-install-retry'
 import { ensureGameRuntimeImageReady } from '../../infra/game-adapter/runtime-image'
-import { refreshInstanceUpdateStatusAfterInstall, refreshInstanceUpdateStatusAfterSeed, resolveSteamcmdCommandForUpdateCheck } from './update-check'
-import { checkGameUpdateAvailable } from '../../shared/steam-update/build-id'
-import { tryInstallGameDepotFromSeed, type InstallSeedDonor } from './install-seed'
+import { refreshInstanceUpdateStatusAfterInstall, resolveSteamcmdCommandForUpdateCheck } from './update-check'
+import { checkGameUpdateAvailable, readLocalBuildId } from '../../shared/steam-update/build-id'
+import { tryInstallGameDepotFromSeed } from './install-seed'
 
 export interface InstanceInstallJobInput {
   instanceId: string
@@ -157,11 +157,12 @@ export function shouldAllowInstallDespiteUpToDate(input: {
   status: string
   gameCode: string
   updateAvailable?: boolean | null
+  lastErrorPhase?: string | null
 }, installPath: string, force?: boolean): boolean {
   if (force) {
     return true
   }
-  if (input.status === 'error') {
+  if (input.status === 'error' && input.lastErrorPhase !== 'runtime') {
     return true
   }
   if (input.gameCode.trim() === DST_APP_ID) {
@@ -228,9 +229,9 @@ async function finalizeSuccessfulInstall(
   input: InstanceInstallJobInput,
   logWriter: InstanceInstallLogWriter,
   mode: 'anonymous' | 'account' | 'seed',
-  seedDonor?: InstallSeedDonor,
 ) {
-  logWriter.appendLine(`安装完成（${mode === 'seed' ? '本地复制' : mode}）`)
+  logWriter.appendLine('正在准备启动文件')
+  await updateGameInstanceRuntime(input.instanceId, { lastCommand: '准备启动文件', whereStatus: 'installing' })
   const startScriptResult = input.appId.trim() === DST_APP_ID
     ? ensureDstLayout(input.installPath, {
         instanceName: input.instanceName,
@@ -258,22 +259,6 @@ async function finalizeSuccessfulInstall(
         logWriter.appendLine(`游戏运行环境镜像准备失败（不影响已下载的游戏文件）：${runtimeImageResult.error}`)
       }
     }
-    if (mode === 'seed' && seedDonor) {
-      await refreshInstanceUpdateStatusAfterSeed(
-        input.instanceId,
-        input.installPath,
-        input.appId,
-        seedDonor,
-      )
-    }
-    else {
-      await refreshInstanceUpdateStatusAfterInstall(
-        input.instanceId,
-        input.installPath,
-        input.appId,
-        input.steamcmdCommand,
-      )
-    }
   }
   const runtimeImageFailed = startScriptResult.ok
     && !shouldDeferDstImagePullOnInstall()
@@ -282,8 +267,7 @@ async function finalizeSuccessfulInstall(
   const runtimeHint = runtimeImageFailed
     ? '；运行环境镜像未就绪，启动时将自动重试拉取'
     : ''
-  await writeInstallLogMeta(input.instanceId, startScriptResult.ok ? 'success' : 'failed', startScriptResult.ok ? 100 : null)
-  await updateGameInstanceRuntime(input.instanceId, {
+  const completed = await updateGameInstanceRuntime(input.instanceId, {
     status: startScriptResult.ok ? 'stopped' : 'error',
     lastCommand: startScriptResult.ok
       ? `安装完成（${mode === 'seed' ? '本地复制' : mode}），启动脚本已生成${runtimeHint}`
@@ -293,29 +277,42 @@ async function finalizeSuccessfulInstall(
       : startScriptResult.message ?? null,
     lastErrorPhase: startScriptResult.ok ? (runtimeImageFailed ? 'runtime' : null) : 'install',
     installPercent: startScriptResult.ok ? 100 : null,
+    installLogStatus: startScriptResult.ok ? 'success' : 'failed',
+    installLogUpdatedAt: new Date().toISOString(),
+    localBuildId: readLocalBuildId(input.installPath, input.appId),
+    remoteBuildId: null,
+    updateCheckedAt: null,
+    updateCheckError: null,
+    updateAvailable: false,
     // 状态机守卫：仅当仍在安装中时落终态，避免与取消并发时覆盖取消结果
     whereStatus: 'installing',
   })
+  if (startScriptResult.ok && completed?.status === 'stopped') {
+    logWriter.appendLine(`安装完成（${mode === 'seed' ? '本地复制' : mode}）`)
+    // 安装终态已经落库；网络查询失败只影响版本状态，不影响安装结果。
+    void refreshInstanceUpdateStatusAfterInstall(input.instanceId, input.installPath, input.appId, input.steamcmdCommand)
+      .catch(() => {})
+  }
 }
 
 async function runInstallPipeline(
   input: InstanceInstallJobInput,
   logWriter: InstanceInstallLogWriter,
 ) {
-  const updateProgress = async (line: string) => {
+  let progressWrites = Promise.resolve()
+  const updateProgress = (line: string) => {
     logWriter.appendLine(line)
-    const progressPercent = parseSteamcmdProgressPercent(line)
-    const progressText = progressPercent !== null
-      ? `安装进度 ${progressPercent}%`
-      : line
-    await updateGameInstanceRuntime(input.instanceId, {
-      status: 'installing',
-      lastCommand: progressText,
-      lastError: null,
-      installLogStatus: 'running',
-      installLogUpdatedAt: new Date().toISOString(),
-      ...(progressPercent !== null ? { installPercent: progressPercent } : {}),
+    const phase = resolveSteamcmdInstallPhase(line)
+    const updatedAt = new Date().toISOString()
+    progressWrites = progressWrites.then(async () => {
+      await updateGameInstanceRuntime(input.instanceId, {
+        ...(phase ? { lastCommand: phase } : {}),
+        installLogUpdatedAt: updatedAt,
+        whereStatus: 'installing',
+      })
     })
+    // runner 的回调不等待数据库；在每次尝试结束时统一排空，再写终态。
+    void progressWrites.catch(() => {})
   }
 
   if (isInstallCancelled(input.instanceId)) {
@@ -405,7 +402,7 @@ async function runInstallPipeline(
       await logInstallResourcePhase(logWriter, input.instanceId, 'install_pipeline_seed_success', {
         donorId: seedResult.donor.instanceId,
       })
-      await finalizeSuccessfulInstall(input, logWriter, 'seed', seedResult.donor)
+      await finalizeSuccessfulInstall(input, logWriter, 'seed')
       return
     }
     if (seedResult.reason) {
@@ -418,12 +415,16 @@ async function runInstallPipeline(
     || (loginMode === 'account-fallback' && Boolean(input.steamcmdCredentials))
 
   const withRetries = (run: () => Promise<{ ok: boolean, output: string, cancelled?: boolean }>) => retrySteamcmdInstall({
-    run,
+    run: async () => {
+      const result = await run()
+      await progressWrites
+      return result
+    },
     isCancelled: () => isInstallCancelled(input.instanceId),
     onRetry: async (attempt, maxAttempts, delayMs) => {
       logWriter.appendLine(`Steam 更新未完成或发生临时错误，${Math.round(delayMs / 1000)} 秒后进行第 ${attempt}/${maxAttempts} 次尝试（保留下载缓存）...`)
       await updateGameInstanceRuntime(input.instanceId, {
-        status: 'installing', lastCommand: `安装重试中（${attempt}/${maxAttempts}）...`, lastError: null,
+        lastCommand: `等待重试（${attempt}/${maxAttempts}）`, lastError: null, whereStatus: 'installing',
       })
     },
   })

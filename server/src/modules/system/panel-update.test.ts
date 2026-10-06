@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { afterEach, describe, it } from 'node:test'
 import type { ServerConfig } from '../../shared/config'
 import {
@@ -355,6 +356,55 @@ describe('buildOfflineImageCommand', () => {
 })
 
 describe('buildUpdaterShellCommand', () => {
+  it('executes with the original project and refuses to edit configuration when the project label is missing', (t) => {
+    const bash = process.env.BSP_BASH || 'bash'
+    if (spawnSync(bash, ['--version']).status !== 0) {
+      if (process.env.CI) {
+        assert.fail('CI requires bash for the updater regression test')
+      }
+      t.skip('Set BSP_BASH to run the updater shell regression test')
+      return
+    }
+    for (const project of ['custom-project', '']) {
+      const dir = createTempStackDir(['panel.env'])
+      fs.writeFileSync(path.join(dir, 'panel.env'), 'PANEL_IMAGE=img:old\n')
+      const script = buildUpdaterShellCommand('img:v1', 'v1', buildConfig({}))
+        .replace('cd /stack', 'cd "$TEST_STACK"')
+      const result = spawnSync(bash, ['-c', [
+        'docker() {',
+        '  case "$1" in',
+        '    inspect) printf "%s\\n" "$TEST_PROJECT" ;;',
+        '    compose) printf "%s\\n" "$@" > "$TEST_STACK/compose-args" ;;',
+        '    *) return 1 ;;',
+        '  esac',
+        '}',
+        script,
+      ].join('\n')], {
+        env: { ...process.env, TEST_STACK: dir.replace(/\\/g, '/'), TEST_PROJECT: project },
+        encoding: 'utf8',
+      })
+      if (project) {
+        assert.equal(result.status, 0, result.stderr)
+        assert.match(fs.readFileSync(path.join(dir, 'compose-args'), 'utf8'), /^compose\n-p\ncustom-project\n/)
+        assert.match(fs.readFileSync(path.join(dir, 'panel.env'), 'utf8'), /PANEL_IMAGE=img:v1/)
+      }
+      else {
+        assert.equal(result.status, 1, result.stderr)
+        assert.equal(fs.readFileSync(path.join(dir, 'panel.env'), 'utf8'), 'PANEL_IMAGE=img:old\n')
+        assert.equal(fs.existsSync(path.join(dir, 'compose-args')), false)
+      }
+    }
+  })
+
+  it('uses the running panel project for both rebuilding and rollback before editing panel.env', () => {
+    const script = buildUpdaterShellCommand('img:v1', 'v1', buildConfig({
+      panelContainerName: 'custom-panel',
+    }))
+    assert.ok(script.includes(`docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' 'custom-panel'`))
+    assert.equal((script.match(/docker compose -p "\$project"/g) ?? []).length, 2)
+    assert.ok(script.indexOf('无法读取现有面板的 Compose 项目名') < script.indexOf('cp panel.env'))
+  })
+
   it('writes the target image into panel.env and rebuilds without pulling', () => {
     const script = buildUpdaterShellCommand('ghcr.io/pmat77/bubblesharkpanel:v0.3.3', 'v0.3.3', buildConfig({}))
     assert.match(script, /PANEL_IMAGE=ghcr\.io\/pmat77\/bubblesharkpanel:v0\.3\.3/)

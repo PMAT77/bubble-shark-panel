@@ -1,5 +1,17 @@
 import { sanitizeSteamcmdLogLine } from '../../infra/container/steamcmd-errors'
 
+/** 只让有阶段含义的输出改变摘要，诊断与资源快照保留在原始日志。 */
+export function resolveSteamcmdInstallPhase(line: string): string | null {
+  if (/等待.*SteamCMD|排队等待/.test(line)) return '等待队列'
+  if (/重试中|次尝试|登录重试/.test(line)) return '等待重试'
+  if (/正在准备|容器已启动|安装任务启动|Checking for available updates|Verifying installation/.test(line)) return '准备环境'
+  if (/Connecting|Waiting for (?:client config|user info)|Loading Steam API|登录安装|Retrying/.test(line)) return '连接 Steam'
+  if (/Update state.*(?:verifying|validating)|校验文件/i.test(line)) return '校验文件'
+  if (/Update state.*(?:downloading|staging|committing)|progress:|下载游戏/i.test(line)) return '下载文件'
+  if (/fully installed|app_update 已完成|启动脚本|运行环境镜像/i.test(line)) return '准备启动文件'
+  return null
+}
+
 /** 从 SteamCMD 单行输出解析下载进度百分比 */
 export function parseSteamcmdProgressPercent(line: string): number | null {
   const bracketMatch = line.match(/\[\s*(\d{1,3})%\]/)

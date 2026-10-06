@@ -8,6 +8,7 @@ import Fastify from 'fastify'
 import { getContainerRuntime } from '../../infra/container'
 import { closeDatabase, createGameInstance, deleteGameInstanceById, getGameInstanceById, initDatabase, updateGameInstanceRuntime } from '../../shared/db'
 import { reconcileInstanceRuntimeState } from './runtime-reconciliation'
+import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-reconcile-'))
 before(async () => {
@@ -16,6 +17,31 @@ before(async () => {
   })
 })
 after(() => { closeDatabase(); fs.rmSync(dir, { recursive: true, force: true }) })
+
+it('Lua 崩溃但进程存活时停止两个分片并保留错误，后续对账不复活', async (t) => {
+  const app = Fastify()
+  t.after(() => app.close())
+  const instance = await createGameInstance({ nodeId: 'local-node', name: 'lua-crash', gameCode: '343050', status: 'running' })
+  t.after(() => { instanceConsoleLogStore.removeInstance(instance.id); return deleteGameInstanceById(instance.id) })
+  await updateGameInstanceRuntime(instance.id, { runtimeStartedAt: new Date(Date.now() - 1000).toISOString() })
+  const runtime = getContainerRuntime()
+  t.mock.method(runtime, 'findByName', async (name: string) => ({ id: name, name }))
+  t.mock.method(runtime, 'inspect', async () => ({ id: 'unit', name: 'unit', running: true, restarts: 0, uptimeSeconds: 1000 }))
+  const stop = t.mock.method(runtime, 'stop', async () => {})
+  t.mock.method(runtime, 'remove', async () => {})
+  t.mock.method(runtime, 'removeShardNetwork', async () => {})
+  instanceConsoleLogStore.appendDockerLine(instance.id, '[00:01:08]: [string "scripts/prefabs/blueprint.lua"]:201: attempt to concatenate field', 'master')
+  instanceConsoleLogStore.appendDockerLine(instance.id, 'LUA ERROR stack traceback:', 'master')
+  await reconcileInstanceRuntimeState(app)
+  const failed = await getGameInstanceById(instance.id)
+  assert.equal(failed?.status, 'error')
+  assert.equal(failed?.lastErrorPhase, 'runtime')
+  assert.match(failed?.lastError ?? '', /blueprint.lua/)
+  assert.equal(stop.mock.callCount(), 2)
+  await updateGameInstanceRuntime(instance.id, { runtimeWarning: failed?.runtimeWarning ?? null })
+  await reconcileInstanceRuntimeState(app)
+  assert.equal((await getGameInstanceById(instance.id))?.status, 'error')
+})
 
 it('preserves all running fields on unknown probes, then reconciles confirmed stop and missing units', async (t) => {
   const app = Fastify()

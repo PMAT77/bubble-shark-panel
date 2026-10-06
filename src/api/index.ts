@@ -121,6 +121,7 @@ api.interceptors.request.use(
 
 // 处理错误信息的函数
 async function handleError(error: any) {
+  if (axios.isCancel(error)) return Promise.reject(error)
   const config = error?.config
   /**
    * 下载类接口失败时后端同样返回 JSON 业务信封（HTTP 4xx + { status, error, code }），
@@ -266,6 +267,7 @@ api.interceptors.response.use(
     }
   },
   async (error) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
     // 获取请求配置
     const config = error.config
     // 如果配置不存在或未启用重试，则直接处理错误

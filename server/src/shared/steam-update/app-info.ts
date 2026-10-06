@@ -73,6 +73,7 @@ export function readKeyValues(root: KeyValues | null, ...keys: string[]): string
 }
 
 export interface PublicAppInfo {
+  checkedAt?: string
   buildId: string
   depotManifests: Record<string, string>
   linuxDepots: string[]

@@ -1,6 +1,6 @@
 import type { InstanceInstallLogPayload, InstanceInstallLogSource, InstanceItem, InstanceStatus } from '@/api/modules/instance'
 
-import { INSTANCE_STATE, INSTANCE_STATUS, statusBadgeClass, type StatusDescriptor } from '@/constants/statusDictionary'
+import { INSTANCE_START_FAILED, INSTANCE_STARTING, INSTANCE_STATE, INSTANCE_STATUS, statusBadgeClass, type StatusDescriptor } from '@/constants/statusDictionary'
 
 /** 实例原始状态中文标签（无上下文时的兜底；列表页请优先用 getInstanceState） */
 export function getStatusLabel(status: InstanceStatus) {
@@ -26,12 +26,18 @@ function isInstallPhaseFailure(instance: Pick<InstanceItem, 'lastErrorPhase'>) {
  * 环节未知（旧数据、手工改库）按运行异常兜底，与 `INSTANCE_STATUS.error` 的口径一致。
  */
 export function getInstanceState(
-  instance: Pick<InstanceItem, 'status' | 'lastErrorPhase'>,
+  instance: Pick<InstanceItem, 'status' | 'lastErrorPhase'> & Partial<Pick<InstanceItem, 'runtimeReadyAt' | 'lastError'>>,
 ): StatusDescriptor & { key: keyof typeof INSTANCE_STATE } {
   if (instance.status === 'error') {
+    if (!isInstallPhaseFailure(instance) && instance.lastError?.startsWith('启动失败：')) {
+      return { ...INSTANCE_START_FAILED, key: 'runtime_error' }
+    }
     return isInstallPhaseFailure(instance)
       ? { ...INSTANCE_STATE.install_failed, key: 'install_failed' }
       : { ...INSTANCE_STATE.runtime_error, key: 'runtime_error' }
+  }
+  if (instance.status === 'running' && instance.runtimeReadyAt === null) {
+    return { ...INSTANCE_STARTING, key: 'running' }
   }
   return { ...INSTANCE_STATE[instance.status], key: instance.status }
 }

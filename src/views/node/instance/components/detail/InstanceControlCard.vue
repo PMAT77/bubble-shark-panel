@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { InstanceItem } from '@/api/modules/instance'
-import { NButton, NCard, NModal, NProgress, NStatistic, NTooltip, useMessage, useNotification } from 'naive-ui'
+import { NButton, NCard, NModal, NStatistic, NTooltip, useMessage, useNotification } from 'naive-ui'
 import { computed, h, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { routeToInstanceConsole } from '@/navigation/game-routes'
 import { statusBadgeClass } from '@/constants/statusDictionary'
@@ -8,14 +8,11 @@ import { copyTextToClipboard } from '@/utils/copyToClipboard'
 import { HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND } from '@/utils/hostMemoryPressure'
 import {
   computeUptimeSecondsFromStartedAt,
-  extractInstallProgressPercent,
   formatMemoryMb,
   formatUptime,
   getInstanceState,
   isInstanceInstallingStatus,
-  resolveInstallPhase,
   resolveRuntimeReadinessView,
-  shouldShowInstallDetail,
 } from '../../instanceDisplay'
 import {
   canUpdateInstance,
@@ -23,6 +20,11 @@ import {
   useInstanceLifecycleActions,
 } from '../../composables/useInstanceLifecycleActions'
 import { useInstanceRuntimeObservability } from '../../composables/useInstanceRuntimeObservability'
+import InstanceInstallLogModal from '../InstanceInstallLogModal.vue'
+import apiInstance from '@/api/modules/instance'
+import { canRetryInstanceInstall, resolveInstanceUpdateState, buildInstanceUpdateCheckNotice } from '../../instanceUpdatePresentation'
+import { waitForInstanceUpdateCheckJob } from '../../composables/instanceUpdateCheckJob'
+import { formatDateTime } from '../../utils'
 
 defineOptions({
   name: 'InstanceDetailControlCard',
@@ -44,6 +46,11 @@ const emit = defineEmits<{
 }>()
 
 const router = useRouter()
+const route = useRoute()
+const installLogVisible = ref(false)
+const updateCheckLoading = ref(false)
+let updateCheckController: AbortController | undefined
+let pageActive = false
 
 const {
   isActionLoading,
@@ -53,6 +60,9 @@ const {
   confirmDangerousInstanceAction,
 } = useInstanceLifecycleActions({
   refresh: () => emit('refreshed'),
+  onUpdateAccepted: () => {
+    if (hasPermission('instance.install-log:read')) installLogVisible.value = true
+  },
 })
 
 /** 单实例指标轮询（复用列表页同一套可观测性实现） */
@@ -64,17 +74,31 @@ const {
   getMetricsForInstance,
 } = useInstanceRuntimeObservability(instanceListRef)
 
-watch(() => props.instance?.status, () => syncRuntimeObservabilityPolling())
-onMounted(() => syncRuntimeObservabilityPolling())
+watch(() => props.instance?.status, () => { if (pageActive) syncRuntimeObservabilityPolling() })
+function activateObservability() {
+  pageActive = route.name === 'nodeInstanceDetail'
+  if (pageActive) syncRuntimeObservabilityPolling()
+}
+onMounted(activateObservability)
 /**
  * 本卡片挂在「实例详情」页内，而详情页开了 `keepAlive`：从详情页切走时父页面只会 `deactivate`，
  * 卡片自身不会 unmount，只写 `onBeforeUnmount` 的话两个定时器（指标轮询 + 每秒一次的运行时长 tick）
  * 会留在后台一直跑——用户看到的是「人都走了，这个实例的请求还在发」。
  * 激活与停用必须成对补齐，`syncRuntimeObservabilityPolling` 自身是幂等的，重复调用安全。
  */
-onActivated(() => syncRuntimeObservabilityPolling())
-onDeactivated(() => stopRuntimeObservability())
-onBeforeUnmount(() => stopRuntimeObservability())
+onActivated(activateObservability)
+function deactivateObservability() {
+  pageActive = false
+  stopRuntimeObservability()
+  installLogVisible.value = false
+  updateCheckController?.abort()
+}
+onDeactivated(deactivateObservability)
+onBeforeUnmount(deactivateObservability)
+watch(() => route.name, (name) => {
+  if (name !== 'nodeInstanceDetail') deactivateObservability()
+}, { flush: 'sync' })
+watch(() => props.instance?.id, () => updateCheckController?.abort())
 
 const state = computed(() => (props.instance ? getInstanceState(props.instance) : null))
 
@@ -166,7 +190,29 @@ const actionRunning = computed(() => Boolean(props.instance && isInstanceActionR
 
 const isInstalling = computed(() => Boolean(props.instance && isInstanceInstallingStatus(props.instance.status)))
 
-const installProgress = computed(() => (props.instance ? extractInstallProgressPercent(props.instance) : null))
+const updateState = computed(() => props.instance ? resolveInstanceUpdateState(props.instance) : 'unchecked')
+
+async function checkUpdates() {
+  if (!props.instance || updateCheckLoading.value) return
+  updateCheckController = new AbortController()
+  const signal = updateCheckController.signal
+  updateCheckLoading.value = true
+  try {
+    const res = await apiInstance.checkInstanceUpdates([props.instance.id], { signal })
+    const status = res.data.checking ? await waitForInstanceUpdateCheckJob(signal) : res.data
+    if (signal.aborted) return
+    emit('refreshed')
+    if (status.error) message.error(status.error)
+    else {
+      const notice = buildInstanceUpdateCheckNotice(status.result?.items ?? [])
+      message[notice.tone](notice.message)
+    }
+  }
+  catch (error) {
+    if (!signal.aborted) message.error(error instanceof Error ? error.message : '检查更新失败')
+  }
+  finally { updateCheckLoading.value = false }
+}
 
 const metrics = computed(() => (props.instance ? getMetricsForInstance(props.instance.id) : null))
 
@@ -248,12 +294,14 @@ function goConsole() {
         >
           {{ state.label }}
         </span>
-        <span v-if="instance.updateAvailable" class="text-xs text-amber-600 dark:text-amber-400">
+        <span v-if="updateState === 'available'" class="text-xs text-amber-600 dark:text-amber-400">
           服务端需要更新
         </span>
-        <span v-else-if="instance.updateCheckedAt && (!instance.localBuildId || !instance.remoteBuildId)" class="text-xs text-amber-600 dark:text-amber-400">
-          无法判断服务端版本，请重新检查更新
+        <span v-else-if="updateState === 'unknown'" class="text-xs text-amber-600 dark:text-amber-400">
+          版本未知：{{ instance.updateCheckError || '无法确认版本，请重新检查更新' }}
         </span>
+        <span v-else class="text-xs text-muted-foreground">{{ updateState === 'current' ? '已是最新版本' : '尚未检查版本' }}</span>
+        <span v-if="instance.updateCheckedAt" class="text-xs text-muted-foreground">检查时间：{{ formatDateTime(instance.updateCheckedAt) }}</span>
         <span
           v-if="readiness"
           class="text-xs"
@@ -277,23 +325,7 @@ function goConsole() {
         {{ instance.lastError }}
       </p>
 
-      <div v-if="shouldShowInstallDetail(instance)" class="mb-4 space-y-1">
-        <div class="flex justify-between text-xs text-muted-foreground">
-          <span>安装进度</span>
-          <span v-if="installProgress != null">{{ installProgress }}%</span>
-          <span v-else>处理中</span>
-        </div>
-        <NProgress
-          v-if="installProgress != null"
-          :percentage="installProgress"
-          :show-indicator="false"
-          :processing="isInstalling"
-          :height="8"
-        />
-        <p class="text-xs text-muted-foreground">
-          {{ resolveInstallPhase(instance) }}
-        </p>
-      </div>
+      <p v-if="isInstalling" class="mb-4 text-xs text-muted-foreground">安装中，当前阶段请查看日志。</p>
 
       <div class="grid grid-cols-3 gap-x-4 gap-y-3 mb-4">
         <NStatistic label="CPU（单核基准）">
@@ -308,6 +340,10 @@ function goConsole() {
       </div>
 
       <div class="flex flex-wrap gap-2">
+        <NButton size="small" secondary :loading="updateCheckLoading" :disabled="isInstalling || actionRunning" @click="checkUpdates" v-if="hasPermission('instance:update')">检查更新</NButton>
+        <NButton size="small" secondary @click="installLogVisible = true" v-if="hasPermission('instance.install-log:read')">
+          查看日志
+        </NButton>
         <NButton
           size="small"
           type="primary"
@@ -350,7 +386,7 @@ function goConsole() {
               :disabled="actionRunning || !canUpdateInstance(instance)"
               @click="requestUpdate"
             >
-              {{ state.key === 'install_failed' ? '修复安装' : '更新服务端' }}
+              {{ canRetryInstanceInstall(instance) ? '重试安装' : '更新服务端' }}
             </NButton>
           </template>
           {{ getUpdateInstanceButtonTitle(instance) }}
@@ -373,6 +409,14 @@ function goConsole() {
     <p v-else class="text-sm text-muted-foreground">
       未找到实例。
     </p>
+
+    <InstanceInstallLogModal
+      v-if="instance && hasPermission('instance.install-log:read')"
+      v-model:show="installLogVisible"
+      :instance-id="instance.id"
+      :instance-name="instance.name"
+      @terminal="emit('refreshed')"
+    />
 
     <NModal
       v-model:show="swapGuideVisible"

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { resolveInstanceUpdateState } from '../../../../shared/instance-update-state'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
 import {
   gameInstances,
@@ -77,6 +78,7 @@ function mapDbGameInstance(row: {
   installPercent: number | null
   installLogUpdatedAt: string | null
   updateAvailable: number | null
+  updateCheckError: string | null
   localBuildId: string | null
   remoteBuildId: string | null
   updateCheckedAt: string | null
@@ -105,6 +107,8 @@ function mapDbGameInstance(row: {
     localBuildId: row.localBuildId ?? null,
     remoteBuildId: row.remoteBuildId ?? null,
     updateCheckedAt: row.updateCheckedAt ?? null,
+    updateCheckError: row.updateCheckError ?? null,
+    updateState: resolveInstanceUpdateState({ ...row, updateAvailable: Number(row.updateAvailable ?? 0) === 1 }),
   }
 }
 
@@ -135,6 +139,7 @@ function gameInstanceSelectFields() {
     installPercent: gameInstances.installPercent,
     installLogUpdatedAt: gameInstances.installLogUpdatedAt,
     updateAvailable: gameInstances.updateAvailable,
+    updateCheckError: gameInstances.updateCheckError,
     localBuildId: gameInstances.localBuildId,
     remoteBuildId: gameInstances.remoteBuildId,
     updateCheckedAt: gameInstances.updateCheckedAt,
@@ -606,6 +611,7 @@ export async function updateGameInstanceRuntime(
     installPercent?: number | null
     installLogUpdatedAt?: string | null
     updateAvailable?: number
+    updateCheckError?: string | null
     localBuildId?: string | null
     remoteBuildId?: string | null
     updateCheckedAt?: string | null
@@ -674,6 +680,9 @@ export async function updateGameInstanceRuntime(
   }
   if (typeof input.updateAvailable !== 'undefined') {
     setPayload.updateAvailable = input.updateAvailable ? 1 : 0
+  }
+  if (typeof input.updateCheckError !== 'undefined') {
+    setPayload.updateCheckError = input.updateCheckError?.trim() || null
   }
   if (typeof input.localBuildId !== 'undefined') {
     setPayload.localBuildId = input.localBuildId?.trim() || null

@@ -139,11 +139,12 @@ function readTailText(filePath: string, maxBytes = 64 * 1024): string {
  *   2. **DST 自己写的 `server_log.txt`**——面板从实例目录直接读，不依赖任何采集链路，
  *      而且该文件每次分片启动都会被重写，天然只包含「本轮」的日志，不会匹配到上一轮的旧标记。
  */
-export function hasMasterReadyMarker(instanceId: string, installPath?: string): boolean {
+export function hasMasterReadyMarker(instanceId: string, installPath?: string, startedAt?: string | null): boolean {
+  const since = startedAt ? Date.parse(startedAt) : 0
   try {
     const hit = instanceConsoleLogStore
       .listLogs(instanceId)
-      .some(line => line.stream === 'stdout' && (line.shard == null || line.shard === 'master') && MASTER_READY_MARKER.test(line.text))
+      .some(line => line.stream === 'stdout' && (line.shard == null || line.shard === 'master') && (!since || Date.parse(line.at) >= since) && MASTER_READY_MARKER.test(line.text))
     if (hit) {
       return true
     }
@@ -155,7 +156,39 @@ export function hasMasterReadyMarker(instanceId: string, installPath?: string): 
     return false
   }
   const logPath = path.join(resolveShardRoot(installPath, 'master'), 'server_log.txt')
+  try {
+    if (since && fs.statSync(logPath).mtimeMs < since) return false
+  }
+  catch { return false }
   return MASTER_READY_MARKER.test(readTailText(logPath))
+}
+
+/** 致命 Lua 错误会让游戏停在错误界面，进程却仍存活；普通 prefab 警告不算失败。 */
+export function findShardLuaFailure(
+  instanceId: string,
+  installPath?: string,
+  startedAt?: string | null,
+): string | null {
+  const since = startedAt ? Date.parse(startedAt) : 0
+  for (const shard of ['master', 'caves'] as const) {
+    const lines = instanceConsoleLogStore.listLogs(instanceId, 0, 2000)
+      .filter(line => line.stream === 'stdout' && line.shard === shard && (!since || Date.parse(line.at) >= since))
+      .map(line => line.text)
+    if (installPath) {
+      const logPath = path.join(resolveShardRoot(installPath, shard), 'server_log.txt')
+      try {
+        // 显式重新启动后不能拿上一轮尚未被覆盖的文件判失败。
+        if (!since || fs.statSync(logPath).mtimeMs >= since) lines.push(readTailText(logPath, 2 * 1024 * 1024))
+      }
+      catch { /* 日志尚未生成，继续等待 */ }
+    }
+    const text = lines.join('\n')
+    if (/LUA ERROR stack traceback:/.test(text)) {
+      const detail = text.split(/\r?\n/).find(line => /\[string .+\]:\d+:/.test(line))?.trim()
+      return `${shard === 'master' ? '主世界' : '洞穴'}分片发生 Lua 致命错误${detail ? `：${detail.slice(0, 500)}` : ''}。请检查 Mod 与存档，完整日志见控制台。`
+    }
+  }
+  return null
 }
 
 /**
@@ -609,12 +642,13 @@ export function isShardPortBound(port: number): Promise<boolean> {
 export type MasterReadyOutcome =
   /** 已确认世界加载完成（就绪标记，或同命名空间下已过宽限期的端口），洞穴可以起来了 */
   | { kind: 'ready' }
-  /** 等满上限仍未就绪：照常启动洞穴，但要在控制台说明原因 */
+  /** 等满上限仍未就绪：中止启动，保留超时原因 */
   | { kind: 'timed-out' }
   /** 主世界进程已不在（退出或被运行时放弃拉起） */
   | { kind: 'stopped', detail: string }
   /** 主世界在崩溃循环里反复重启，永远不会就绪 */
   | { kind: 'restart-loop', detail: string }
+  | { kind: 'lua-error', detail: string }
 
 export type MasterProbeVerdict = 'healthy' | 'unknown' | 'stopped' | 'restart-loop'
 
@@ -669,6 +703,7 @@ export async function waitForMasterShardReady(
   installPath: string,
   waitSec = resolveShardReadyWaitSec(),
   baselineRestarts = 0,
+  startedAt?: string,
 ): Promise<MasterReadyOutcome> {
   const runtime = getContainerRuntime()
   const startAt = Date.now()
@@ -676,6 +711,8 @@ export async function waitForMasterShardReady(
   let lastHeartbeat = startAt
   let portBoundAt: number | null = null
   while (Date.now() < deadline) {
+    const luaFailure = findShardLuaFailure(instanceId, installPath, startedAt)
+    if (luaFailure) return { kind: 'lua-error', detail: luaFailure }
     // 首选判据：DST 自己写的世界就绪标记（`server_log.txt`，或面板采集到的同一行）。
     //
     // 它不依赖任何网络命名空间，因此容器模式与 native 模式都成立。端口探测**不能**当主判据：
@@ -683,7 +720,7 @@ export async function waitForMasterShardReady(
     // 从不发布到宿主机（发布的是 `server.ini` 的三个游戏端口），面板容器里 bind 它必然成功，
     // 于是「端口已被占用」永远为 false——只按端口判断会让 Docker 模式一路等到上限，
     // 表现为「房间能进、控制台却一直报『尚未监听到分片端口』」。
-    if (hasMasterReadyMarker(instanceId, installPath)) {
+    if (hasMasterReadyMarker(instanceId, installPath, startedAt)) {
       instanceConsoleLogStore.appendSystem(
         instanceId,
         `主世界已加载完成（启动后 ${Math.round((Date.now() - startAt) / 1000)} 秒），就绪后启动洞穴分片`,
@@ -748,7 +785,7 @@ export async function waitForMasterShardReady(
     }
     await new Promise(resolve => setTimeout(resolve, 2000))
   }
-  app.log.warn({ instanceId, masterPort, waitSec }, '等待主世界就绪超时，仍继续启动洞穴分片')
+  app.log.warn({ instanceId, masterPort, waitSec }, '等待主世界就绪超时')
   return { kind: 'timed-out' }
 }
 
@@ -889,6 +926,7 @@ async function startInstanceContainerUnlocked(
       cavesSpec.networkName = shardNetworkName
     }
   }
+  const startedAt = new Date().toISOString()
   const masterStart = await startSingleShardContainer(runtime, masterSpec, gameDstImage, runtimeMode)
   if (!masterStart.ok) {
     return { ok: false, message: `主世界：${masterStart.message}` }
@@ -927,6 +965,7 @@ async function startInstanceContainerUnlocked(
       cavesSpec,
       generation: bumpCavesStartGeneration(input.instanceId),
       baselineRestarts: masterStart.inspect.restarts ?? 0,
+      startedAt,
       startCaves: async () => {
         const result = await startSingleShardContainer(runtime, cavesSpec, gameDstImage, runtimeMode)
         return result.ok ? { ok: true as const, ref: result.ref } : { ok: false as const, message: `洞穴：${result.message}` }
@@ -973,6 +1012,7 @@ async function startCavesAfterMasterReady(
     generation: number
     /** 本次启动主世界时的重启计数基线：只关心「我们启动它之后有没有崩过」 */
     baselineRestarts: number
+    startedAt: string
     startCaves: () => Promise<{ ok: true, ref: ContainerRef } | { ok: false, message: string }>
   },
 ): Promise<void> {
@@ -982,6 +1022,7 @@ async function startCavesAfterMasterReady(
     if (stale()) {
       return
     }
+    if (!message.startsWith('启动失败：')) message = `启动失败：${message}`
     await stopAndRemoveShard(runtime, input.masterRef, input.instanceId)
     instanceConsoleLogStore.appendSystem(input.instanceId, message, 'caves')
     await updateGameInstanceRuntime(input.instanceId, {
@@ -991,6 +1032,9 @@ async function startCavesAfterMasterReady(
       runtimeStartedAt: null,
       lastError: message,
       lastErrorPhase: 'runtime',
+      runtimeReadyAt: null,
+      runtimeWarning: message,
+      runtimeFailureKind: null,
       whereStatus: 'running',
     })
     app.log.error({ instanceId: input.instanceId }, message)
@@ -1004,9 +1048,14 @@ async function startCavesAfterMasterReady(
       input.installPath,
       resolveShardReadyWaitSec(),
       input.baselineRestarts,
+      input.startedAt,
     )
     if (stale()) {
       app.log.info({ instanceId: input.instanceId }, '实例已被重新启动或停止，放弃本次洞穴启动')
+      return
+    }
+    if (readiness.kind === 'lua-error') {
+      await failStart(readiness.detail)
       return
     }
     if (readiness.kind === 'stopped' || readiness.kind === 'restart-loop') {
@@ -1017,11 +1066,8 @@ async function startCavesAfterMasterReady(
       return
     }
     if (readiness.kind === 'timed-out') {
-      instanceConsoleLogStore.appendSystem(
-        input.instanceId,
-        `等待主世界就绪超时（${resolveShardReadyWaitSec()} 秒），仍继续启动洞穴分片；若洞穴反复重连失败请检查主世界日志`,
-        'caves',
-      )
+      await failStart(`启动失败：等待主世界就绪超时（${resolveShardReadyWaitSec()} 秒），已中止启动洞穴分片。请检查控制台日志。`)
+      return
     }
     const cavesStart = await input.startCaves()
     if (stale()) {

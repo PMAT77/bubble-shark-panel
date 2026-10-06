@@ -159,6 +159,7 @@ defineExpose({
           <span class="ml-4">状态：{{ getInstallLogStatusLabel(meta?.status) }}</span>
           <span class="ml-4">更新时间：{{ formatDateTime(meta?.updatedAt || null) }}</span>
         </p>
+        <p v-if="meta?.status === 'running'">当前阶段：{{ meta.phase || '准备环境' }}。等待期间可查看下方日志。</p>
         <p v-if="hint" :class="hint.class">
           {{ hint.text }}
         </p>

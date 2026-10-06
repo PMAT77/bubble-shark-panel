@@ -56,6 +56,7 @@ export const gameInstances = sqliteTable('game_instances', {
   installPercent: integer('install_percent'),
   installLogUpdatedAt: text('install_log_updated_at'),
   updateAvailable: integer('update_available').notNull().default(0),
+  updateCheckError: text('update_check_error'),
   localBuildId: text('local_build_id'),
   remoteBuildId: text('remote_build_id'),
   updateCheckedAt: text('update_checked_at'),

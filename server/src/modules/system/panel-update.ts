@@ -19,6 +19,7 @@ import {
   shortDigest,
 } from '../../infra/container/image-ref'
 import { fetchRemoteImageIdentity } from '../../infra/container/registry-manifest'
+import { stripDockerLogFrame } from '../../infra/container/docker-log'
 import { createDockerClient } from '../../infra/docker-connect'
 import type { ServerConfig } from '../../shared/config'
 import { loadServerConfig } from '../../shared/config'
@@ -895,10 +896,15 @@ export function buildUpdaterShellCommand(
     `GSH_RELEASE_VERSION=${resolvedTag}`,
   ]
   const quotedPairs = pairs.map(pair => `'${pair}'`).join(' ')
-  const rollback = `cp /stack/$backup /stack/panel.env && docker compose --env-file /stack/panel.env ${composeArgs} up -d panel`
+  const panelContainerName = config.panelContainerName.replace(/'/g, "'\\''")
+  const rollback = `cp /stack/$backup /stack/panel.env && docker compose -p "$project" --env-file /stack/panel.env ${composeArgs} up -d panel`
   return [
     'set -e',
     'cd /stack',
+    `project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' '${panelContainerName}')"`,
+    'case "$project" in',
+    '  ""|"<no value>") echo "[bsp] 无法读取现有面板的 Compose 项目名，已停止更新"; exit 1 ;;',
+    'esac',
     'backup="panel.env.bak.$(date +%Y%m%d%H%M%S)"',
     'cp panel.env "$backup"',
     'echo "[bsp] panel.env 已备份到 $backup"',
@@ -910,7 +916,7 @@ export function buildUpdaterShellCommand(
     '    echo "${pair}" >> panel.env',
     '  fi',
     'done',
-    `if ! docker compose --env-file panel.env ${composeArgs} up -d panel; then`,
+    `if ! docker compose -p "$project" --env-file panel.env ${composeArgs} up -d panel; then`,
     `  echo "[bsp] 重建面板失败，可回滚：${rollback}"`,
     '  exit 1',
     'fi',
@@ -1076,7 +1082,8 @@ async function startPanelComposeUpdater(input: {
     Image: input.updaterImage,
     Cmd: ['sh', '-c', buildUpdaterShellCommand(input.targetImage, input.releaseTag)],
     HostConfig: {
-      AutoRemove: true,
+      // 保留退出容器，失败时读取日志；成功后由 watcher 清理，下次重试也会清理残留。
+      AutoRemove: false,
       Binds: [
         '/var/run/docker.sock:/var/run/docker.sock',
         // 可写：updater 要把目标镜像写进 panel.env，否则面板重启后会回退到旧版本
@@ -1180,19 +1187,31 @@ export async function writePanelPortViaStackContainer(input: {
 
 /** updater 失败（面板没被换掉）时必须复位状态，否则界面会永久停在「更新中」 */
 function watchUpdaterContainer(containerId: string): void {
-  resolveDocker().getContainer(containerId).wait()
-    .then((result: unknown) => {
+  const container = resolveDocker().getContainer(containerId)
+  container.wait()
+    .then(async (result: unknown) => {
       const code = (result as { StatusCode?: number } | null)?.StatusCode ?? 0
       if (code !== 0 && runtime.phase === 'recreating') {
+        let detail = ''
+        try {
+          const raw = await container.logs({ stdout: true, stderr: true, tail: 20 })
+          detail = (Buffer.isBuffer(raw) ? stripDockerLogFrame(raw) : String(raw)).trim().slice(-2000)
+        }
+        catch {
+          // 日志不可读时仍报告退出码，保留失败容器以便从宿主机排查。
+        }
         updateRuntime({
           phase: 'failed',
           message: null,
-          error: `重建面板失败（updater 退出码 ${code}）。panel.env 备份保留在 stack 目录，可按提示回滚。`,
+          error: `重建面板失败（updater 退出码 ${code}）。${detail ? `\n${detail}` : '请查看 bubblesharkpanel-updater 容器日志。'}`,
         })
+      }
+      if (code === 0) {
+        await container.remove()
       }
     })
     .catch(() => {
-      // 容器已被 AutoRemove 清理，或面板正在重启导致连接中断：都不算失败
+      // 面板正在重启或容器已被清理导致连接中断。
     })
 }
 

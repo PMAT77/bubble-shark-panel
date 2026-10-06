@@ -92,6 +92,8 @@ export const instanceUpdateStatusItemSchema = z.object({
   localBuildId: z.string().nullable(),
   remoteBuildId: z.string().nullable(),
   updateCheckedAt: z.string().nullable(),
+  updateState: z.enum(['unchecked', 'current', 'available', 'unknown']).optional(),
+  updateCheckError: z.string().nullable().optional(),
   message: z.string().optional(),
 })
 export type InstanceUpdateStatusItem = z.infer<typeof instanceUpdateStatusItemSchema>
@@ -126,6 +128,7 @@ export const instanceInstallLogPayloadSchema = z.object({
   status: z.enum(['success', 'failed', 'running', 'unknown']),
   updatedAt: z.string().nullable(),
   source: instanceInstallLogSourceSchema,
+  phase: z.string().nullable().optional(),
 })
 export type InstanceInstallLogPayload = z.infer<typeof instanceInstallLogPayloadSchema>
 
@@ -180,6 +183,8 @@ export const instanceItemSchema = z.object({
   localBuildId: z.string().nullable(),
   remoteBuildId: z.string().nullable(),
   updateCheckedAt: z.string().nullable(),
+  updateState: z.enum(['unchecked', 'current', 'available', 'unknown']).optional(),
+  updateCheckError: z.string().nullable().optional(),
   runtimeStartedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),

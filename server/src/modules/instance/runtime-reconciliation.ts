@@ -3,7 +3,7 @@ import type { DbInstanceRuntimeFailureKind } from '../../shared/db/types'
 import type { ContainerInspect } from '../../infra/container/types'
 import { listGameInstances, updateGameInstanceRuntime, getInstanceRuntimeRevision } from '../../shared/db/index'
 import { describeSystemdExitReason, readHostMemorySnapshot, resolveShardMemoryCapMb } from '../../infra/container/exit-reason'
-import { ensureInstanceContainerLogFollow, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveShardReadyWaitSec, resolveInstanceContainerRef } from './container-lifecycle'
+import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveShardReadyWaitSec, resolveInstanceContainerRef, stopInstanceContainer } from './container-lifecycle'
 import { reconcileStaleInstallingInstances } from './install-service'
 import { buildRestartLoopWarning, shouldClearRuntimeWarning } from './runtime-warning'
 import { resolveRuntimeReadiness, type InstanceRuntimeReadiness } from './runtime-readiness'
@@ -136,6 +136,22 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
       continue
     }
     const snapshot = probe.snapshot
+    const luaFailure = findShardLuaFailure(instance.id, instance.installPath ?? undefined, instance.runtimeStartedAt)
+    if (luaFailure) {
+      const message = instance.runtimeReadyAt ? luaFailure : `启动失败：${luaFailure}`
+      await stopInstanceContainer(instance.id)
+      await updateGameInstanceRuntime(instance.id, {
+        status: 'error',
+        lastError: message,
+        lastErrorPhase: 'runtime',
+        runtimeReadyAt: null,
+        runtimeWarning: message,
+        runtimeFailureKind: null,
+        whereStatus: 'stopped',
+      })
+      reconciled++
+      continue
+    }
     if (snapshot?.running) {
       if (!instance.runtimeStartedAt) {
         await updateGameInstanceRuntime(instance.id, {
@@ -145,7 +161,7 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
       // 本轮的就绪标记只在尚未就绪时查一次：一旦就绪就不再读分片日志，列表轮询没有额外开销。
       // 「进程在跑」与「服务器能接客」是两件事，只报前者会让服主以为房间已经能被搜到。
       let runtimeReadyAt = instance.runtimeReadyAt
-      if (!runtimeReadyAt && instance.installPath && hasMasterReadyMarker(instance.id, instance.installPath)) {
+      if (!runtimeReadyAt && instance.installPath && hasMasterReadyMarker(instance.id, instance.installPath, instance.runtimeStartedAt)) {
         runtimeReadyAt = new Date().toISOString()
         await updateGameInstanceRuntime(instance.id, { runtimeReadyAt, runtimeFailureKind: null })
       }
@@ -206,6 +222,10 @@ async function reconcileStoppedButContainerRunning(app: FastifyInstance, health:
     if (probe.unitExists && !probe.snapshot) health.complete = false
     const snapshot = probe.snapshot
     if (!snapshot?.running) {
+      continue
+    }
+    // Lua 崩溃后进程可能仍存活，不能把上一轮的失败结论抹成「运行中」。
+    if (findShardLuaFailure(instance.id, instance.installPath ?? undefined, instance.runtimeStartedAt)) {
       continue
     }
     if (!isHealthyRuntimeForResurrect(snapshot)) {

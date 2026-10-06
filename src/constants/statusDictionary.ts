@@ -84,6 +84,9 @@ export const INSTANCE_STATE: Record<InstanceDisplayState, StatusDescriptor> = {
   runtime_error: { label: '运行异常', tone: 'error', icon: 'i-lucide:triangle-alert' },
 }
 
+export const INSTANCE_STARTING: StatusDescriptor = { label: '启动中', tone: 'warning', icon: 'i-lucide:loader-circle' }
+export const INSTANCE_START_FAILED: StatusDescriptor = { label: '启动失败', tone: 'error', icon: 'i-lucide:triangle-alert' }
+
 /** 仅有原始枚举（无 lastErrorPhase 上下文）时的兜底：error 展示为运行异常 */
 export const INSTANCE_STATUS: Record<InstanceDisplayState | 'error', StatusDescriptor> = {
   ...INSTANCE_STATE,

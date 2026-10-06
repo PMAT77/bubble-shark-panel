@@ -90,8 +90,8 @@ export default {
   }) as Promise<{ data: InstanceInstallLogPayload }>,
   createInstance: (data: CreateInstancePayload) => api.post('app/instance/create', data),
   updateInstance: (id: string, options?: { force?: boolean }) => api.post('app/instance/update', { id, force: options?.force }),
-  checkInstanceUpdates: (ids?: string[]) => api.post('app/instance/check-updates', ids?.length ? { ids } : {}) as Promise<{ data: InstanceUpdateCheckJobPayload }>,
-  getInstanceUpdateCheckStatus: () => api.get('app/instance/check-updates/status') as Promise<{ data: InstanceUpdateCheckJobPayload }>,
+  checkInstanceUpdates: (ids?: string[], options?: { signal?: AbortSignal }) => api.post('app/instance/check-updates', ids?.length ? { ids } : {}, options) as Promise<{ data: InstanceUpdateCheckJobPayload }>,
+  getInstanceUpdateCheckStatus: (options?: { signal?: AbortSignal }) => api.get('app/instance/check-updates/status', options) as Promise<{ data: InstanceUpdateCheckJobPayload }>,
   allocateInstancePorts: (id: string) => api.post('app/instance/allocate-ports', { id }) as Promise<{ data: InstanceAllocatePortsPayload }>,
   startInstance: (id: string, options?: { autoAllocatePorts?: boolean }) => api.post('app/instance/start', {
     id,

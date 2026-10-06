@@ -6,7 +6,7 @@ import type { NodeListItem } from '@/api/modules/node'
 import type { NotificationReactive } from 'naive-ui'
 import type { DropdownOption } from 'naive-ui'
 import type { DirectoryItem } from '@/api/modules/system'
-import { NButton, NButtonGroup, NCheckbox, NDropdown, NProgress, NStatistic, NTag, NTooltip, useNotification } from 'naive-ui'
+import { NButton, NButtonGroup, NCheckbox, NDropdown, NStatistic, NTag, NTooltip, useNotification } from 'naive-ui'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
 import { statusBadgeClass } from '@/constants/statusDictionary'
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRefs, watch } from 'vue'
@@ -26,14 +26,11 @@ import {
 import {
   canOpenInstallLog,
   computeUptimeSecondsFromStartedAt,
-  extractInstallProgressPercent,
   formatMemoryMb,
   formatUptime,
   getInstanceState,
   isInstanceInstallingStatus,
-  resolveInstallPhase,
   resolveRuntimeReadinessView,
-  shouldShowInstallDetail,
 } from '../instanceDisplay'
 import {
   buildInstallResultNotification,
@@ -47,7 +44,8 @@ import {
 } from '../composables/useInstanceLifecycleActions'
 import { useInstanceRuntimeObservability } from '../composables/useInstanceRuntimeObservability'
 import { formatDateTime } from '../utils'
-import { buildInstanceUpdateCheckNotice } from '../instanceUpdatePresentation'
+import { buildInstanceUpdateCheckNotice, canRetryInstanceInstall, resolveInstanceUpdateState } from '../instanceUpdatePresentation'
+import { waitForInstanceUpdateCheckJob } from '../composables/instanceUpdateCheckJob'
 import InstanceInstallLogModal from './InstanceInstallLogModal.vue'
 
 defineOptions({
@@ -71,14 +69,12 @@ const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 
 const instanceLoading = ref(false)
 const updateCheckLoading = ref(false)
-const UPDATE_CHECK_POLL_MS = 2000
-const UPDATE_CHECK_POLL_MAX_ATTEMPTS = 45
 const createLoading = ref(false)
 const instances = ref<InstanceItem[]>([])
 const checkedInstanceIds = ref<DataTableRowKey[]>([])
 const selectedInstances = computed(() => instances.value.filter(row => checkedInstanceIds.value.includes(row.id)))
 const forceUpdateDisabledReason = computed(() => {
-  if (forceUpdateLoading.value) return '正在提交强制更新'
+  if (forceUpdateLoading.value) return '正在提交强制校验并更新'
   if (updateCheckLoading.value) return '正在检查更新'
   if (!selectedInstances.value.length) return '请先勾选实例'
   if (selectedInstances.value.some(row => !canForceUpdateInstance(row))) return '请先停止所选实例'
@@ -88,10 +84,10 @@ const forceUpdateDisabledReason = computed(() => {
 const updateMenuOptions = computed<DropdownOption[]>(() => [{
   key: 'force-update',
   label: !selectedInstances.value.length
-    ? '强制更新所选实例'
+    ? '强制校验并更新所选实例'
     : forceUpdateDisabledReason.value
-      ? `强制更新所选实例（${forceUpdateDisabledReason.value}）`
-      : `强制更新所选实例（${selectedInstances.value.length}）`,
+      ? `强制校验并更新所选实例（${forceUpdateDisabledReason.value}）`
+      : `强制校验并更新所选实例（${selectedInstances.value.length}）`,
   disabled: Boolean(forceUpdateDisabledReason.value) || !steamcmdInstalled.value,
 }])
 
@@ -265,7 +261,7 @@ async function fetchStatusCounts() {
 }
 
 const instancesWithUpdate = computed(() =>
-  instances.value.filter(item => item.updateAvailable),
+  instances.value.filter(item => resolveInstanceUpdateState(item) === 'available'),
 )
 
 /** 点击统计卡 → 应用对应状态筛选 */
@@ -287,7 +283,7 @@ const instanceColumns = computed<DataTableColumns<InstanceItem>>(() => {
           title: '查看实例详情',
           onClick: () => router.push(routeToInstanceDetail(row.id)),
         }, row.name)]
-        if (row.updateAvailable) {
+        if (resolveInstanceUpdateState(row) === 'available') {
           children.push(
             h(NTag, { type: 'warning', size: 'small', round: true }, { default: () => '需要更新' }),
           )
@@ -427,7 +423,6 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
   const stopAction = row.status === 'installing' || row.status === 'pending_install' ? 'cancel_install' : 'stop'
   const stopLabel = stopAction === 'cancel_install' ? '取消安装' : '停止'
   const instanceActionRunning = isInstanceActionRunning(row.id)
-  const installFailed = getInstanceState(row).key === 'install_failed'
   const actions: InstanceRowAction[] = [
     {
       key: 'detail',
@@ -444,7 +439,7 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
     },
     {
       key: 'update',
-      label: installFailed ? '修复安装' : '更新',
+      label: canRetryInstanceInstall(row) ? '重试安装' : '更新',
       menuOnly: true,
       loading: isActionLoading(row.id, 'update'),
       disabled: instanceActionRunning || !canUpdateInstance(row),
@@ -655,7 +650,7 @@ function renderInstanceStateColumn(row: InstanceItem) {
   )
 }
 
-/** 渲染安装列：安装中显示进度条 + 阶段文案（随列表轮询更新） */
+/** 安装列只显示状态；详细阶段见日志。 */
 function renderInstallColumn(instance: InstanceItem) {
   if (instance.status === 'running' || instance.status === 'stopped') {
     return h('span', { class: 'text-sm text-muted-foreground' }, '已安装')
@@ -670,29 +665,7 @@ function renderInstallColumn(instance: InstanceItem) {
       ? h('span', { class: 'text-sm text-red-500' }, '安装失败')
       : h('span', { class: 'text-sm text-muted-foreground' }, '已安装')
   }
-  if (!shouldShowInstallDetail(instance)) {
-    return h('span', { class: 'text-sm text-muted-foreground' }, '—')
-  }
-
-  const progress = extractInstallProgressPercent(instance)
-  const isActiveInstall = instance.status === 'installing' || instance.status === 'pending_install'
-
-  if (isActiveInstall || progress !== null) {
-    const percentage = progress ?? 0
-    return h('div', { class: 'w-full min-w-0 max-w-full box-border space-y-1' }, [
-      h(NProgress, {
-        percentage,
-        height: 10,
-        showIndicator: false,
-        processing: isActiveInstall && (progress === null || progress < 100),
-        borderRadius: 4,
-        class: 'w-full',
-      }),
-      h('span', { class: 'block text-xs text-muted-foreground' }, resolveInstallPhase(instance)),
-    ])
-  }
-
-  return h('span', { class: 'text-sm text-muted-foreground' }, resolveInstallPhase(instance))
+  return h('span', { class: 'text-sm text-muted-foreground' }, instance.status === 'pending_install' ? '未安装' : '安装中')
 }
 
 /** 根据节点 ID 解析节点名称 */
@@ -965,23 +938,6 @@ async function refreshVersionStatusAfterSuccessfulInstall(instanceId: string) {
   await fetchInstances({ silent: true })
 }
 
-function sleep(ms: number) {
-  return new Promise<void>(resolve => setTimeout(resolve, ms))
-}
-
-async function waitForInstanceUpdateCheckJob(): Promise<InstanceUpdateCheckJobPayload> {
-  for (let attempt = 0; attempt < UPDATE_CHECK_POLL_MAX_ATTEMPTS; attempt += 1) {
-    if (attempt > 0) {
-      await sleep(UPDATE_CHECK_POLL_MS)
-    }
-    const res = await apiInstance.getInstanceUpdateCheckStatus()
-    if (!res.data.checking) {
-      return res.data
-    }
-  }
-  throw new Error('版本检查超时，请稍后重试')
-}
-
 function notifyInstanceUpdateCheckResult(status: InstanceUpdateCheckJobPayload) {
   if (status.error) {
     faToast.error(status.error)
@@ -1017,7 +973,7 @@ async function openInstallLogModal(instance: InstanceItem) {
 
 function buildUpdateNotifySignature(list: InstanceItem[]) {
   return list
-    .filter(item => item.updateAvailable)
+    .filter(item => resolveInstanceUpdateState(item) === 'available')
     .map(item => `${item.id}:${item.remoteBuildId ?? ''}`)
     .sort()
     .join('|')
@@ -1379,20 +1335,7 @@ onBeforeUnmount(() => {
               {{ getInstanceState(instance).label }}
             </NTag>
           </div>
-          <div v-if="shouldShowInstallDetail(instance)" class="space-y-1">
-            <div class="flex justify-between text-xs text-muted-foreground">
-              <span>安装进度</span>
-              <span v-if="extractInstallProgressPercent(instance) != null">{{ extractInstallProgressPercent(instance) }}%</span>
-              <span v-else>处理中</span>
-            </div>
-            <NProgress
-              v-if="extractInstallProgressPercent(instance) != null"
-              :percentage="extractInstallProgressPercent(instance) ?? 0"
-              :show-indicator="false"
-              :processing="instance.status === 'installing' || instance.status === 'pending_install'"
-              :height="8"
-            />
-          </div>
+          <div class="text-sm text-muted-foreground">安装：<component :is="renderInstallColumn(instance)" /></div>
           <dl class="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
             <div>
               <dt class="text-muted-foreground">CPU（单核基准）</dt>

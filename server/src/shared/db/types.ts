@@ -123,6 +123,8 @@ export interface DbGameInstance {
   installPercent: number | null
   installLogUpdatedAt: string | null
   updateAvailable: boolean
+  updateCheckError?: string | null
+  updateState?: import('../../../../shared/instance-update-state').InstanceUpdateState
   localBuildId: string | null
   remoteBuildId: string | null
   updateCheckedAt: string | null
@@ -176,6 +178,7 @@ export interface UpdateGameInstanceRuntimeInput {
   installPercent?: number | null
   installLogUpdatedAt?: string | null
   updateAvailable?: boolean
+  updateCheckError?: string | null
   localBuildId?: string | null
   remoteBuildId?: string | null
   updateCheckedAt?: string | null

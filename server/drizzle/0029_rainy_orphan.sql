@@ -1,0 +1,1 @@
+ALTER TABLE `game_instances` ADD `update_check_error` text;

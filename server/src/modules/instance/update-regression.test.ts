@@ -14,7 +14,7 @@ import {
   getGameInstanceById, initDatabase, updateGameInstanceRuntime, updateUserMustChangePassword,
 } from '../../shared/db'
 import { createMember, createRole } from '../system/rbac-service'
-import { clearRemoteBuildCache, fetchRemoteBuildId } from '../../shared/steam-update/build-id'
+import { clearRemoteBuildCache, fetchRemoteBuildId, REMOTE_BUILD_CACHE_MS } from '../../shared/steam-update/build-id'
 import { resolveDockerStatus } from '../../infra/docker'
 import { runSteamcmdAppInfoInContainer } from '../../infra/container/steamcmd-runner'
 import { runSteamcmdJob } from '../../infra/container/steamcmd-job'
@@ -24,7 +24,7 @@ import { findInstallSeedDonor } from './install-seed'
 
 const app = Fastify({ logger: false })
 const root = fs.mkdtempSync(path.join(process.cwd(), '.bsp-update-regression-'))
-const envKeys = ['DB_PATH', 'BSP_RUNTIME_MODE', 'BSP_INSTANCES_ROOT', 'BSP_PANEL_CONTAINER_NAME', 'BSP_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'BSP_UNIT_TEST'] as const
+const envKeys = ['DB_PATH', 'BSP_RUNTIME_MODE', 'BSP_INSTANCES_ROOT', 'BSP_PANEL_CONTAINER_NAME', 'BSP_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'BSP_UNIT_TEST', 'BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS', 'BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS', 'BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS'] as const
 const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]))
 process.env.DB_PATH = path.join(root, 'test.sqlite')
 process.env.BSP_RUNTIME_MODE = 'docker'
@@ -33,6 +33,9 @@ process.env.BSP_PANEL_CONTAINER_NAME = 'bsp-update-regression-panel'
 process.env.SERVER_LOG_DIR = path.join(root, 'logs')
 process.env.BSP_UNIT_TEST = '1'
 process.env.BSP_INSTALL_DEFER_DST_IMAGE_PULL = '1'
+process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
+process.env.BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS = '2'
+process.env.BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS = '0'
 
 let token = ''
 let queryOutput = ''
@@ -40,6 +43,8 @@ let queryExitCode = 0
 let hang = false
 let queries = 0
 let updates = 0
+let queryDelayMs = 0
+let updateOutput = "Success! App '343050' fully installed.\n"
 
 function metadata(publicBuild = '25643504') {
   return `"343050" {\n"depots" {\n${Array.from({ length: 120 }, (_, i) => `"depot${i}" { "manifests" { "public" { "gid" "1" } } }`).join('\n')}
@@ -106,7 +111,8 @@ before(async () => {
   mock.method(Docker.prototype, 'createContainer', async (options: Docker.ContainerCreateOptions) => {
     const cmd = options.Cmd ?? []
     const query = cmd.includes('+app_info_print')
-    const text = query ? queryOutput : "Success! App '343050' fully installed.\n"
+    const text = query ? queryOutput : updateOutput
+    const exitCode = query ? queryExitCode : 0
     if (query) {
       queries++
     }
@@ -122,7 +128,7 @@ before(async () => {
     const frame = framed(text)
     let release: (value: { StatusCode: number }) => void = () => {}
     const waiting = hang ? new Promise<{ StatusCode: number }>((resolve) => { release = resolve })
-      : Promise.resolve({ StatusCode: query ? queryExitCode : 0 })
+      : new Promise<{ StatusCode: number }>(resolve => setTimeout(() => resolve({ StatusCode: exitCode }), query ? queryDelayMs : 0))
     return {
       start: async () => {},
       logs: async () => Readable.from([frame.subarray(0, 11), frame.subarray(11, 47), frame.subarray(47)]),
@@ -186,6 +192,42 @@ describe('game update regression', () => {
     queryOutput = metadata()
   })
 
+  it('coalesces concurrent checks and refreshes expired five-minute caches', async () => {
+    clearRemoteBuildCache()
+    const count = queries
+    queryDelayMs = 20
+    assert.deepEqual(await Promise.all([fetchRemoteBuildId('', '343050'), fetchRemoteBuildId('', '343050')]), ['25643504', '25643504'])
+    assert.equal(queries, count + 1)
+    queryDelayMs = 0
+    const now = Date.now()
+    const clock = mock.method(Date, 'now', () => now + REMOTE_BUILD_CACHE_MS + 1)
+    try {
+      assert.equal(await fetchRemoteBuildId('', '343050'), '25643504')
+      assert.equal(queries, count + 2)
+    }
+    finally { clock.mock.restore(); clearRemoteBuildCache() }
+  })
+
+  it('an invalidated slow query cannot erase a newer successful cache', async () => {
+    clearRemoteBuildCache()
+    const count = queries
+    queryDelayMs = 100
+    queryExitCode = 1
+    const old = fetchRemoteBuildId('', '343050')
+    while (queries === count) await new Promise(resolve => setTimeout(resolve, 1))
+    clearRemoteBuildCache('343050')
+    queryDelayMs = 0
+    queryExitCode = 0
+    queryOutput = metadata('25643505')
+    try {
+      assert.equal(await fetchRemoteBuildId('', '343050'), '25643505')
+      assert.equal(await old, null)
+      assert.equal(await fetchRemoteBuildId('', '343050'), '25643505')
+      assert.equal(queries, count + 2)
+    }
+    finally { queryOutput = metadata(); clearRemoteBuildCache() }
+  })
+
   it('installation finalization and restart reconciliation never rewrite the manifest', async () => {
     const current = await instance()
     const manifest = path.join(current.installPath!, 'steamapps', 'appmanifest_343050.acf')
@@ -208,13 +250,20 @@ describe('game update regression', () => {
   it('failed checks return unknown with an explanation', async () => {
     const current = await instance()
     queryExitCode = 1
+    queryOutput = 'ERROR! Failed to connect to Steam network.\n'
     const result = await checkInstancesForUpdates({ steamcmdCommand: '', instanceIds: [current.id], force: true })
     queryExitCode = 0
     assert.equal(result.items[0].remoteBuildId, null)
-    assert.match(result.items[0].message ?? '', /无法获取/)
+    assert.match(result.items[0].message ?? '', /SteamCMD 版本查询失败/)
+    assert.match(result.items[0].message ?? '', /Failed to connect to Steam network/)
+    queryOutput = metadata().slice(0, -2)
+    const malformed = await checkInstancesForUpdates({ steamcmdCommand: '', instanceIds: [current.id], force: true })
+    assert.equal(malformed.items[0].remoteBuildId, null)
+    assert.match(malformed.items[0].message ?? '', /未返回完整/)
+    queryOutput = metadata()
   })
 
-  it('the manual check endpoint queries again even when the public build cache is valid', async () => {
+  it('the manual check endpoint reuses a fresh successful public build cache', async () => {
     const current = await instance()
     await fetchRemoteBuildId('', '343050', { force: true })
     const count = queries
@@ -227,8 +276,8 @@ describe('game update regression', () => {
     }
     const result = getInstanceUpdateCheckJobStatus()
     assert.equal(result.error, null)
-    assert.equal(result.result?.items[0].remoteBuildId, '25643505')
-    assert.equal(queries, count + 1)
+    assert.equal(result.result?.items[0].remoteBuildId, '25643504')
+    assert.equal(queries, count)
     queryOutput = metadata()
     clearRemoteBuildCache()
   })
@@ -263,7 +312,8 @@ describe('game update regression', () => {
       `${localMetadata('25643504')} "AppState" { "buildid" "1" }`]) {
       fs.writeFileSync(manifest, content)
       const result = await check()
-      assert.equal(result.localBuildId, null)
+      assert.equal(result.localBuildId, '25643504')
+      assert.equal(result.updateState, 'unknown')
       assert.ok(result.message)
     }
     fs.writeFileSync(manifest, localMetadata('25643504', '5351080740317260085', '6'))
@@ -276,7 +326,7 @@ describe('game update regression', () => {
     queryOutput = metadata().replace('"343052" {', '"343054" { "config" { "oslist" "linux" } "manifests" { "public" { "gid" "1234" } } } "343052" {')
     assert.equal((await check()).updateAvailable, true, 'missing Linux depot cannot be latest')
     queryOutput = metadata().replace('"gid" "5351080740317260085"', '"gid" "unknown"')
-    assert.equal((await check()).localBuildId, null, 'incomplete remote content metadata cannot be latest')
+    assert.equal((await check()).updateState, 'unknown', 'incomplete remote content metadata cannot be latest')
     queryOutput = metadata()
   })
 
@@ -300,6 +350,49 @@ describe('game update regression', () => {
     assert.equal(JSON.parse(response.body).error, '', response.body)
     await waitForInstall(current.id)
     assert.equal(updates, count + 1)
+  })
+
+  it('installation completes before a slow failing version query and ordinary unknown updates are rejected', async () => {
+    const current = await instance('25643504')
+    queryExitCode = 1
+    queryDelayMs = 300
+    try {
+      const res = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id, force: true } })
+      assert.equal(JSON.parse(res.body).error, '', res.body)
+      await waitForInstall(current.id)
+      assert.equal((await getGameInstanceById(current.id))?.installLogStatus, 'success')
+      assert.equal((await getGameInstanceById(current.id))?.updateCheckedAt, null)
+      const deadline = Date.now() + 2000
+      while (!(await getGameInstanceById(current.id))?.updateCheckedAt && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+      const checked = await getGameInstanceById(current.id)
+      assert.equal(checked?.status, 'stopped')
+      assert.equal(checked?.updateState, 'unknown')
+      assert.match(checked?.updateCheckError ?? '', /SteamCMD/)
+      const count = updates
+      const rejected = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id } })
+      assert.match(JSON.parse(rejected.body).error, /无法确认/)
+      assert.equal(updates, count)
+    }
+    finally { queryExitCode = 0; queryDelayMs = 0; clearRemoteBuildCache() }
+  })
+
+  it('retries an aborted update even with exit zero and a success line, then records failure', async () => {
+    const current = await instance()
+    const count = updates
+    updateOutput = "Update state (0x0) : Timed out waiting for update to start, bailing.\nSuccess! App '343050' fully installed.\n"
+    try {
+      const res = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id, force: true } })
+      assert.equal(JSON.parse(res.body).error, '', res.body)
+      const deadline = Date.now() + 5000
+      while (isInstallJobActive(current.id) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+      assert.equal(isInstallJobActive(current.id), false)
+      const failed = await getGameInstanceById(current.id)
+      assert.equal(failed?.status, 'error')
+      assert.equal(failed?.installLogStatus, 'failed')
+      assert.match(failed?.lastError ?? '', /Timed out waiting/)
+      assert.equal(updates, count + 2)
+    }
+    finally { updateOutput = "Success! App '343050' fully installed.\n" }
   })
 
   it('forced recovery bypasses donor copy even when recipient game files are incomplete', async () => {

@@ -1,4 +1,5 @@
 import { defineFakeRoute } from 'vite-plugin-fake-server/client'
+import type { InstanceInstallLogPayload } from '../../../shared/contracts/instance'
 
 type InstanceStatus = 'pending_install' | 'running' | 'stopped' | 'installing' | 'error'
 
@@ -154,39 +155,51 @@ export default defineFakeRoute([
     },
   },
   {
+    url: '/fake/app/instance/install-log/download',
+    method: 'get',
+    rawResponse: (req, res) => {
+      const id = new URL(req.originalUrl ?? '/', 'http://localhost').searchParams.get('id')
+      const target = instanceList.find(item => item.id === id)
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+      res.setHeader('Content-Disposition', 'attachment; filename="install.log"')
+      res.end(`Connecting anonymously to Steam Public...OK\nUpdate state (0x61) downloading, progress: ${target?.installPercent ?? 56.25}\n${target?.installLogStatus === 'success' ? "Success! App '343050' fully installed.\n" : ''}`)
+    },
+  },
+  {
     url: '/fake/app/instance/install-log',
     method: 'get',
     response: ({ query }) => {
       const id = typeof query.id === 'string' ? query.id : ''
       const target = instanceList.find(item => item.id === id)
       const summary = [target?.lastCommand, target?.lastError].filter(Boolean).join('\n').trim()
-      const persistedLog = target?.installLogStatus === 'success'
-        ? 'SteamCMD 安装完成（fake 持久化日志示例）\nUpdate state (0x61) downloading, progress: 100.00'
-        : null
-      if (persistedLog) {
-        return {
-          error: '',
-          status: 1,
-          data: {
-            content: persistedLog,
-            status: target?.installLogStatus ?? 'unknown',
-            updatedAt: target?.installLogUpdatedAt ?? target?.updatedAt ?? null,
-            source: 'install_log' as const,
-          },
-        }
+      const status = target?.installLogStatus ?? (target?.status === 'installing' ? 'running' : 'unknown')
+      const at = target?.installLogUpdatedAt ?? target?.updatedAt ?? nowIso()
+      const progress: InstanceInstallLogPayload['progress'] = status === 'unknown' ? null : {
+        status, phaseCode: status === 'success' ? 'complete' : 'download',
+        phase: status === 'success' ? '安装完成' : '下载游戏文件',
+        percent: status === 'running' ? target?.installPercent ?? 56.25 : null,
+        updatedAt: at, attempt: 1, maxAttempts: 3, retryAt: null,
+        failure: status === 'failed' ? { message: target?.lastError ?? '安装未完成', advice: '查看原始日志，处理后点击“更新服务端”重试。' } : null,
+        events: [
+          { at, level: 'info', message: '安装任务已开始' },
+          { at, level: 'info', message: '连接 Steam' },
+          { at, level: 'info', message: '下载游戏文件' },
+          ...(status === 'success' ? [{ at, level: 'info' as const, message: '安装完成，可以启动实例。' }] : []),
+        ],
       }
-      const source = summary ? 'status_summary' as const : 'empty' as const
-      const content = summary
-        ? ['【最近状态摘要，非完整 SteamCMD 输出】', '', summary].join('\n')
-        : '暂无 SteamCMD 安装输出。'
+      const raw = progress ? `Connecting anonymously to Steam Public...OK\nUpdate state (0x61) downloading, progress: ${target?.installPercent ?? 56.25}\n${status === 'success' ? "Success! App '343050' fully installed." : ''}` : summary
       return {
         error: '',
         status: 1,
         data: {
-          content,
-          status: target?.status === 'error' ? 'failed' : target?.status === 'installing' ? 'running' : 'unknown',
-          updatedAt: target?.updatedAt ?? null,
-          source,
+          content: query.view === 'summary' && progress ? '' : raw || '暂无安装输出。',
+          status,
+          updatedAt: at,
+          source: progress ? 'install_log' : summary ? 'status_summary' : 'empty',
+          phase: progress?.phase ?? null,
+          progress,
+          rawAvailable: !!progress,
+          rawTruncated: false,
         },
       }
     },

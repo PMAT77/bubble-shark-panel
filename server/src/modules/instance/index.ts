@@ -11,12 +11,10 @@ import {
   createInstanceBodySchema,
   instanceActionBodySchema,
   instanceIdsBodySchema,
-  instanceInstallLogQuerySchema,
   instanceListQuerySchema,
   instanceStatusCountsQuerySchema,
 } from '../../../../shared/contracts/instance'
 import type {
-  InstanceInstallLogPayload,
   InstanceListQuery,
   InstanceStatusCounts,
   InstanceSummaryItem,
@@ -38,9 +36,8 @@ import {
 } from '../../shared/db/index'
 import {
   deleteInstallLogFile,
-  readInstallLogContent,
 } from '../../shared/instance-install/log-store'
-import { formatInstallLogContent } from '../../shared/instance-install/log-format'
+import { registerInstanceInstallLogRoutes } from './install-log-routes'
 import { isSteamcmdAppUpdateBusy } from '../../infra/container/steamcmd-app-update-queue'
 import { isSteamcmdImagePresent } from '../../infra/container'
 import {
@@ -76,7 +73,6 @@ import {
   getInstallHostMemoryPressure,
   isAnyInstallJobActive,
   isInstallJobActive,
-  mapDbInstallLogStatusToResponse,
   reconcileOrphanedSteamcmdOnPanelReady,
   shouldAllowInstallDespiteUpToDate,
   startInstallJob,
@@ -454,65 +450,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     return success(INSTALLABLE_GAMES, request)
   })
 
-  app.get('/app/instance/install-log', async (request): Promise<ApiSuccessResponse<InstanceInstallLogPayload> | ApiErrorResponse> => {
-    const query = instanceInstallLogQuerySchema.safeParse(request.query ?? {})
-    if (!query.success) {
-      return businessError('请求参数无效', request)
-    }
-    const id = query.data.id
-    if (!id) {
-      return businessError('实例 ID 不能为空', request)
-    }
-    const authorized = await authorizeInstance(request, id, 'instance.install-log:read')
-    if (authorized.error) {
-      return authorized.error
-    }
-    const instance = await getGameInstanceById(id)
-    if (!instance) {
-      return businessError('实例不存在', request)
-    }
-    const fileContent = readInstallLogContent(getInstallLogsDirPath(), id)
-    if (fileContent) {
-      return success<InstanceInstallLogPayload>({
-        content: formatInstallLogContent(fileContent),
-        status: mapDbInstallLogStatusToResponse(instance.installLogStatus, instance.status),
-        updatedAt: instance.installLogUpdatedAt ?? instance.updatedAt,
-        source: 'install_log',
-        phase: instance.status === 'installing' ? instance.lastCommand : null,
-      }, request)
-    }
-    if (isInstallJobActive(id)) {
-      return success<InstanceInstallLogPayload>({
-        content: '安装任务已启动，等待 SteamCMD 输出...',
-        status: 'running',
-        updatedAt: instance.installLogUpdatedAt ?? instance.updatedAt,
-        source: 'install_log',
-        phase: instance.lastCommand,
-      }, request)
-    }
-    const summaryLines = [instance.lastCommand, instance.lastError]
-      .filter(Boolean)
-      .join('\n')
-      .trim()
-    if (!summaryLines) {
-      return success<InstanceInstallLogPayload>({
-        content: '暂无 SteamCMD 安装输出。',
-        status: 'unknown',
-        updatedAt: instance.updatedAt,
-        source: 'empty',
-      }, request)
-    }
-    return success<InstanceInstallLogPayload>({
-      content: formatInstallLogContent([
-        '【最近状态摘要，非完整 SteamCMD 输出】',
-        '',
-        summaryLines,
-      ].join('\n')),
-      status: mapDbInstallLogStatusToResponse(instance.installLogStatus, instance.status),
-      updatedAt: instance.installLogUpdatedAt ?? instance.updatedAt,
-      source: 'status_summary',
-    }, request)
-  })
+  registerInstanceInstallLogRoutes(app)
 
   app.post('/app/instance/create', async (request): Promise<ApiSuccessResponse<Awaited<ReturnType<typeof createGameInstance>>> | ApiErrorResponse> => {
     // 创建不针对已有实例，所以不需要实例授权；但要用到创建者身份去补授权，因此取完整上下文

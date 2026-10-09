@@ -85,9 +85,13 @@ export default {
   getInstanceStatusCounts: (data?: InstanceStatusCountsQuery) => api.post('app/instance/status-counts', data) as Promise<{ data: InstanceStatusCounts }>,
   getInstanceMetrics: (ids?: string[], options?: { signal?: AbortSignal }) => api.post('app/instance/metrics', ids?.length ? { ids } : {}, options) as Promise<{ data: InstanceMetricsPayload }>,
   getInstallableGames: () => api.get('app/instance/games') as Promise<{ data: InstallableGameItem[] }>,
-  getInstanceInstallLog: (id: string) => api.get('app/instance/install-log', {
-    params: { id },
+  getInstanceInstallLog: (id: string, view: 'summary' | 'raw' = 'raw') => api.get('app/instance/install-log', {
+    params: { id, view },
   }) as Promise<{ data: InstanceInstallLogPayload }>,
+  downloadInstanceInstallLog: (id: string) => api.get('app/instance/install-log/download', {
+    params: { id },
+    responseType: 'blob',
+  }) as Promise<{ data: Blob }>,
   createInstance: (data: CreateInstancePayload) => api.post('app/instance/create', data),
   updateInstance: (id: string, options?: { force?: boolean }) => api.post('app/instance/update', { id, force: options?.force }),
   checkInstanceUpdates: (ids?: string[], options?: { signal?: AbortSignal }) => api.post('app/instance/check-updates', ids?.length ? { ids } : {}, options) as Promise<{ data: InstanceUpdateCheckJobPayload }>,

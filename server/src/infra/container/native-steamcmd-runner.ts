@@ -136,7 +136,7 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
       return
     }
     const previous = stream === 'stdout' ? stdoutCarry : stderrCarry
-    const parts = `${previous}${text}`.split(/\r?\n/)
+    const parts = `${previous}${text}`.split(/\r\n|\r|\n/)
     const carry = parts.pop() ?? ''
     if (stream === 'stdout') {
       stdoutCarry = carry
@@ -199,7 +199,7 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
       const line = redactSteamcmdLogLine(raw, secrets)
       if (line) {
         collected.pushDiagnostic(line)
-        input.onLogLine?.(line)
+        input.onLogLine?.(line.startsWith('[SteamCMD 诊断]') ? line : `[SteamCMD 诊断] ${line}`)
       }
     })
   }

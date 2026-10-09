@@ -27,8 +27,8 @@ it('rejects success following an aborted update, verifies local files, and ident
     fs.rmSync(manifest)
     assert.equal(validateSteamcmdAppUpdateResult(success, root, '343050').ok, false)
     assert.equal(resolveSteamcmdInstallPhase('Connecting anonymously to Steam Public...Retrying...'), '连接 Steam')
-    assert.equal(resolveSteamcmdInstallPhase('Update state (0x61) downloading, progress: 20'), '下载文件')
-    assert.equal(resolveSteamcmdInstallPhase('Update state (0x81) verifying update, progress: 50'), '校验文件')
+    assert.equal(resolveSteamcmdInstallPhase('Update state (0x61) downloading, progress: 20'), '下载游戏文件')
+    assert.equal(resolveSteamcmdInstallPhase('Update state (0x81) verifying update, progress: 50'), '校验游戏文件')
     assert.equal(resolveSteamcmdInstallPhase('[资源快照] MemAvailable: 5000'), null)
   }
   finally { fs.rmSync(root, { recursive: true, force: true }) }

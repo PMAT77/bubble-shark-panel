@@ -21,6 +21,9 @@ import { runSteamcmdJob } from '../../infra/container/steamcmd-job'
 import { checkInstancesForUpdates, getInstanceUpdateCheckJobStatus, refreshInstanceUpdateStatusAfterInstall, refreshInstanceUpdateStatusAfterSeed } from './update-check'
 import { isInstallJobActive, reconcileStaleInstallingInstances } from './install-service'
 import { findInstallSeedDonor } from './install-seed'
+import { cancelInstallJob, getInstallLogsDirPath } from './install-service'
+import { InstanceInstallLogWriter, readInstallProgress } from '../../shared/instance-install/log-store'
+import { redactSteamcmdLogLine } from '../../infra/container/steamcmd-errors'
 
 const app = Fastify({ logger: false })
 const root = fs.mkdtempSync(path.join(process.cwd(), '.bsp-update-regression-'))
@@ -92,6 +95,7 @@ async function waitForInstall(id: string) {
   assert.equal(isInstallJobActive(id), false, '安装任务应结束')
   const current = await getGameInstanceById(id)
   assert.equal(current?.status, 'stopped', current?.lastError ?? current?.lastCommand ?? undefined)
+  assert.equal(readInstallProgress(getInstallLogsDirPath(), id)?.phaseCode, 'complete')
 }
 
 before(async () => {
@@ -235,7 +239,15 @@ describe('game update regression', () => {
     assert.equal(fs.readFileSync(manifest, 'utf8'), localMetadata('25540104'))
     assert.equal((await getGameInstanceById(current.id))?.updateAvailable, true)
     await updateGameInstanceRuntime(current.id, { status: 'installing' })
+    const writer = new InstanceInstallLogWriter(getInstallLogsDirPath(), current.id)
+    writer.clear()
+    writer.appendLine('Update state (0x61) downloading, progress: 56.25')
+    writer.flush()
     await reconcileStaleInstallingInstances(app)
+    const recovered = readInstallProgress(getInstallLogsDirPath(), current.id)!
+    assert.equal(recovered.status, 'success')
+    assert.equal(recovered.phaseCode, 'complete')
+    assert.ok(recovered.events.some(event => event.message === '下载游戏文件'))
     assert.equal(fs.readFileSync(manifest, 'utf8'), localMetadata('25540104'))
     assert.equal((await getGameInstanceById(current.id))?.updateAvailable, true)
     fs.rmSync(manifest)
@@ -391,6 +403,11 @@ describe('game update regression', () => {
       assert.equal(failed?.installLogStatus, 'failed')
       assert.match(failed?.lastError ?? '', /Timed out waiting/)
       assert.equal(updates, count + 2)
+      const progress = readInstallProgress(getInstallLogsDirPath(), current.id)!
+      assert.equal(progress.status, 'failed')
+      assert.equal(progress.attempt, 2)
+      assert.equal(progress.percent, null)
+      assert.ok(progress.events.some(event => /第 2\/2 次尝试/.test(event.message)))
     }
     finally { updateOutput = "Success! App '343050' fully installed.\n" }
   })
@@ -436,5 +453,106 @@ describe('game update regression', () => {
     queryExitCode = 1
     assert.equal(await findInstallSeedDonor({ recipientId: recipient.id, recipientPath: recipient.installPath!, appId: '343050' }), null)
     queryExitCode = 0
+  })
+})
+
+describe('installation progress and raw log routes', () => {
+  it('persists cancellation on the active recorder and reconciles interrupted snapshots after restart', async () => {
+    const current = await instance()
+    hang = true
+    try {
+      const res = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id, force: true } })
+      assert.equal(JSON.parse(res.body).error, '', res.body)
+      await cancelInstallJob(current.id)
+      const deadline = Date.now() + 3000
+      while (isInstallJobActive(current.id) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+      assert.equal(isInstallJobActive(current.id), false)
+      const cancelled = readInstallProgress(getInstallLogsDirPath(), current.id)!
+      assert.equal(cancelled.status, 'failed')
+      assert.match(cancelled.failure!.message, /中断/)
+      assert.ok(!cancelled.events.some(event => /安装完成，可以启动/.test(event.message)))
+    }
+    finally { hang = false }
+    const unfinished = await instance()
+    fs.rmSync(path.join(unfinished.installPath!, 'bin64'), { recursive: true })
+    const writer = new InstanceInstallLogWriter(getInstallLogsDirPath(), unfinished.id)
+    writer.clear()
+    writer.appendLine('Update state (0x61) downloading, progress: 43.21')
+    writer.flush()
+    await updateGameInstanceRuntime(unfinished.id, { status: 'installing', installLogStatus: 'running' })
+    await reconcileStaleInstallingInstances(app)
+    const interrupted = readInstallProgress(getInstallLogsDirPath(), unfinished.id)!
+    assert.equal(interrupted.status, 'failed')
+    assert.equal(interrupted.phaseCode, 'download')
+    assert.equal(interrupted.percent, null)
+    assert.match(interrupted.failure!.message, /服务重启/)
+  })
+
+  it('reads only snapshots for summaries and streams the complete redacted log for download', async () => {
+    const current = await instance()
+    await updateGameInstanceRuntime(current.id, { status: 'installing', installLogStatus: 'running' })
+    const writer = new InstanceInstallLogWriter(getInstallLogsDirPath(), current.id)
+    writer.clear(2)
+    try {
+      writer.appendLine('Connecting anonymously to Steam Public...OK')
+      writer.appendLine(redactSteamcmdLogLine('https://name:password@example.test/download?token=secret'))
+      for (let i = 1; i <= 2500; i++) writer.appendLine(`Update state (0x61) downloading, progress: ${(i / 25).toFixed(2)}`)
+      writer.flush()
+      const read = mock.method(fs, 'readFileSync')
+      const summary = await app.inject({ url: `/app/instance/install-log?id=${current.id}&view=summary`, headers: { token } })
+      const data = JSON.parse(summary.body).data
+      assert.equal(data.content, '')
+      assert.equal(data.progress.percent, 100)
+      assert.equal(data.status, 'running')
+      assert.deepEqual(data.progress.events.map((event: { message: string }) => event.message), ['安装任务已开始', '连接 Steam', '下载游戏文件'])
+      assert.ok(!read.mock.calls.some(call => String(call.arguments[0]).endsWith(`${current.id}.log`)))
+      read.mock.restore()
+      const raw = await app.inject({ url: `/app/instance/install-log?id=${current.id}`, headers: { token } })
+      const preview = JSON.parse(raw.body).data
+      assert.equal(preview.content.split('\n').length, 500)
+      assert.equal(preview.rawTruncated, true)
+      const download = await app.inject({ url: `/app/instance/install-log/download?id=${current.id}`, headers: { token } })
+      assert.equal(download.statusCode, 200)
+      assert.match(download.headers['content-disposition'] as string, /filename\*=UTF-8/)
+      assert.equal(download.body, fs.readFileSync(path.join(getInstallLogsDirPath(), `${current.id}.log`), 'utf8'))
+      assert.match(download.body, /progress: 0.04/)
+      assert.doesNotMatch(download.body, /password|token=secret/)
+      writer.finish('failed', '安装已由用户中断')
+      await updateGameInstanceRuntime(current.id, { status: 'error', installLogStatus: 'failed', lastError: '安装已由用户中断', lastErrorPhase: 'install' })
+      const reopened = JSON.parse((await app.inject({ url: `/app/instance/install-log?id=${current.id}&view=summary`, headers: { token } })).body).data
+      assert.equal(reopened.status, 'failed')
+      assert.equal(reopened.progress.phaseCode, 'download')
+      assert.equal(reopened.progress.percent, null)
+      assert.match(reopened.progress.failure.message, /中断/)
+      assert.equal(readInstallProgress(getInstallLogsDirPath(), current.id)!.status, 'failed')
+    }
+    finally { writer.dispose() }
+  })
+
+  it('supports old logs without snapshots and enforces instance and permission checks', async () => {
+    const current = await instance()
+    const dir = getInstallLogsDirPath()
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, `${current.id}.log`), 'old install log\n')
+    const response = await app.inject({ url: `/app/instance/install-log?id=${current.id}&view=summary`, headers: { token } })
+    assert.equal(JSON.parse(response.body).data.content, '暂无阶段记录，请展开原始日志查看。')
+    assert.equal(JSON.parse(response.body).data.progress, null)
+    const raw = await app.inject({ url: `/app/instance/install-log?id=${current.id}`, headers: { token } })
+    assert.equal(JSON.parse(raw.body).data.content, 'old install log')
+    const noGrant = await instance('25643504', false)
+    const denied = await app.inject({ url: `/app/instance/install-log/download?id=${noGrant.id}`, headers: { token } })
+    assert.equal(denied.statusCode, 403)
+    const role = await createRole({ name: '安装日志无权限角色', permissions: ['instance:read'] })
+    assert.ok(role.ok)
+    const member = await createMember({ account: 'log-reader', password: 'Log-Reader#2026', roleId: role.data.roleId })
+    assert.ok(member.ok)
+    await updateUserMustChangePassword(member.data.userId, false)
+    await addUserInstanceGrants(member.data.userId, [current.id], member.data.userId)
+    const login = await app.inject({ method: 'POST', url: '/app/account/login', payload: { account: 'log-reader', password: 'Log-Reader#2026' } })
+    const readerToken = JSON.parse(login.body).data.token
+    for (const endpoint of ['install-log', 'install-log/download']) {
+      const result = await app.inject({ url: `/app/instance/${endpoint}?id=${current.id}`, headers: { token: readerToken } })
+      assert.match(JSON.parse(result.body).error, /权限/)
+    }
   })
 })

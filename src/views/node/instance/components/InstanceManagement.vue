@@ -143,7 +143,7 @@ const installNotifyPendingIds = new Set<string>()
 
 // --- 常量 ---
 /** 列宽总和，启用横向滚动，避免中间列被挤压为 0（操作列移动端收拢为「更多」） */
-const INSTANCE_TABLE_SCROLL_X = computed(() => (isMobileMode.value ? 1170 : 1240))
+const INSTANCE_TABLE_SCROLL_X = computed(() => (isMobileMode.value ? 1038 : 1108))
 const INSTANCE_INSTALL_POLL_MS = 2000
 /** 用户手动关闭通知后记录签名，避免同一批更新反复弹出 */
 const UPDATE_NOTIFY_DISMISSED_KEY = 'bsp-instance-update-dismissed'
@@ -305,12 +305,6 @@ const instanceColumns = computed<DataTableColumns<InstanceItem>>(() => {
           render: (row: InstanceItem) => getNodeName(row.nodeId),
         }],
     {
-      title: '状态',
-      key: 'status',
-      width: 110,
-      render: row => renderInstanceStateColumn(row),
-    },
-    {
       title: 'CPU',
       key: 'cpu',
       width: 90,
@@ -329,10 +323,10 @@ const instanceColumns = computed<DataTableColumns<InstanceItem>>(() => {
       render: row => renderInstanceUptimeColumn(row),
     },
     {
-      title: '安装',
-      key: 'install',
-      width: 132,
-      render: row => renderInstallColumn(row),
+      title: '状态',
+      key: 'status',
+      width: 110,
+      render: row => renderInstanceStateColumn(row),
     },
     {
       title: '日志',
@@ -648,24 +642,6 @@ function renderInstanceStateColumn(row: InstanceItem) {
       default: () => errorText.length > 160 ? `${errorText.slice(0, 160)}…` : errorText,
     },
   )
-}
-
-/** 安装列只显示状态；详细阶段见日志。 */
-function renderInstallColumn(instance: InstanceItem) {
-  if (instance.status === 'running' || instance.status === 'stopped') {
-    return h('span', { class: 'text-sm text-muted-foreground' }, '已安装')
-  }
-  if (instance.status === 'error') {
-    /**
-     * 只有安装环节失败才叫「安装失败」。启动/运行期失败（内存不足、端口、运行时异常……）
-     * 的实例安装是就绪的——环节判为 runtime 的前提就是安装就绪检查已通过——
-     * 这一列写「安装失败」会把用户引向重下服务端文件，而那解决不了问题。
-     */
-    return getInstanceState(instance).key === 'install_failed'
-      ? h('span', { class: 'text-sm text-red-500' }, '安装失败')
-      : h('span', { class: 'text-sm text-muted-foreground' }, '已安装')
-  }
-  return h('span', { class: 'text-sm text-muted-foreground' }, instance.status === 'pending_install' ? '未安装' : '安装中')
 }
 
 /** 根据节点 ID 解析节点名称 */
@@ -1335,7 +1311,6 @@ onBeforeUnmount(() => {
               {{ getInstanceState(instance).label }}
             </NTag>
           </div>
-          <div class="text-sm text-muted-foreground">安装：<component :is="renderInstallColumn(instance)" /></div>
           <dl class="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
             <div>
               <dt class="text-muted-foreground">CPU（单核基准）</dt>

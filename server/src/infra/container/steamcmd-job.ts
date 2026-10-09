@@ -257,7 +257,7 @@ async function followContainerLogs(
           return
         }
         buffer += decoded.text
-        const lines = buffer.split(/\r?\n/)
+        const lines = buffer.split(/\r\n|\r|\n/)
         buffer = lines.pop() ?? ''
         for (const line of lines) {
           const text = line.trim()
@@ -424,7 +424,7 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
             const text = redactSteamcmdLogLine(line, secrets)
             if (text) {
               collected.pushDiagnostic(text)
-              spec.onLogLine?.(text)
+              spec.onLogLine?.(text.startsWith('[SteamCMD 诊断]') ? text : `[SteamCMD 诊断] ${text}`)
             }
           })
         }

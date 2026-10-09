@@ -17,27 +17,6 @@ function normalizeInstallLogLine(line: string): string {
     .trimEnd()
 }
 
-function collapseRedundantSteamProgressLines(lines: string[]): string[] {
-  const result: string[] = []
-  let lastProgressKey: string | null = null
-  for (const line of lines) {
-    const match = line.match(/Update state \((0x[0-9a-f]+)\) ([\w ]+)/i)
-    if (match) {
-      const key = `${match[1]}:${match[2].trim().toLowerCase()}`
-      if (key === lastProgressKey && result.length > 0) {
-        result[result.length - 1] = line
-        continue
-      }
-      lastProgressKey = key
-    }
-    else {
-      lastProgressKey = null
-    }
-    result.push(line)
-  }
-  return result
-}
-
 /** 前端展示用：规范化安装日志文本排版 */
 export function formatInstallLogForDisplay(raw: string): string {
   if (!raw.trim()) {
@@ -49,11 +28,9 @@ export function formatInstallLogForDisplay(raw: string): string {
     .split('\n')
     .map(line => normalizeInstallLogLine(line))
 
-  const collapsedProgress = collapseRedundantSteamProgressLines(lines)
-
   const compact: string[] = []
   let previousBlank = false
-  for (const line of collapsedProgress) {
+  for (const line of lines) {
     const isBlank = line.trim().length === 0
     if (isBlank && previousBlank) {
       continue

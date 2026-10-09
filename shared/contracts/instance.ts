@@ -70,6 +70,7 @@ export type InstanceIdsBody = z.infer<typeof instanceIdsBodySchema>
 
 export const instanceInstallLogQuerySchema = z.object({
   id: instanceIdSchema,
+  view: z.enum(['summary', 'raw']).default('raw'),
 })
 
 export const instanceRuntimeMetricsSchema = z.object({
@@ -123,12 +124,33 @@ export type InstallableGameItem = z.infer<typeof installableGameItemSchema>
 export const instanceInstallLogSourceSchema = z.enum(['install_log', 'status_summary', 'empty'])
 export type InstanceInstallLogSource = z.infer<typeof instanceInstallLogSourceSchema>
 
+export const instanceInstallProgressSchema = z.object({
+  phaseCode: z.enum(['prepare', 'queue', 'connect', 'download', 'verify', 'stage', 'commit', 'finalize', 'runtime', 'copy', 'retry', 'complete']),
+  phase: z.string(),
+  percent: z.number().min(0).max(100).nullable(),
+  updatedAt: z.string().nullable(),
+  attempt: z.number().int().positive(),
+  maxAttempts: z.number().int().positive(),
+  retryAt: z.string().nullable(),
+  status: z.enum(['running', 'success', 'failed']),
+  failure: z.object({ message: z.string(), advice: z.string() }).nullable(),
+  events: z.array(z.object({
+    at: z.string(),
+    level: z.enum(['info', 'warning', 'error']),
+    message: z.string(),
+  })),
+})
+export type InstanceInstallProgress = z.infer<typeof instanceInstallProgressSchema>
+
 export const instanceInstallLogPayloadSchema = z.object({
   content: z.string(),
   status: z.enum(['success', 'failed', 'running', 'unknown']),
   updatedAt: z.string().nullable(),
   source: instanceInstallLogSourceSchema,
   phase: z.string().nullable().optional(),
+  progress: instanceInstallProgressSchema.nullable().optional(),
+  rawAvailable: z.boolean().optional(),
+  rawTruncated: z.boolean().optional(),
 })
 export type InstanceInstallLogPayload = z.infer<typeof instanceInstallLogPayloadSchema>
 

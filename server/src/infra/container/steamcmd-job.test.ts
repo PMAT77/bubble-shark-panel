@@ -16,7 +16,7 @@ afterEach(() => {
   else process.env.BSP_STEAMCMD_HTTPS_PROXY = previousProxy
 })
 
-function fakeDocker(options: { code?: number, oom?: boolean, inspectFails?: boolean, archiveFails?: boolean, duringCreate?: () => Promise<void>, duringStart?: () => Promise<void>, timeout?: boolean, startFails?: boolean } = {}) {
+function fakeDocker(options: { text?: string, code?: number, oom?: boolean, inspectFails?: boolean, archiveFails?: boolean, duringCreate?: () => Promise<void>, duringStart?: () => Promise<void>, timeout?: boolean, startFails?: boolean } = {}) {
   const events: string[] = []
   let running = false
   let createOptions: DockerClient.ContainerCreateOptions | undefined
@@ -32,11 +32,12 @@ function fakeDocker(options: { code?: number, oom?: boolean, inspectFails?: bool
     },
     async wait() { return wait },
     async logs() {
-      const text = Buffer.from("Logging directory: '/logs'\nError! App '343050' state is 0x402 after update job.\n")
+      const text = Buffer.from(options.text ?? "Logging directory: '/logs'\nError! App '343050' state is 0x402 after update job.\n")
       const header = Buffer.alloc(8)
       header[0] = 1
       header.writeUInt32BE(text.length, 4)
-      return Readable.from([Buffer.concat([header, text])])
+      const framed = Buffer.concat([header, text])
+      return Readable.from([framed.subarray(0, 11), framed.subarray(11, 53), framed.subarray(53)])
     },
     async inspect() {
       events.push('inspect')
@@ -164,3 +165,12 @@ describe('cleanupOrphanedSteamcmdInstallContainers', () => {
  * 2. 安装中 docker restart bubblesharkpanel-panel → 列表不再永久 installing，可再次更新
  * 3. 取消安装 → 再更新 → 不应秒退「安装已中断」
  */
+
+it('splits Docker progress on carriage returns and fragmented frames without merging lines', async () => {
+  const text = 'Update state (0x61) downloading, progress: 56.25\rUpdate state (0x61) downloading, progress: 70\r\nUpdate state (0x81) verifying update, progress: 2'
+  fakeDocker({ code: 0, text })
+  const received: string[] = []
+  const result = await runSteamcmdJob({ image: 'fixture', cmd: ['+login', 'anonymous'], timeoutMs: 1000, onLogLine: line => received.push(line) })
+  assert.equal(result.ok, true)
+  for (const line of text.split(/\r\n|\r|\n/)) assert.ok(received.includes(line), line)
+})

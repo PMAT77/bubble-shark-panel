@@ -4,6 +4,7 @@ import process from 'node:process'
 import type { DbInstallLogStatus } from '../../shared/db/index'
 import {
   listGameInstances,
+  getGameInstanceById,
   updateGameInstanceRuntime,
 } from '../../shared/db/index'
 import { loadServerConfig, resolveInstallLogsDir } from '../../shared/config'
@@ -11,7 +12,7 @@ import { shouldDeferDstImagePullOnInstall } from '../../shared/config/install'
 import {
   InstanceInstallLogWriter,
 } from '../../shared/instance-install/log-store'
-import { resolveSteamcmdInstallPhase } from '../../shared/instance-install/log-format'
+import { loadSteamcmdRuntimeConfig } from '../../shared/config/steamcmd'
 import { resolveSteamcmdLoginMode } from '../../shared/instance-install/steamcmd-login-mode'
 import {
   assessHostMemoryForHeavyOperation,
@@ -59,6 +60,7 @@ export const INSTALL_RESTART_INTERRUPTED_MESSAGE = '服务重启导致安装中�
 export const INSTALL_STEAMCMD_QUEUE_MESSAGE = '排队等待其他实例的 SteamCMD 安装完成...'
 
 const installingInstanceIds = new Set<string>()
+const activeInstallLogWriters = new Map<string, InstanceInstallLogWriter>()
 const cancelledInstallInstanceIds = new Set<string>()
 
 export function isInstallJobActive(instanceId: string): boolean {
@@ -141,16 +143,18 @@ export async function markInstallInterrupted(
   logWriter.appendLine(detail ?? '安装已由用户中断')
   await cancelSteamcmdInstallContainer(instanceId)
   void cleanupOrphanedSteamcmdInstallContainers(instanceId)
-  await writeInstallLogMeta(instanceId, 'failed', null)
-  await updateGameInstanceRuntime(instanceId, {
+  const interrupted = await updateGameInstanceRuntime(instanceId, {
     status: 'error',
     lastCommand: null,
     lastError: detail ?? INSTALL_INTERRUPTED_MESSAGE,
     lastErrorPhase: 'install',
     installPercent: null,
+    installLogStatus: 'failed',
+    installLogUpdatedAt: new Date().toISOString(),
     // 状态机守卫：管线已落终态（成功/失败）时取消不得回头覆盖
     whereStatus: ['pending_install', 'installing'],
   })
+  if (interrupted?.status === 'error') logWriter.finish('failed', detail ?? INSTALL_INTERRUPTED_MESSAGE)
 }
 
 export function shouldAllowInstallDespiteUpToDate(input: {
@@ -240,6 +244,7 @@ async function finalizeSuccessfulInstall(
     : { ok: false, message: '当前仅支持饥荒（343050）' }
   if (startScriptResult.ok) {
     logWriter.appendLine('启动脚本已生成')
+    logWriter.event('启动文件已准备完成。')
   }
   else {
     logWriter.appendLine(`启动脚本生成失败: ${startScriptResult.message ?? '未知错误'}`)
@@ -248,6 +253,7 @@ async function finalizeSuccessfulInstall(
   if (startScriptResult.ok) {
     if (shouldDeferDstImagePullOnInstall()) {
       logWriter.appendLine('DST 运行镜像将在首次启动实例时拉取（BSP_INSTALL_DEFER_DST_IMAGE_PULL 默认开启）')
+      logWriter.event('运行环境镜像将在首次启动实例时准备。')
     }
     else {
       logWriter.appendLine('正在准备游戏运行环境镜像（首次可能需数分钟）…')
@@ -257,6 +263,7 @@ async function finalizeSuccessfulInstall(
       }
       else {
         logWriter.appendLine(`游戏运行环境镜像准备失败（不影响已下载的游戏文件）：${runtimeImageResult.error}`)
+        logWriter.event('运行环境镜像尚未就绪，启动实例时将自动重试准备。', 'warning')
       }
     }
   }
@@ -289,6 +296,7 @@ async function finalizeSuccessfulInstall(
   })
   if (startScriptResult.ok && completed?.status === 'stopped') {
     logWriter.appendLine(`安装完成（${mode === 'seed' ? '本地复制' : mode}）`)
+    logWriter.finish('success', '安装完成')
     // 安装终态已经落库；网络查询失败只影响版本状态，不影响安装结果。
     void refreshInstanceUpdateStatusAfterInstall(input.instanceId, input.installPath, input.appId, input.steamcmdCommand)
       .catch(() => {})
@@ -300,13 +308,21 @@ async function runInstallPipeline(
   logWriter: InstanceInstallLogWriter,
 ) {
   let progressWrites = Promise.resolve()
+  let lastProgressWriteAt = 0
+  let lastProgressPhase = ''
   const updateProgress = (line: string) => {
     logWriter.appendLine(line)
-    const phase = resolveSteamcmdInstallPhase(line)
+    const { phase, percent, status } = logWriter.progress
+    if (status !== 'running' || isInstallCancelled(input.instanceId)) return
+    const now = Date.now()
+    if (phase === lastProgressPhase && now - lastProgressWriteAt < 1000) return
+    lastProgressWriteAt = now
+    lastProgressPhase = phase
     const updatedAt = new Date().toISOString()
     progressWrites = progressWrites.then(async () => {
       await updateGameInstanceRuntime(input.instanceId, {
-        ...(phase ? { lastCommand: phase } : {}),
+        lastCommand: phase,
+        installPercent: percent,
         installLogUpdatedAt: updatedAt,
         whereStatus: 'installing',
       })
@@ -377,6 +393,7 @@ async function runInstallPipeline(
     const skipSteam = !check.updateAvailable && !check.message && shouldSkipSteamcmdForReadyInstall(check)
     if (skipSteam) {
       logWriter.appendLine('检测到游戏文件已完整且版本一致，跳过 Steam 下载')
+      logWriter.event('游戏文件已完整且版本一致，跳过下载。')
       await finalizeSuccessfulInstall(input, logWriter, 'anonymous')
       return
     }
@@ -387,6 +404,7 @@ async function runInstallPipeline(
     if (!seedMemory.ok) {
       logWriter.appendLine(`${seedMemory.summary}\n\n${seedMemory.detail}`)
     }
+    if (seedMemory.ok) logWriter.setPhase('copy')
     const seedResult = !seedMemory.ok
       ? { ok: false as const, reason: `${seedMemory.summary}\n\n${seedMemory.detail}` }
       : await tryInstallGameDepotFromSeed({
@@ -395,6 +413,7 @@ async function runInstallPipeline(
           appId: input.appId,
         })
     if (seedResult.ok) {
+      logWriter.event('本地游戏文件复制完成，跳过 Steam 下载。')
       logWriter.appendLine(
         `已从实例「${seedResult.donor.instanceName}」(${seedResult.donor.instanceId.slice(0, 8)}…) 复制游戏文件，跳过 Steam 下载`,
       )
@@ -407,6 +426,7 @@ async function runInstallPipeline(
     }
     if (seedResult.reason) {
       logWriter.appendLine(`本地复制不可用，将使用 SteamCMD 安装：${seedResult.reason}`)
+      logWriter.event('本地复制不可用，改用 SteamCMD 下载。')
     }
   }
 
@@ -414,20 +434,27 @@ async function runInstallPipeline(
   const useAccount = loginMode === 'account'
     || (loginMode === 'account-fallback' && Boolean(input.steamcmdCredentials))
 
-  const withRetries = (run: () => Promise<{ ok: boolean, output: string, cancelled?: boolean }>) => retrySteamcmdInstall({
-    run: async () => {
-      const result = await run()
-      await progressWrites
-      return result
-    },
-    isCancelled: () => isInstallCancelled(input.instanceId),
-    onRetry: async (attempt, maxAttempts, delayMs) => {
-      logWriter.appendLine(`Steam 更新未完成或发生临时错误，${Math.round(delayMs / 1000)} 秒后进行第 ${attempt}/${maxAttempts} 次尝试（保留下载缓存）...`)
-      await updateGameInstanceRuntime(input.instanceId, {
-        lastCommand: `等待重试（${attempt}/${maxAttempts}）`, lastError: null, whereStatus: 'installing',
-      })
-    },
-  })
+  const withRetries = (run: () => Promise<{ ok: boolean, output: string, cancelled?: boolean }>, account = false) => {
+    let attempt = 1
+    const { installMaxAttempts } = loadSteamcmdRuntimeConfig()
+    return retrySteamcmdInstall({
+      run: async () => {
+        logWriter.beginAttempt(attempt, installMaxAttempts, account)
+        const result = await run()
+        await progressWrites
+        return result
+      },
+      isCancelled: () => isInstallCancelled(input.instanceId),
+      onRetry: async (nextAttempt, maxAttempts, delayMs) => {
+        attempt = nextAttempt
+        logWriter.waitForRetry(attempt, maxAttempts, delayMs)
+        logWriter.appendLine(`Steam 更新未完成或发生临时错误，${Math.round(delayMs / 1000)} 秒后进行第 ${attempt}/${maxAttempts} 次尝试（保留下载缓存）...`)
+        await updateGameInstanceRuntime(input.instanceId, {
+          lastCommand: `等待重试（${attempt}/${maxAttempts}）`, installPercent: null, lastError: null, whereStatus: 'installing',
+        })
+      },
+    })
+  }
 
   const runAnonymousInstall = async () => {
     if (isInstallCancelled(input.instanceId)) {
@@ -465,7 +492,7 @@ async function runInstallPipeline(
       cancelKey: input.instanceId,
       onLogLine: line => void updateProgress(line),
       onAwaitingSteamcmdLock: () => markInstallSteamcmdQueueWaiting(input.instanceId, logWriter),
-    }))
+    }), true)
   }
 
   if (useAccount && loginMode === 'account') {
@@ -510,6 +537,7 @@ async function runInstallPipeline(
 
   if (loginMode === 'account-fallback' && input.steamcmdCredentials) {
     logWriter.appendLine('anonymous 失败，正在尝试账号登录重试...')
+    logWriter.event('匿名连接未完成，改用 Steam 账号重试。', 'warning')
     const accountResult = await runAccountInstall()
     if (accountResult?.cancelled || isInstallCancelled(input.instanceId)) {
       await markInstallInterrupted(input.instanceId, logWriter)
@@ -589,6 +617,13 @@ async function runInstallJobInBackground(
       whereStatus: 'installing',
     })
   }
+  finally {
+    const current = await getGameInstanceById(input.instanceId)
+    if (current?.installLogStatus === 'success' || current?.installLogStatus === 'failed') {
+      logWriter.finish(current.installLogStatus, current.lastError ?? '安装完成')
+    }
+    logWriter.flush()
+  }
 }
 
 /** 启动安装/更新任务；重试时会清除取消标记 */
@@ -612,11 +647,14 @@ export function startInstallJob(
   clearNativeSteamcmdCancelFlag(input.instanceId)
   installingInstanceIds.add(input.instanceId)
   const logWriter = new InstanceInstallLogWriter(getInstallLogsDirPath(), input.instanceId)
-  logWriter.clear()
+  logWriter.clear(loadSteamcmdRuntimeConfig().installMaxAttempts)
+  activeInstallLogWriters.set(input.instanceId, logWriter)
   void runInstallJobInBackground(app, input, logWriter)
     .finally(() => {
       release()
       installingInstanceIds.delete(input.instanceId)
+      activeInstallLogWriters.delete(input.instanceId)
+      logWriter.dispose()
     })
   return 'started'
 }
@@ -627,11 +665,13 @@ export async function cancelInstallJob(instanceId: string): Promise<void> {
   // 注意：这里不能删除 installingInstanceIds 标记——后台任务可能仍在运行，
   // 过早放行会让 startInstallJob 立即启动第二个并发安装管线（取消-重启竞态）。
   // 标记由 runInstallJobInBackground 的 finally 统一删除。
-  const logWriter = new InstanceInstallLogWriter(getInstallLogsDirPath(), instanceId)
+  const logWriter = activeInstallLogWriters.get(instanceId) ?? new InstanceInstallLogWriter(getInstallLogsDirPath(), instanceId)
   await markInstallInterrupted(instanceId, logWriter)
 }
 
 export function clearInstallJobTracking(instanceId: string): void {
+  activeInstallLogWriters.get(instanceId)?.dispose()
+  activeInstallLogWriters.delete(instanceId)
   cancelledInstallInstanceIds.delete(instanceId)
   installingInstanceIds.delete(instanceId)
 }
@@ -671,6 +711,7 @@ export async function reconcileStaleInstallingInstances(app: FastifyInstance): P
         lastError: null,
         installPercent: 100,
       })
+      new InstanceInstallLogWriter(getInstallLogsDirPath(), instance.id).finish('success', '安装已完成（面板重启后已恢复状态）')
       reconciled++
       app.log.info({ instanceId: instance.id }, '安装任务已在磁盘完成，面板重启后恢复为已停止')
       continue
@@ -683,6 +724,7 @@ export async function reconcileStaleInstallingInstances(app: FastifyInstance): P
       lastErrorPhase: 'install',
       installPercent: null,
     })
+    new InstanceInstallLogWriter(getInstallLogsDirPath(), instance.id).finish('failed', INSTALL_RESTART_INTERRUPTED_MESSAGE)
     reconciled++
     app.log.info({ instanceId: instance.id }, '安装任务已中断（服务重启或任务丢失），已同步为异常')
   }

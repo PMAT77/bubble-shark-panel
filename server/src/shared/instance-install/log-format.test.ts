@@ -1,57 +1,31 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
-import {
-  collapseRedundantSteamProgressLines,
-  formatInstallLogContent,
-  parseSteamcmdProgressPercent,
-} from './log-format.ts'
+import { it } from 'node:test'
+import { formatInstallLogContent, parseInstallLogPhase, parseSteamcmdProgressPercent, summarizeInstallFailure } from './log-format'
 
-describe('parseSteamcmdProgressPercent', () => {
-  it('parses bracket percent', () => {
-    assert.equal(parseSteamcmdProgressPercent(' Update state (0x61) downloading, [ 42%]'), 42)
-  })
-
-  it('parses progress colon percent', () => {
-    assert.equal(
-      parseSteamcmdProgressPercent(' Update state (0x61) downloading, progress: 45.23 (1 / 2)'),
-      45,
-    )
-  })
+it('preserves stage percentages and distinguishes actual SteamCMD stages', () => {
+  assert.equal(parseSteamcmdProgressPercent('Update state (0x61) downloading, progress: 56.25'), 56.25)
+  assert.equal(parseSteamcmdProgressPercent('[ 42%] Downloading update'), 42)
+  assert.equal(parseSteamcmdProgressPercent('progress: 120'), 100)
+  assert.equal(parseSteamcmdProgressPercent('progress: unknown'), null)
+  for (const [state, expected] of [['downloading', 'download'], ['verifying', 'verify'], ['validating', 'verify'], ['staging', 'stage'], ['committing', 'commit']] as const) {
+    assert.equal(parseInstallLogPhase(`Update state (0x61) ${state}, progress: 50`), expected)
+  }
+  assert.equal(parseInstallLogPhase('Connecting anonymously to Steam Public...Retrying...'), 'connect')
+  assert.equal(parseInstallLogPhase("Success! App '343050' fully installed."), 'finalize')
+  assert.equal(parseInstallLogPhase('正在准备游戏运行环境镜像'), 'runtime')
+  for (const text of ['progress: 90', '[SteamCMD 诊断] Update state (0x61) downloading, progress: 20', '[资源快照] progress: 50', 'Unknown update message']) {
+    assert.equal(parseInstallLogPhase(text), null)
+  }
 })
 
-describe('formatInstallLogContent', () => {
-  it('normalizes carriage returns and control chars', () => {
-    const formatted = formatInstallLogContent('\u0001ERROR!\r\nline two\r\n\r\n\r\nline three')
-    assert.equal(formatted, 'ERROR!\nline two\n\nline three')
-  })
-
-  it('strips orphaned ANSI and collapses duplicate progress lines', () => {
-    const raw = [
-      '[0m Update state (0x61) downloading, progress: 50.00 (1 / 2)',
-      '[0m Update state (0x61) downloading, progress: 99.00 (1 / 2)',
-      'Success! App \'343050\' fully installed.',
-    ].join('\n')
-    const formatted = formatInstallLogContent(raw)
-    assert.equal(
-      formatted,
-      'Update state (0x61) downloading, progress: 99.00 (1 / 2)\nSuccess! App \'343050\' fully installed.',
-    )
-  })
+it('cleans ANSI and carriage returns without collapsing progress history', () => {
+  const raw = '\u0001ERROR!\r\n[0m Update state (0x61) downloading, progress: 50.00\rUpdate state (0x61) downloading, progress: 99.00'
+  assert.equal(formatInstallLogContent(raw), 'ERROR!\nUpdate state (0x61) downloading, progress: 50.00\nUpdate state (0x61) downloading, progress: 99.00')
 })
 
-describe('collapseRedundantSteamProgressLines', () => {
-  it('keeps only the latest line per state phase', () => {
-    const lines = [
-      'Update state (0x61) downloading, progress: 10.00',
-      'Update state (0x61) downloading, progress: 90.00',
-      'Update state (0x81) verifying update, progress: 50.00',
-      'Update state (0x81) verifying update, progress: 80.00',
-      'Done',
-    ]
-    assert.deepEqual(collapseRedundantSteamProgressLines(lines), [
-      'Update state (0x61) downloading, progress: 90.00',
-      'Update state (0x81) verifying update, progress: 80.00',
-      'Done',
-    ])
-  })
+it('uses evidence-based failure advice and removes technical output from the summary', () => {
+  const failure = summarizeInstallFailure('SteamCMD 安装失败：磁盘写入失败。SteamCMD 输出：Not enough disk space')
+  assert.equal(failure.message, '磁盘空间不足或写入失败。')
+  assert.match(failure.advice, /磁盘/)
+  assert.match(summarizeInstallFailure('SteamCMD 网络连接失败。SteamCMD 输出：network connection failed').advice, /网络/)
 })

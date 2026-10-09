@@ -125,3 +125,18 @@ it('kills a Linux process group including a child ignoring SIGTERM', { skip: pro
   const stat = `/proc/${pid}/stat`
   if (fs.existsSync(stat)) assert.match(fs.readFileSync(stat, 'utf8'), /\) Z /)
 })
+
+it('emits native carriage-return progress before the process exits, including split CRLF', async () => {
+  const received: string[] = []
+  const result = await run(`
+    process.stdout.write('Update state (0x61) downloading, progress: 56.25\\r');
+    setTimeout(() => process.stderr.write('checkpoint\\n'), 40);
+    setTimeout(() => process.stdout.write('\\nUpdate state (0x81) verifying update, progress: 2'), 80);
+  `, 5000, { kind: 'app-update', onLogLine: line => received.push(line) })
+  assert.equal(result.ok, true)
+  assert.deepEqual(received, [
+    'Update state (0x61) downloading, progress: 56.25',
+    'checkpoint',
+    'Update state (0x81) verifying update, progress: 2',
+  ])
+})

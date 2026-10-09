@@ -8,8 +8,49 @@ import {
   createPullProgressAggregator,
   normalizeMirrorRegistries,
   OFFICIAL_UNIFIED_IMAGE_REPOSITORY,
+  shareImagePreparation,
+  pullImageWithCandidates,
 } from './image-candidates.ts'
 import { buildSteamcmdImageCandidates, resolvePanelSteamcmdPullRef } from './steamcmd-runner.ts'
+
+it('only retries recoverable image download errors', async () => {
+  for (const [message, expected] of [['ECONNRESET', 2], ['unauthorized', 1], ['ENOSPC', 1], ['unknown failure', 1]] as const) {
+    let calls = 0
+    const docker = {
+      getImage: () => ({ inspect: async () => { throw new Error('not cached') } }),
+      pull: (_ref: string, callback: (error: Error) => void) => { calls++; callback(new Error(message)) },
+    } as unknown as Parameters<typeof pullImageWithCandidates>[0]
+    const result = await pullImageWithCandidates(docker, ['fixture:latest'], 'fixture:latest', { maxAttempts: 2, sleep: async () => {} })
+    assert.equal(result.ok, false)
+    assert.equal(calls, expected)
+  }
+})
+
+it('a shared pull keeps running for another subscriber and aborts when the last leaves', async () => {
+  let release!: (value: string) => void
+  let signal: AbortSignal | undefined
+  const run = async (options: { signal?: AbortSignal }) => {
+    signal = options.signal
+    return new Promise<string>(resolve => { release = resolve })
+  }
+  const firstController = new AbortController()
+  const first = shareImagePreparation('fixture', { signal: firstController.signal }, run)
+  const rejected = assert.rejects(first, /cancel first/)
+  const second = shareImagePreparation('fixture', {}, run)
+  await Promise.resolve()
+  firstController.abort(new Error('cancel first'))
+  await rejected
+  assert.equal(signal?.aborted, false)
+  release('ready')
+  assert.equal(await second, 'ready')
+  const lastController = new AbortController()
+  const last = shareImagePreparation('last', { signal: lastController.signal }, run)
+  const lastRejected = assert.rejects(last, /cancel last/)
+  await Promise.resolve()
+  lastController.abort(new Error('cancel last'))
+  await lastRejected
+  assert.equal(signal?.aborted, true)
+})
 
 describe('normalizeMirrorRegistries', () => {
   it('splits, trims and dedupes mirror registries', () => {

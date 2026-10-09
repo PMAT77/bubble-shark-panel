@@ -5,11 +5,18 @@ const context = new AsyncLocalStorage<symbol>()
 const exclusive = new Map<string, symbol>()
 const activities = new Map<string, Map<symbol, number>>()
 const recoveryFailures = new Set<string>()
+const cleanupFailures = new Set<string>()
+
+export function markInstanceContentCleanupPending(id: string, pending: boolean) {
+  if (pending) cleanupFailures.add(id)
+  else cleanupFailures.delete(id)
+}
 
 export class InstanceContentBusyError extends Error {
   constructor() { super('该实例正在执行文件操作、启动或下载，请稍后再试'); this.name = 'InstanceContentBusyError' }
 }
 export function assertInstanceContentAvailable(instanceId: string): void {
+  if (cleanupFailures.has(instanceId)) throw new Error('安装任务清理未完成，已禁止启动和写入；请恢复运行环境后再次停止实例')
   if (recoveryFailures.has(instanceId)) throw new Error('实例存在未完成的内容恢复，已禁止启动和写入；请保留 .bsp-content-transaction 目录并修复权限或日志后重启面板')
   if (exclusive.has(instanceId) && exclusive.get(instanceId) !== context.getStore()) throw new InstanceContentBusyError()
 }

@@ -26,15 +26,22 @@ function isInstallPhaseFailure(instance: Pick<InstanceItem, 'lastErrorPhase'>) {
  * 环节未知（旧数据、手工改库）按运行异常兜底，与 `INSTANCE_STATUS.error` 的口径一致。
  */
 export function getInstanceState(
-  instance: Pick<InstanceItem, 'status' | 'lastErrorPhase'> & Partial<Pick<InstanceItem, 'runtimeReadyAt' | 'lastError'>>,
+  instance: Pick<InstanceItem, 'status' | 'lastErrorPhase'> & Partial<Pick<InstanceItem, 'runtimeReadyAt' | 'lastError' | 'installLogStatus' | 'installTask'>>,
 ): StatusDescriptor & { key: keyof typeof INSTANCE_STATE } {
   if (instance.status === 'error') {
     if (!isInstallPhaseFailure(instance) && instance.lastError?.startsWith('启动失败：')) {
       return { ...INSTANCE_START_FAILED, key: 'runtime_error' }
     }
     return isInstallPhaseFailure(instance)
-      ? { ...INSTANCE_STATE.install_failed, key: 'install_failed' }
+      ? { ...INSTANCE_STATE.install_failed, label: instance.installTask?.kind === 'update' ? '更新失败' : INSTANCE_STATE.install_failed.label, key: 'install_failed' }
       : { ...INSTANCE_STATE.runtime_error, key: 'runtime_error' }
+  }
+  if (isInstanceInstallingStatus(instance.status)) {
+    return { ...INSTANCE_STATE[instance.status], key: instance.status,
+      label: instance.installTask?.phaseCode === 'cancelling' ? '正在取消' : instance.installTask?.kind === 'update' ? '更新中' : INSTANCE_STATE[instance.status].label }
+  }
+  if (instance.status === 'stopped' && instance.installLogStatus === 'cancelled') {
+    return { ...INSTANCE_STATE.stopped, key: 'stopped', label: '安装已取消' }
   }
   if (instance.status === 'running' && instance.runtimeReadyAt === null) {
     return { ...INSTANCE_STARTING, key: 'running' }
@@ -211,6 +218,8 @@ export function getInstallLogStatusLabel(status: InstanceInstallLogPayload['stat
       return '安装成功'
     case 'failed':
       return '安装失败'
+    case 'cancelled':
+      return '安装已取消'
     case 'unknown':
       return '未知'
     default:

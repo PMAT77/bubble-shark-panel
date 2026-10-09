@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { abortable } from '../../shared/abort'
 import path from 'node:path'
 import type Docker from 'dockerode'
 import { ensureInstallLogsDir } from '../../shared/instance-install/log-store'
@@ -157,10 +158,12 @@ export function formatResourceSnapshotLines(snapshot: ResourceSnapshot): string[
 export async function appendInstallResourceSnapshot(
   installLogsDir: string,
   docker: Docker | null,
-  input: { instanceId: string, phase: string, extra?: Record<string, unknown> },
+  input: { instanceId: string, phase: string, extra?: Record<string, unknown>, signal?: AbortSignal },
 ): Promise<string[]> {
+  const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000)
+  const snapshot = await abortable(buildInstallResourceSnapshot(docker, input), signal)
+  signal.throwIfAborted()
   ensureInstallLogsDir(installLogsDir)
-  const snapshot = await buildInstallResourceSnapshot(docker, input)
   const instanceLogPath = path.join(installLogsDir, `${input.instanceId}.resource.ndjson`)
   const hostLogPath = path.join(installLogsDir, '_host.resource.ndjson')
   const line = `${JSON.stringify(snapshot)}\n`

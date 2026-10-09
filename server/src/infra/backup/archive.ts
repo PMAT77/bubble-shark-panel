@@ -14,13 +14,24 @@ import { createGunzip } from 'node:zlib'
  * - 解包逐条校验普通文件和目录，不允许链接和特殊文件。
  */
 
-function runTar(args: string[]): Promise<void> {
+function runTar(args: string[], signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
   return new Promise((resolve, reject) => {
     const child = spawn('tar', args, { stdio: 'ignore', windowsHide: true })
+    let killTimer: ReturnType<typeof setTimeout> | undefined
+    const cancel = () => {
+      child.kill('SIGTERM')
+      killTimer = setTimeout(() => child.kill('SIGKILL'), 5000)
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted) cancel()
     child.on('error', (error) => {
       reject(new Error(`tar 命令不可用: ${error.message}`))
     })
     child.on('close', (code) => {
+      signal?.removeEventListener('abort', cancel)
+      if (killTimer) clearTimeout(killTimer)
+      if (signal?.aborted) { reject(signal.reason); return }
       if (code === 0) {
         resolve()
         return
@@ -31,14 +42,14 @@ function runTar(args: string[]): Promise<void> {
 }
 
 /** 打包目录为 tar.gz，包内顶层目录名保持为源目录的 basename（恢复时可按顶层目录对齐） */
-export async function createDirectoryArchive(sourceDir: string, targetPath: string): Promise<void> {
+export async function createDirectoryArchive(sourceDir: string, targetPath: string, signal?: AbortSignal): Promise<void> {
   if (!fs.existsSync(sourceDir)) {
     throw new Error(`待备份目录不存在: ${sourceDir}`)
   }
   fs.mkdirSync(path.dirname(targetPath), { recursive: true })
   const parent = path.dirname(sourceDir)
   const base = path.basename(sourceDir)
-  await runTar(['-czf', targetPath, '-C', parent, base])
+  await runTar(['-czf', targetPath, '-C', parent, base], signal)
 }
 
 /** tar.gz 与 ZIP 共用路径、类型和资源限制。 */

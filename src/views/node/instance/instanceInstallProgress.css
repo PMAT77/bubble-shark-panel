@@ -1,0 +1,55 @@
+.instance-install-surface {
+  --install-fill-alpha: .10;
+  --install-wave-alpha: .06;
+}
+.dark .instance-install-surface {
+  --install-fill-alpha: .14;
+  --install-wave-alpha: .08;
+}
+.instance-install-row > td,
+.instance-install-card {
+  isolation: isolate;
+  --install-cell-fill: clamp(0px, calc(var(--install-canvas-width, 0px) * var(--install-ratio, 0) - var(--install-cell-offset, 0px)), var(--install-cell-width, 0px));
+}
+.instance-install-row > td:not(.n-data-table-td--fixed-right):not(.n-data-table-td--fixed-left),
+.instance-install-card { position: relative; }
+.instance-install-row > td::after,
+.instance-install-card::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--install-cell-fill);
+  z-index: -1;
+  pointer-events: none;
+  opacity: 1;
+  background-color: rgb(56 189 248 / var(--install-fill-alpha));
+  background-image: repeating-radial-gradient(ellipse at 0 50%, transparent 0 34px, rgb(56 189 248 / var(--install-wave-alpha)) 36px, transparent 40px 72px);
+  background-size: var(--install-canvas-width, 100%) 100%;
+  background-position: calc(0px - var(--install-cell-offset, 0px)) 50%;
+  mask-image: linear-gradient(to right, #000 max(0px, calc(100% - clamp(0px, calc(var(--install-cell-width, 100%) - var(--install-cell-fill)), 8px))), transparent);
+  transition: width 600ms ease-out, opacity 250ms ease-out;
+  animation: instance-install-ripple 2.4s linear infinite;
+}
+.instance-install-card {
+  overflow: hidden;
+  --install-cell-fill: calc(100% * var(--install-ratio, 0));
+}
+.install-cancelling > td::after,
+.install-cancelling.instance-install-card::after,
+.install-finishing > td::after,
+.install-finishing.instance-install-card::after,
+[data-install-paused='true'] .instance-install-row > td::after,
+[data-install-paused='true'] .instance-install-card::after { animation-play-state: paused; }
+.install-fading > td::after,
+.install-fading.instance-install-card::after { opacity: 0; }
+@keyframes instance-install-ripple {
+  to { background-position: calc(76px - var(--install-cell-offset, 0px)) 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .instance-install-row > td::after,
+  .instance-install-card::after {
+    animation: none;
+    transition: none;
+    background-image: none;
+  }
+}

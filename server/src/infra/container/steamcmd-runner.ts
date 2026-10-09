@@ -1,6 +1,7 @@
 import { readBrandEnv } from '../../../../shared/brand-env'
 import { validateSteamcmdAppUpdateResult } from './steamcmd-app-update-result'
 import fs from 'node:fs'
+import { abortable } from '../../shared/abort'
 import DockerClient from 'dockerode'
 import { resolveDockerConnectOptions } from '../docker-connect'
 import { getServerContainerConfig } from '../../shared/config/container'
@@ -25,10 +26,13 @@ import {
   isImagePresentByRef,
   OFFICIAL_UNIFIED_IMAGE_REPOSITORY,
   pullImageWithCandidates,
+  shareImagePreparation,
+  type ImagePreparationOptions,
 } from './image-candidates'
 import {
   cancelNativeSteamcmdJob,
   isNativeSteamcmdJobRunning,
+  hasUnconfirmedNativeSteamcmdJob,
   runSteamcmdAppInfoNative,
   runSteamcmdAppUpdateNative,
   runSteamcmdWorkshopDownloadNative,
@@ -38,6 +42,7 @@ import {
   cleanupAllRunningSteamcmdInstallContainers as cleanupAllDockerSteamcmdInstallContainers,
   cleanupOrphanedSteamcmdInstallContainers as cleanupOrphanedDockerSteamcmdInstallContainers,
   isSteamcmdJobRunning as isDockerSteamcmdJobRunning,
+  hasUnconfirmedSteamcmdJob as hasUnconfirmedDockerSteamcmdJob,
 } from './steamcmd-job'
 
 
@@ -65,11 +70,11 @@ function buildSteamcmdAppInfoArgs(appId: string) {
   ]
 }
 
-export async function cancelSteamcmdInstallContainer(cancelKey: string): Promise<void> {
+export async function cancelSteamcmdInstallContainer(cancelKey: string, verifyOrphans = false): Promise<void> {
   if (getServerContainerConfig().runtimeMode === 'native') {
     return cancelNativeSteamcmdJob(cancelKey)
   }
-  return cancelDockerSteamcmdInstallContainer(cancelKey)
+  return cancelDockerSteamcmdInstallContainer(cancelKey, verifyOrphans)
 }
 
 export async function cleanupAllRunningSteamcmdInstallContainers(): Promise<number> {
@@ -93,7 +98,12 @@ export async function isSteamcmdJobRunning(jobId: string): Promise<boolean> {
   return isDockerSteamcmdJobRunning(jobId)
 }
 
+export function hasUnconfirmedSteamcmdJob(jobId: string): boolean {
+  return getServerContainerConfig().runtimeMode === 'docker' ? hasUnconfirmedDockerSteamcmdJob(jobId) : hasUnconfirmedNativeSteamcmdJob(jobId)
+}
+
 export async function runSteamcmdAppUpdateInContainer(input: {
+  signal?: AbortSignal
   hostInstallPath: string
   appId: string
   loginArgs: string[]
@@ -108,11 +118,12 @@ export async function runSteamcmdAppUpdateInContainer(input: {
   return withSteamcmdAppUpdateLock(
     jobId,
     () => runSteamcmdAppUpdateInContainerUnlocked(input),
-    { onQueued: input.onAwaitingSteamcmdLock },
+    { onQueued: input.onAwaitingSteamcmdLock, signal: input.signal },
   )
 }
 
 async function runSteamcmdAppUpdateInContainerUnlocked(input: {
+  signal?: AbortSignal
   hostInstallPath: string
   appId: string
   loginArgs: string[]
@@ -121,7 +132,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
 }): Promise<{ ok: boolean, output: string, cancelled?: boolean }> {
   const { steamcmdImage, instancesRoot } = getServerContainerConfig()
   const docker = resolveDocker()
-  const bindPlan = await resolveSteamcmdInstallBind(docker, input.hostInstallPath, instancesRoot)
+  const bindPlan = await abortable(resolveSteamcmdInstallBind(docker, input.hostInstallPath, instancesRoot), input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000))
   const logLines: string[] = []
   const pushLine = (line: string) => {
     logLines.push(line)
@@ -176,6 +187,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
       const resourceLines = await appendInstallResourceSnapshot(installLogsDir, docker, {
         instanceId,
         phase: 'steamcmd_before',
+        signal: input.signal,
       })
       for (const line of resourceLines) {
         pushLine(line)
@@ -187,6 +199,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
   }
 
   const result = validateSteamcmdAppUpdateResult(await runSteamcmdJob({
+    signal: input.signal,
     image: steamcmdImage,
     cmd: [
       '/home/steam/steamcmd/steamcmd.sh',
@@ -212,6 +225,7 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
       const resourceLines = await appendInstallResourceSnapshot(installLogsDir, docker, {
         instanceId,
         phase: 'steamcmd_after',
+        signal: input.signal,
         extra: {
           ok: result.ok,
           exitCode: result.exitCode,
@@ -357,7 +371,6 @@ export async function runSteamcmdAppInfoInContainer(appId: string): Promise<{ ok
 
 export type SteamcmdImagePullResult = { ok: true } | { ok: false, error: string }
 
-let steamcmdImagePullInFlight: Promise<SteamcmdImagePullResult> | null = null
 
 
 function resolveSteamcmdMirrorsRaw(): string {
@@ -410,12 +423,9 @@ export async function isSteamcmdImagePresent(): Promise<boolean> {
 const STEAMCMD_PULL_MAX_ATTEMPTS = 3
 const STEAMCMD_PULL_RETRY_BASE_MS = 2_000
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
 
 /** 仅由用户显式触发（POST .../steamcmd/install），禁止在页面加载/列表轮询中调用 */
-export async function pullSteamcmdImage(): Promise<SteamcmdImagePullResult> {
+export async function pullSteamcmdImage(options: ImagePreparationOptions = {}): Promise<SteamcmdImagePullResult> {
   const config = getServerContainerConfig()
   if (config.runtimeMode === 'native') {
     if (await isSteamcmdImagePresent()) {
@@ -427,18 +437,12 @@ export async function pullSteamcmdImage(): Promise<SteamcmdImagePullResult> {
     }
   }
   const { steamcmdImage } = config
-  if (await isImagePresentByRef(resolveDocker(), steamcmdImage)) {
-    return { ok: true }
-  }
-  if (steamcmdImagePullInFlight) {
-    return steamcmdImagePullInFlight
-  }
   const candidates = buildSteamcmdImageCandidates(steamcmdImage)
-  steamcmdImagePullInFlight = (async (): Promise<SteamcmdImagePullResult> => {
+  return shareImagePreparation('steamcmd:' + steamcmdImage, options, async (shared): Promise<SteamcmdImagePullResult> => {
     const result = await pullImageWithCandidates(resolveDocker(), candidates, steamcmdImage, {
       maxAttempts: STEAMCMD_PULL_MAX_ATTEMPTS,
       retryBaseMs: STEAMCMD_PULL_RETRY_BASE_MS,
-      sleep,
+      ...shared,
     })
     if (result.ok) {
       return { ok: true }
@@ -447,8 +451,5 @@ export async function pullSteamcmdImage(): Promise<SteamcmdImagePullResult> {
       ok: false,
       error: formatPullError(result.error, candidates[candidates.length - 1] || steamcmdImage, result.tried),
     }
-  })().finally(() => {
-    steamcmdImagePullInFlight = null
   })
-  return steamcmdImagePullInFlight
 }

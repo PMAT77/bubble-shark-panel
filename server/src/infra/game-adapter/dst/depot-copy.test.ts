@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, it } from 'node:test'
-import { copyGameDepotFromDonor } from './depot-copy.ts'
+import { copyGameDepotFromDonor, copyGameDepotFromDonorAsync } from './depot-copy.ts'
 
 describe('copyGameDepotFromDonor', () => {
   const tempDirs: string[] = []
@@ -60,5 +60,28 @@ describe('copyGameDepotFromDonor', () => {
     const dir = makeTempDir()
     const result = copyGameDepotFromDonor(dir, dir)
     assert.equal(result.ok, false)
+  })
+  it('streams depot bytes, excludes saves and partial downloads, and cancels during a file', async () => {
+    const donor = makeTempDir()
+    const recipient = makeTempDir()
+    fs.mkdirSync(path.join(donor, 'klei-storage'))
+    fs.writeFileSync(path.join(donor, 'klei-storage', 'save'), 'keep private')
+    fs.mkdirSync(path.join(donor, 'steamapps', 'downloading'), { recursive: true })
+    fs.writeFileSync(path.join(donor, 'steamapps', 'downloading', 'partial'), 'skip')
+    fs.writeFileSync(path.join(donor, 'game'), Buffer.alloc(512 * 1024))
+    let bytes = 0
+    assert.equal((await copyGameDepotFromDonorAsync(donor, recipient, { onProgress: copied => { bytes = copied } })).ok, true)
+    assert.equal(bytes, 512 * 1024)
+    assert.equal(fs.existsSync(path.join(recipient, 'klei-storage')), false)
+    assert.equal(fs.existsSync(path.join(recipient, 'steamapps', 'downloading')), false)
+    const controller = new AbortController()
+    await assert.rejects(copyGameDepotFromDonorAsync(donor, recipient, {
+      signal: controller.signal, onProgress: () => controller.abort(new Error('cancel copy')),
+    }), /cancel copy/)
+    assert.equal((await copyGameDepotFromDonorAsync(donor, path.join(donor, 'nested'))).ok, false)
+    assert.equal(fs.existsSync(path.join(donor, 'nested')), false)
+    const progressFailure = await copyGameDepotFromDonorAsync(donor, recipient, { onProgress: () => { throw new Error('EACCES: progress snapshot') } })
+    assert.equal(progressFailure.ok, false)
+    if (!progressFailure.ok) assert.match(progressFailure.error, /EACCES/)
   })
 })

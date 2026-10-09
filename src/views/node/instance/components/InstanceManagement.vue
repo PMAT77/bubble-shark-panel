@@ -33,7 +33,7 @@ import {
   resolveRuntimeReadinessView,
 } from '../instanceDisplay'
 import {
-  buildInstallResultNotification,
+  collectInstallResultNotifications,
   shouldShowPostCreateInstallGuide,
 } from '../instanceInstallGuide'
 import {
@@ -47,6 +47,8 @@ import { formatDateTime } from '../utils'
 import { buildInstanceUpdateCheckNotice, canRetryInstanceInstall, resolveInstanceUpdateState } from '../instanceUpdatePresentation'
 import { waitForInstanceUpdateCheckJob } from '../composables/instanceUpdateCheckJob'
 import InstanceInstallLogModal from './InstanceInstallLogModal.vue'
+import { useInstallRowProgress } from '../composables/useInstallRowProgress'
+import '../instanceInstallProgress.css'
 
 defineOptions({
   name: 'NodeInstanceManagementPanel',
@@ -71,6 +73,8 @@ const instanceLoading = ref(false)
 const updateCheckLoading = ref(false)
 const createLoading = ref(false)
 const instances = ref<InstanceItem[]>([])
+const { surface: progressSurface, rowProps: installRowProps, trackAccepted } = useInstallRowProgress(instances)
+function bindProgressSurface(element: unknown) { progressSurface.value = element as HTMLElement | null }
 const checkedInstanceIds = ref<DataTableRowKey[]>([])
 const selectedInstances = computed(() => instances.value.filter(row => checkedInstanceIds.value.includes(row.id)))
 const forceUpdateDisabledReason = computed(() => {
@@ -88,11 +92,11 @@ const updateMenuOptions = computed<DropdownOption[]>(() => [{
     : forceUpdateDisabledReason.value
       ? `强制校验并更新所选实例（${forceUpdateDisabledReason.value}）`
       : `强制校验并更新所选实例（${selectedInstances.value.length}）`,
-  disabled: Boolean(forceUpdateDisabledReason.value) || !steamcmdInstalled.value,
+  disabled: Boolean(forceUpdateDisabledReason.value),
 }])
 
 function selectUpdateMenu(key: string) {
-  if (key === 'force-update' && !forceUpdateDisabledReason.value && steamcmdInstalled.value) {
+  if (key === 'force-update' && !forceUpdateDisabledReason.value) {
     confirmForceUpdateInstances([...selectedInstances.value])
   }
 }
@@ -116,6 +120,7 @@ const {
   refresh: fetchInstances,
   onBeforeUpdate: suppressInstanceUpdateNotificationForCurrentBatch,
   onUpdateAccepted: openInstallLogModal,
+  onInstallTaskAccepted: (row, taskId) => registerAcceptedInstall(row.id, taskId),
 })
 
 const {
@@ -139,7 +144,18 @@ const installLogTargetId = ref('')
 /** 安装结束后的列表/版本刷新去重，避免 watch、日志轮询与列表边沿重复触发 */
 let installTerminalRefreshInFlight: Promise<void> | null = null
 /** 曾处于安装中的实例，用于在列表刷新后补发完成/失败提示 */
-const installNotifyPendingIds = new Set<string>()
+const installNotifyPendingIds = new Map<string, string>()
+let fetchGeneration = 0
+let instanceRequest: Promise<void> | undefined
+let instanceRequestKey = ''
+
+function registerAcceptedInstall(id: string, taskId: string) {
+  // 受理前发出的列表可能尚未包含这次任务，不能合并到后续刷新。
+  fetchGeneration++
+  instanceRequest = undefined
+  installNotifyPendingIds.set(id, taskId)
+  trackAccepted(id, taskId)
+}
 
 // --- 常量 ---
 /** 列宽总和，启用横向滚动，避免中间列被挤压为 0（操作列移动端收拢为「更多」） */
@@ -247,13 +263,13 @@ const statusCounts = ref<InstanceStatusCounts>({
 })
 
 /** 拉取统计卡计数（跟随节点/关键词范围，刻意不含状态筛选） */
-async function fetchStatusCounts() {
+async function fetchStatusCounts(generation = fetchGeneration) {
   try {
     const res = await apiInstance.getInstanceStatusCounts({
       nodeId: selectedNodeId.value !== 'all' ? selectedNodeId.value : undefined,
       keyword: keywordFilter.value.trim() || undefined,
     })
-    statusCounts.value = res.data && typeof res.data === 'object' ? res.data : statusCounts.value
+    if (generation === fetchGeneration) statusCounts.value = res.data && typeof res.data === 'object' ? res.data : statusCounts.value
   }
   catch {
     // 全局拦截器已提示错误原因；失败时保留旧计数
@@ -415,7 +431,7 @@ const INSTANCE_ACTION_PERMISSIONS: Record<InstanceRowAction['key'], PermissionKe
  */
 function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
   const stopAction = row.status === 'installing' || row.status === 'pending_install' ? 'cancel_install' : 'stop'
-  const stopLabel = stopAction === 'cancel_install' ? '取消安装' : '停止'
+  const stopLabel = row.installTask?.cleanupPending ? '再次停止' : stopAction === 'cancel_install' ? '取消安装' : '停止'
   const instanceActionRunning = isInstanceActionRunning(row.id)
   const actions: InstanceRowAction[] = [
     {
@@ -445,7 +461,7 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
       label: '启动',
       menuOnly: true,
       loading: isActionLoading(row.id, 'start'),
-      disabled: instanceActionRunning || row.status === 'running' || row.status === 'pending_install' || row.status === 'installing',
+      disabled: instanceActionRunning || row.installTask?.cleanupPending || row.installLogStatus === 'cancelled' || row.status === 'running' || row.status === 'pending_install' || row.status === 'installing',
       onClick: () => confirmStartInstance(row),
     },
     {
@@ -453,7 +469,7 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
       label: stopLabel,
       menuOnly: true,
       loading: isActionLoading(row.id, 'stop'),
-      disabled: instanceActionRunning || row.status === 'stopped' || row.status === 'error',
+      disabled: instanceActionRunning || (!row.installTask?.cleanupPending && (row.status === 'stopped' || row.status === 'error')),
       onClick: () => confirmDangerousInstanceAction(row, stopAction),
     },
     {
@@ -461,7 +477,7 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
       label: '重启',
       menuOnly: true,
       loading: isActionLoading(row.id, 'restart'),
-      disabled: instanceActionRunning || row.status === 'pending_install' || row.status === 'installing',
+      disabled: instanceActionRunning || row.installTask?.cleanupPending || row.installLogStatus === 'cancelled' || row.status === 'pending_install' || row.status === 'installing',
       onClick: () => confirmDangerousInstanceAction(row, 'restart'),
     },
     {
@@ -587,6 +603,13 @@ function renderInstanceStateColumn(row: InstanceItem) {
     'span',
     {
       class: `text-xs px-2 py-0.5 rounded-full ${statusBadgeClass(state.tone)}`,
+      title: installProgressHint(row),
+      tabindex: isInstanceInstallingStatus(row.status) ? 0 : undefined,
+      role: isInstanceInstallingStatus(row.status) ? 'progressbar' : undefined,
+      'aria-label': isInstanceInstallingStatus(row.status) ? installProgressHint(row) : undefined,
+      'aria-valuemin': isInstanceInstallingStatus(row.status) ? 0 : undefined,
+      'aria-valuemax': isInstanceInstallingStatus(row.status) ? 100 : undefined,
+      'aria-valuenow': isInstanceInstallingStatus(row.status) ? row.installTask?.overallPercent ?? row.installPercent ?? undefined : undefined,
     },
     state.label,
   )
@@ -642,6 +665,12 @@ function renderInstanceStateColumn(row: InstanceItem) {
       default: () => errorText.length > 160 ? `${errorText.slice(0, 160)}…` : errorText,
     },
   )
+}
+
+function installProgressHint(row: InstanceItem) {
+  if (!isInstanceInstallingStatus(row.status)) return row.lastError ?? ''
+  const percent = row.installTask?.overallPercent ?? row.installPercent
+  return (percent == null ? '正在安装' : '整体估算约 ' + percent + '%') + '，当前阶段：' + (row.installTask?.phase ?? row.lastCommand ?? '准备安装环境')
 }
 
 /** 根据节点 ID 解析节点名称 */
@@ -892,16 +921,6 @@ function shouldCheckVersionAfterInstall(instanceId: string) {
 
 /** 安装结束后立即刷新列表（成功或失败），不阻塞于版本检查 */
 async function refreshInstancesAfterInstallTerminal() {
-  try {
-    const res = await apiInstance.getInstanceList({
-      nodeId: selectedNodeId.value !== 'all' ? selectedNodeId.value : undefined,
-      keyword: keywordFilter.value.trim() || undefined,
-    })
-    syncInstallTerminalNotifications(res.data)
-  }
-  catch {
-    // 提示补发失败不阻断列表刷新
-  }
   await fetchInstances({ silent: true })
 }
 
@@ -1006,71 +1025,52 @@ watch(
 
 /** 记录安装中实例，并在其离开安装态后提示结果 */
 function syncInstallTerminalNotifications(list: InstanceItem[]) {
-  for (const item of list) {
-    if (isInstanceInstallingStatus(item.status)) {
-      installNotifyPendingIds.add(item.id)
-    }
-  }
-  for (const id of installNotifyPendingIds) {
-    const row = list.find(item => item.id === id)
-    if (!row) {
-      installNotifyPendingIds.delete(id)
-      continue
-    }
-    if (isInstanceInstallingStatus(row.status)) {
-      continue
-    }
-    installNotifyPendingIds.delete(id)
-    const notifyPayload = buildInstallResultNotification(row)
-    if (!notifyPayload) {
-      continue
-    }
-    if (notifyPayload.type === 'success') {
-      notification.success({
-        title: notifyPayload.title,
-        content: notifyPayload.content,
-        duration: notifyPayload.durationMs,
-      })
-    }
-    else {
-      notification.error({
-        title: notifyPayload.title,
-        content: notifyPayload.content,
-        duration: notifyPayload.durationMs,
-      })
-    }
+  for (const payload of collectInstallResultNotifications(list, installNotifyPendingIds)) {
+    notification[payload.type]({ title: payload.title, content: payload.content, duration: payload.durationMs })
   }
 }
 
 /** 按当前筛选条件拉取实例列表 */
 async function fetchInstances(options?: { silent?: boolean }) {
+  const query = {
+    nodeId: selectedNodeId.value !== 'all' ? selectedNodeId.value : undefined,
+    status: statusFilter.value !== 'all' ? statusFilter.value : undefined,
+    keyword: keywordFilter.value.trim() || undefined,
+  }
+  const key = JSON.stringify(query)
   if (!options?.silent) {
     instanceLoading.value = true
   }
+  if (instanceRequest && instanceRequestKey === key) return instanceRequest
+  const generation = ++fetchGeneration
+  instanceRequestKey = key
+  const filtered = Boolean(query.nodeId || query.status || query.keyword)
+  instanceRequest = (async () => {
   try {
-    const [res] = await Promise.all([
-      apiInstance.getInstanceList({
-        nodeId: selectedNodeId.value !== 'all' ? selectedNodeId.value : undefined,
-        status: statusFilter.value !== 'all' ? statusFilter.value : undefined,
-        keyword: keywordFilter.value.trim() || undefined,
-      }),
-      fetchStatusCounts(),
+    const [res, , full] = await Promise.all([
+      apiInstance.getInstanceList(query),
+      fetchStatusCounts(generation),
+      filtered && installNotifyPendingIds.size ? apiInstance.getInstanceList() : Promise.resolve(null),
     ])
+    if (generation !== fetchGeneration) return
     // 接口异常时 data 可能不是数组：这里兜一次，否则下游 .filter/.some 会抛错，
     // 而页面组件渲染抛错会让整个内容区停止更新（只能刷新恢复）
     instances.value = Array.isArray(res.data) ? res.data : []
     checkedInstanceIds.value = checkedInstanceIds.value.filter(id => instances.value.some(row => row.id === id))
-    syncInstallTerminalNotifications(instances.value)
+    syncInstallTerminalNotifications(full && Array.isArray(full.data) ? full.data : instances.value)
     syncRuntimeObservabilityPolling()
   }
   catch {
     // 全局拦截器已提示错误原因；轮询/刷新失败时保留旧列表，避免安装进度闪空
   }
   finally {
-    if (!options?.silent) {
+    if (generation === fetchGeneration) {
       instanceLoading.value = false
+      instanceRequest = undefined
     }
   }
+  })()
+  return instanceRequest
 }
 
 /** 关键词搜索：触发列表刷新 */
@@ -1124,6 +1124,7 @@ async function createInstance() {
       gameCode: createForm.gameCode,
       installPath: createForm.installPath?.trim() || undefined,
     })
+    if (created.data.taskId) registerAcceptedInstall(created.data.id, created.data.taskId)
     faToast.success('实例创建成功，正在安装')
     createModalVisible.value = false
     resetCreateForm()
@@ -1153,7 +1154,7 @@ onMounted(async () => {
 let hadInstallingInstance = false
 const instancePollingTimer = setInterval(() => {
   const hasInstalling = instances.value.some(item => isInstanceInstallingStatus(item.status))
-  if (hasInstalling) {
+  if (hasInstalling || installNotifyPendingIds.size) {
     hadInstallingInstance = true
     void fetchInstances({ silent: true })
     return
@@ -1165,6 +1166,8 @@ const instancePollingTimer = setInterval(() => {
 }, INSTANCE_INSTALL_POLL_MS)
 
 onBeforeUnmount(() => {
+  fetchGeneration++
+  installNotifyPendingIds.clear()
   clearInterval(instancePollingTimer)
   stopRuntimeObservability()
   dismissInstanceUpdateNotification()
@@ -1173,7 +1176,7 @@ onBeforeUnmount(() => {
 
 <template>
   <FaPageMain title="实例管理">
-    <section class="p-4 border border-border rounded-xl bg-card space-y-4">
+    <section :ref="bindProgressSurface" class="instance-install-surface p-4 border border-border rounded-xl bg-card space-y-4">
       <div class="gap-3 grid grid-cols-3 md:grid-cols-6">
         <button
           v-for="card in STAT_CARDS"
@@ -1251,7 +1254,7 @@ onBeforeUnmount(() => {
                   secondary
                   aria-label="更新操作菜单"
                   :loading="forceUpdateLoading"
-                  :disabled="!steamcmdInstalled || instances.length === 0 || updateCheckLoading || forceUpdateLoading"
+                  :disabled="instances.length === 0 || updateCheckLoading || forceUpdateLoading"
                 >
                   <template #icon><FaIcon name="i-ri:arrow-down-s-line" /></template>
                 </NButton>
@@ -1290,6 +1293,8 @@ onBeforeUnmount(() => {
           v-for="instance in instances"
           :key="instance.id"
           class="rounded-lg border border-border bg-card p-4 space-y-3"
+          v-bind="installRowProps(instance)"
+          :class="{ 'instance-install-card': Boolean(installRowProps(instance).class) }"
         >
           <div class="flex items-start justify-between gap-3">
             <AppAuth value="instance:update">
@@ -1307,7 +1312,12 @@ onBeforeUnmount(() => {
                 {{ getNodeName(instance.nodeId) }} · {{ instance.gameCode }}
               </p>
             </div>
-            <NTag size="small" :bordered="false" :class="statusBadgeClass(getInstanceState(instance).tone)">
+            <NTag size="small" :bordered="false" :class="statusBadgeClass(getInstanceState(instance).tone)" :title="installProgressHint(instance)" tabindex="0"
+              :role="isInstanceInstallingStatus(instance.status) ? 'progressbar' : undefined"
+              :aria-label="isInstanceInstallingStatus(instance.status) ? installProgressHint(instance) : undefined"
+              :aria-valuemin="isInstanceInstallingStatus(instance.status) ? 0 : undefined"
+              :aria-valuemax="isInstanceInstallingStatus(instance.status) ? 100 : undefined"
+              :aria-valuenow="isInstanceInstallingStatus(instance.status) ? instance.installTask?.overallPercent ?? instance.installPercent ?? undefined : undefined">
               {{ getInstanceState(instance).label }}
             </NTag>
           </div>
@@ -1358,6 +1368,7 @@ onBeforeUnmount(() => {
           :columns="instanceColumns"
           :data="instances"
           :row-key="getInstanceRowKey"
+          :row-props="installRowProps"
           :loading="instanceLoading"
           class="w-full"
         >

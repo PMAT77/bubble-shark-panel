@@ -74,7 +74,7 @@ export interface SaveServerNodeInput {
 }
 
 export type DbGameInstanceStatus = 'pending_install' | 'running' | 'stopped' | 'installing' | 'error'
-export type DbInstallLogStatus = 'running' | 'success' | 'failed'
+export type DbInstallLogStatus = 'running' | 'success' | 'failed' | 'cancelled'
 /**
  * 实例最近一次失败发生的环节。
  *
@@ -120,6 +120,7 @@ export interface DbGameInstance {
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
   unexpectedExitAt: string | null
   installLogStatus: DbInstallLogStatus | null
+  installTaskId?: string | null
   installPercent: number | null
   installLogUpdatedAt: string | null
   updateAvailable: boolean
@@ -159,6 +160,7 @@ export interface UpdateGameInstanceRuntimeInput {
    * 未命中时静默放弃写入（返回当前行），用于“安装完成/失败只允许覆盖 installing”这类约束。
    */
   whereStatus?: DbGameInstanceStatus | DbGameInstanceStatus[]
+  whereInstallTaskId?: string | null
   containerId?: string | null
   runtimePid?: number | null
   runtimeStartedAt?: string | null
@@ -175,6 +177,7 @@ export interface UpdateGameInstanceRuntimeInput {
   runtimeFailureKind?: DbInstanceRuntimeFailureKind | null
   unexpectedExitAt?: string | null
   installLogStatus?: DbInstallLogStatus | null
+  installTaskId?: string | null
   installPercent?: number | null
   installLogUpdatedAt?: string | null
   updateAvailable?: boolean

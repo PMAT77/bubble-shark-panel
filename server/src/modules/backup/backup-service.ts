@@ -54,6 +54,7 @@ function snapshotShards(storageRoot: string): string | null {
 }
 
 export interface CreateInstanceBackupOptions {
+  signal?: AbortSignal
   app?: FastifyInstance
   instanceId: string
   /** 缺省 manual；自动钩子传对应来源 */
@@ -144,7 +145,7 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
   const targetPath = path.join(backupsRoot, fileName)
 
   try {
-    await createDirectoryArchive(storageRoot, targetPath)
+    await createDirectoryArchive(storageRoot, targetPath, options.signal)
   }
   catch (error) {
     const message = error instanceof Error ? error.message : '打包存档失败'

@@ -2,13 +2,16 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { after, afterEach, it } from 'node:test'
 import { runNativeSteamcmdJob, cancelNativeSteamcmdJob, runSteamcmdWorkshopDownloadNative } from './native-steamcmd-runner'
 import { parsePublicBuildIdFromAppInfo } from '../../shared/steam-update/app-info'
+import { registerNativeSteamcmdProcess, cancelRecordedNativeSteamcmdProcess } from './native-steamcmd-process'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-steamcmd-query-'))
 const previousPath = process.env.BSP_NATIVE_STEAMCMD_PATH
-const envKeys = ['HOME', 'BSP_STEAMCMD_DOWNLOAD_REGION', 'GSH_STEAMCMD_DOWNLOAD_REGION', 'STEAMCMD_FORCE_DOWNLOAD_REGION', 'BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS']
+const envKeys = ['HOME', 'BSP_STEAMCMD_DOWNLOAD_REGION', 'GSH_STEAMCMD_DOWNLOAD_REGION', 'STEAMCMD_FORCE_DOWNLOAD_REGION', 'BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS', 'BSP_NATIVE_RUNTIME_DIR']
 const previousEnv = envKeys.map(key => process.env[key])
 afterEach(() => envKeys.forEach((key, index) => {
   if (previousEnv[index] === undefined) delete process.env[key]
@@ -51,6 +54,14 @@ it('rejects excess output, nonzero exits and timeouts', async () => {
   const timeout = await run('setInterval(() => {}, 1000)', 100)
   assert.equal(timeout.ok, false)
   assert.equal(timeout.timedOut, true)
+})
+
+it('terminates safely when writing installation progress fails', async () => {
+  const result = await run("console.log('READY'); setInterval(() => {}, 1000)", 5000, {
+    onLogLine: () => { throw new Error('EACCES: install log unavailable') },
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.output, /EACCES/)
 })
 
 it('collects only this native job diagnostics and redacts secrets', async () => {
@@ -124,6 +135,26 @@ it('kills a Linux process group including a child ignoring SIGTERM', { skip: pro
   // Linux 上已死亡但尚未被 init 回收的子进程可能短暂处于 zombie 状态。
   const stat = `/proc/${pid}/stat`
   if (fs.existsSync(stat)) assert.match(fs.readFileSync(stat, 'utf8'), /\) Z /)
+})
+
+it('cleans a recorded Linux process after losing the in-memory task, without killing reused PIDs', { skip: process.platform !== 'linux' }, async (t) => {
+  process.env.BSP_NATIVE_RUNTIME_DIR = root
+  const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('READY'); setInterval(() => {}, 1000)"], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+  const closed = once(child, 'close')
+  t.after(() => { try { process.kill(-child.pid!, 'SIGKILL') } catch { /* 已结束。 */ } })
+  await once(child.stdout!, 'data')
+  const forget = registerNativeSteamcmdProcess('restarted', child.pid!)
+  const file = path.join(root, 'steamcmd-jobs', 'restarted.json')
+  const recorded = JSON.parse(fs.readFileSync(file, 'utf8'))
+  fs.writeFileSync(file, JSON.stringify({ ...recorded, started: '0' }))
+  await cancelRecordedNativeSteamcmdProcess('restarted')
+  assert.doesNotThrow(() => process.kill(child.pid!, 0), 'a reused identity is not killed')
+  registerNativeSteamcmdProcess('restarted', child.pid!)
+  await cancelRecordedNativeSteamcmdProcess('restarted')
+  assert.equal(fs.existsSync(file), false)
+  await closed
+  assert.throws(() => process.kill(child.pid!, 0))
+  forget()
 })
 
 it('emits native carriage-return progress before the process exits, including split CRLF', async () => {

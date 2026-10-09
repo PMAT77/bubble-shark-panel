@@ -294,7 +294,7 @@ function logFollowKey(instanceId: string, shard: ConsoleCommandShard) {
   return `${instanceId}:${shard}`
 }
 
-export async function ensureContainerRuntimeReady(): Promise<{ ok: boolean, message?: string }> {
+export async function ensureContainerRuntimeReady(options: import('../../infra/container/image-candidates').ImagePreparationOptions = {}): Promise<{ ok: boolean, message?: string }> {
   const { runtimeMode } = getServerContainerConfig()
   if (runtimeMode === 'native') {
     if ((await resolveRuntimeStatus()) !== 'running') {
@@ -308,7 +308,7 @@ export async function ensureContainerRuntimeReady(): Promise<{ ok: boolean, mess
   if ((await resolveDockerStatus()) !== 'running') {
     return { ok: false, message: '无法连接 Docker，请确认面板已挂载 docker.sock（或 Windows 下 Docker Desktop 已启动）' }
   }
-  const pullResult = await ensureSteamcmdImage()
+  const pullResult = await ensureSteamcmdImage(options)
   if (!pullResult.ok) {
     return {
       ok: false,

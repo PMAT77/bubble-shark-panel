@@ -3,8 +3,9 @@ import { classifySteamcmdInstallFailure, sanitizeSteamcmdLogLine } from '../../i
 
 export const INSTALL_PHASE_LABELS: Record<InstanceInstallProgress['phaseCode'], string> = {
   prepare: '准备安装环境', queue: '等待安装队列', connect: '连接 Steam',
+  steamcmd_image: '准备安装镜像', source: '检查安装来源', backup: '创建更新前备份', cancelling: '正在取消安装',
   download: '下载游戏文件', verify: '校验游戏文件', stage: '整理游戏文件', commit: '提交游戏文件',
-  finalize: '准备启动文件', runtime: '准备运行环境镜像', copy: '复制本地游戏文件',
+  finalize: '准备启动文件', runtime: '准备运行环境', copy: '复制本地游戏文件',
   retry: '等待重试', complete: '安装完成',
 }
 
@@ -45,6 +46,26 @@ export function parseSteamcmdProgressPercent(line: string): number | null {
 }
 
 export function summarizeInstallFailure(message: string): NonNullable<InstanceInstallProgress['failure']> {
+  message = normalizeInstallLogLine(message)
+  const specific: Array<[RegExp, string, string, string]> = [
+    [/无法确认.*(?:停止|结束)|清理.*失败/, 'cleanup_failed', '安装任务清理未完成，已禁止重新安装和启动。', '恢复运行环境连接后，再次停止实例以完成清理。'],
+    [/无法连接 Docker|Docker.*(?:ECONNREFUSED|ENOENT|连接失败)/i, 'docker_unavailable', '无法连接 Docker，安装已停止。', '检查 Docker 服务、Socket 挂载和连接权限后重试。'],
+    [/systemd|user bus|linger/i, 'native_runtime_unavailable', '无法连接 Native 运行环境的用户服务管理器。', '检查 bsp 用户的 systemd 用户服务和 linger 配置后重试。'],
+      [/SteamCMD(?![^\n]*镜像)[^\n]*(?:未安装|不存在|未就绪|不可用)|SteamCMD 启动失败/i, 'steamcmd_unavailable', 'SteamCMD 不可用，无法开始安装。', '检查 SteamCMD 安装路径与执行权限，或重新运行对应模式的安装器。'],
+    [/备份.*失败/, 'backup_failed', '更新前备份失败，已停止更新。', '检查备份目录空间和权限后重试，或在系统设置中关闭更新前自动备份。'],
+    [/镜像.*(?:失败|未就绪)|镜像准备超过/, 'image_pull_failed', '安装所需镜像未准备完成，安装已停止。', '检查镜像源、标签、网络和仓库访问权限后重试。'],
+    [/复制.*失败|复制后.*不一致|符号链接/, 'copy_failed', '本地游戏文件复制或校验失败，安装已停止。', '检查复制源、安装路径、磁盘空间和权限后重试。'],
+    [/启动文件.*失败|启动脚本生成失败/, 'layout_failed', '游戏启动文件准备失败。', '检查游戏文件完整性和配置目录权限后重试。'],
+    [/服务重启导致安装中断/, 'interrupted', '服务重启导致安装中断。', '点击“更新服务端”重新校验并继续安装，已下载文件会保留。'],
+  ]
+  for (const [pattern, code, reason, advice] of specific) {
+      if (pattern.test(message)) {
+        const cause = classifySteamcmdInstallFailure(message)
+        const detail = cause === 'disk' ? '磁盘空间不足或写入失败。' : cause === 'permission' && code !== 'steamcmd_unavailable' ? '相关目录无法写入。' : ''
+        const translated = code === 'image_pull_failed' && /运行镜像/.test(message) ? '游戏运行镜像下载失败，安装已停止。' : reason
+        return { code, message: translated + detail, advice }
+      }
+  }
   const kind = classifySteamcmdInstallFailure(message)
   const advice = {
     network: '检查网络、DNS 和 SteamCMD 代理配置后重试。',
@@ -64,7 +85,7 @@ export function summarizeInstallFailure(message: string): NonNullable<InstanceIn
     incomplete: '游戏文件更新未完成。',
     unknown: /[\u4E00-\u9FFF]/.test(clean) && !/安装失败[（(]|^安装失败。$/.test(clean) ? clean : '安装未完成。',
   }[kind]
-  return { message: reason, advice }
+  return { code: kind, message: reason, advice }
 }
 
 export function normalizeInstallLogLine(line: string): string {

@@ -3,12 +3,12 @@ import fs from 'node:fs'
 import type { InstanceInstallLogPayload } from '../../../../shared/contracts/instance'
 import { instanceInstallLogQuerySchema } from '../../../../shared/contracts/instance'
 import { getGameInstanceById } from '../../shared/db'
-import { readInstallLogTail, readInstallProgress, resolveInstallLogFilePath } from '../../shared/instance-install/log-store'
+import { readInstallLogTail, resolveInstallLogFilePath } from '../../shared/instance-install/log-store'
 import { formatInstallLogContent, summarizeInstallFailure } from '../../shared/instance-install/log-format'
 import { sendFileDownload } from '../../shared/http/file-download'
 import { businessError, success } from '../../shared/http/response'
 import { authorizeInstance } from '../system/auth'
-import { getInstallLogsDirPath, isInstallJobActive, mapDbInstallLogStatusToResponse } from './install-service'
+import { getInstallLogsDirPath, getInstanceInstallProgress, isInstallJobActive, mapDbInstallLogStatusToResponse } from './install-service'
 
 export function registerInstanceInstallLogRoutes(app: FastifyInstance) {
   app.get('/app/instance/install-log', async (request) => {
@@ -20,7 +20,7 @@ export function registerInstanceInstallLogRoutes(app: FastifyInstance) {
     const instance = await getGameInstanceById(id)
     if (!instance) return businessError('实例不存在', request)
     const dir = getInstallLogsDirPath()
-    const progress = readInstallProgress(dir, id)
+    const progress = getInstanceInstallProgress(instance)
     const rawAvailable = fs.existsSync(resolveInstallLogFilePath(dir, id))
     // 新日志的摘要只读取小型快照，原始日志按需读取有限尾部。
     const tail = view === 'raw' ? readInstallLogTail(dir, id) : null

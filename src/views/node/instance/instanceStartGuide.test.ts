@@ -16,6 +16,7 @@ import {
 } from './instanceStartGuide.ts'
 import {
   buildInstallResultNotification,
+  collectInstallResultNotifications,
   shouldShowPostCreateInstallGuide,
 } from './instanceInstallGuide.ts'
 
@@ -251,6 +252,18 @@ describe('start guide skip storage', () => {
 })
 
 describe('instanceInstallGuide', () => {
+  it('does not announce stopped as success, and notifies a fast accepted task once', () => {
+    assert.equal(buildInstallResultNotification({ name: 'DST', status: 'stopped', lastErrorPhase: null }), null)
+    const pending = new Map([['id', 'new-task']])
+    const row = { id: 'id', name: 'DST', status: 'stopped', lastErrorPhase: null, installTaskId: 'new-task', installLogStatus: 'success' } as Parameters<typeof collectInstallResultNotifications>[0][number]
+    assert.equal(collectInstallResultNotifications([{ ...row, installTaskId: 'old-task' }], pending).length, 0)
+    assert.equal(pending.get('id'), 'new-task')
+    assert.equal(collectInstallResultNotifications([row], pending)[0]?.type, 'success')
+    assert.equal(collectInstallResultNotifications([row], pending).length, 0)
+    const cancelled = buildInstallResultNotification({ ...row, installLogStatus: 'cancelled' })
+    assert.equal(cancelled?.type, 'info')
+    assert.match(cancelled!.content, /已取消/)
+  })
   it('shows post-create guide only for DST during install statuses', () => {
     assert.equal(shouldShowPostCreateInstallGuide({ gameCode: '343050', status: 'pending_install' }), true)
     assert.equal(shouldShowPostCreateInstallGuide({ gameCode: '343050', status: 'installing' }), true)
@@ -260,7 +273,7 @@ describe('instanceInstallGuide', () => {
 
   it('builds top-right install terminal notifications with 5s duration', () => {
     assert.deepEqual(
-      buildInstallResultNotification({ name: 'My DST', status: 'stopped', lastErrorPhase: null }),
+      buildInstallResultNotification({ name: 'My DST', status: 'stopped', lastErrorPhase: null, installLogStatus: 'success' }),
       {
         type: 'success',
         title: '实例安装完成',
@@ -273,7 +286,7 @@ describe('instanceInstallGuide', () => {
       {
         type: 'error',
         title: '实例安装失败',
-        content: '「My DST」安装失败，请查看安装日志',
+        content: '「My DST」安装失败：请查看安装日志',
         durationMs: 5000,
       },
     )

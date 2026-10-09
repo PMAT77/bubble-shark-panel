@@ -15,6 +15,7 @@ import {
 import { DST_WORKSHOP_APP_ID } from '../game-adapter/dst/constants'
 import { SteamcmdOutput } from './steamcmd-output'
 import { NativeSteamcmdLogDiagnostics } from './steamcmd-log-diagnostics'
+import { registerNativeSteamcmdProcess, cancelRecordedNativeSteamcmdProcess } from './native-steamcmd-process'
 
 const STEAMCMD_APP_INFO_TIMEOUT_MS = 90_000
 const DEFAULT_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
@@ -87,6 +88,7 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
   const config = loadSteamcmdRuntimeConfig()
   const secrets = steamcmdLogSecrets(input.args, [config.httpProxy, config.httpsProxy])
   const diagnostics = input.kind === 'app-info' ? undefined : new NativeSteamcmdLogDiagnostics(nativeSteamcmdPath)
+  let logError: Error | undefined
   const pushLine = (raw: string) => {
     diagnostics?.observe(raw)
     const line = redactSteamcmdLogLine(raw, secrets)
@@ -94,7 +96,14 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
       return
     }
     collected.push(line)
-    input.onLogLine?.(line)
+    try { input.onLogLine?.(line) }
+    catch (error) {
+      if (!logError) {
+        logError = error instanceof Error ? error : new Error(String(error))
+        collected.push(redactSteamcmdLogLine('安装日志写入失败：' + logError.message, secrets))
+      }
+      terminate()
+    }
   }
   // 取消标记不在这里清除：排队取消依赖锁出队时检查（取消标记存活到出队）；
   // 重试场景的残留标记由 install-service.startInstallJob 在新任务启动时清理。
@@ -106,6 +115,9 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
     windowsHide: true,
   })
   let killTimer: ReturnType<typeof setTimeout> | undefined
+  let stopDeadline: ReturnType<typeof setTimeout> | undefined
+  let rejectStop!: (error: Error) => void
+  const stopFailure = new Promise<never>((_, reject) => { rejectStop = reject })
   let termination: Promise<void> | undefined
   const signal = (value: NodeJS.Signals) => {
     try {
@@ -118,15 +130,29 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
   }
   const terminate = () => {
     if (killTimer) return
-    signal('SIGTERM')
-    termination = new Promise(resolve => {
-      killTimer = setTimeout(() => { signal('SIGKILL'); resolve() }, 5000)
+    try { signal('SIGTERM') }
+    catch { rejectStop(new Error('无法确认 Native 安装进程组已停止，请再次停止实例')); return }
+    termination = new Promise((resolve, reject) => {
+      killTimer = setTimeout(() => {
+        try { signal('SIGKILL'); resolve() }
+        catch {
+          const error = new Error('无法确认 Native 安装进程组已停止，请再次停止实例')
+          rejectStop(error); reject(error)
+        }
+      }, 5000)
     })
+    void termination.catch(() => {})
+    stopDeadline = setTimeout(() => rejectStop(new Error('无法确认 Native 安装进程组已停止，请再次停止实例')), 10_000)
   }
   if (jobId) activeNativeSteamcmdJobs.set(jobId, { child, terminate })
 
   let timedOut = false
   let spawnError: Error | undefined
+  let forgetProcess: (() => void) | undefined
+  if (jobId && child.pid) {
+    try { forgetProcess = registerNativeSteamcmdProcess(jobId, child.pid) }
+    catch (error) { spawnError = error instanceof Error ? error : new Error(String(error)); terminate() }
+  }
   let stdoutCarry = ''
   let stderrCarry = ''
   const consume = (stream: 'stdout' | 'stderr', text: string) => {
@@ -158,10 +184,22 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
   }, input.timeoutMs)
   timeout.unref()
 
-  const exitCode = await new Promise<number>((resolve) => {
+  const closed = new Promise<number>((resolve) => {
     child.once('close', code => resolve(code ?? -1))
   })
+  let exitCode: number
+  try { exitCode = await Promise.race([closed, stopFailure]) }
+  catch (error) {
+    clearTimeout(timeout)
+    clearTimeout(killTimer)
+    clearTimeout(stopDeadline)
+    // 进程未确认结束：保留进程记录与占用，停止旧任务的日志回调。
+    child.stdout.removeAllListeners('data'); child.stdout.resume()
+    child.stderr.removeAllListeners('data'); child.stderr.resume()
+    throw error
+  }
   clearTimeout(timeout)
+  clearTimeout(stopDeadline)
   if (termination && process.platform === 'linux' && child.pid) {
     try {
       // 父进程退出不代表进程组内忽略 SIGTERM 的子进程也已退出。
@@ -173,6 +211,7 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
     }
   }
   clearTimeout(killTimer)
+  try { forgetProcess?.() } catch { /* 已确认进程停止；遗留记录由下次清理校验后删除。 */ }
   if (stdoutCarry.trim()) {
     pushLine(stdoutCarry)
   }
@@ -206,7 +245,7 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
   const output = collected.output
     || (timedOut ? 'SteamCMD 任务超时' : cancelled ? 'SteamCMD 任务已取消' : 'SteamCMD 任务执行失败')
   return {
-    ok: exitCode === 0 && !timedOut && !cancelled && !spawnError && !collected.overflowed,
+    ok: exitCode === 0 && !timedOut && !cancelled && !spawnError && !logError && !collected.overflowed,
     output,
     cancelled,
     timedOut,
@@ -214,6 +253,7 @@ export async function runNativeSteamcmdJob(input: NativeSteamcmdJobInput): Promi
 }
 
 export async function runSteamcmdAppUpdateNative(input: {
+  signal?: AbortSignal
   hostInstallPath: string
   appId: string
   loginArgs: string[]
@@ -247,7 +287,7 @@ export async function runSteamcmdAppUpdateNative(input: {
       output: result.output,
       cancelled: result.cancelled,
     }
-  }, { onQueued: input.onAwaitingSteamcmdLock })
+  }, { onQueued: input.onAwaitingSteamcmdLock, signal: input.signal })
 }
 
 export async function runSteamcmdWorkshopDownloadNative(input: {
@@ -310,10 +350,15 @@ export function clearNativeSteamcmdCancelFlag(cancelKey: string): void {
 
 export async function cancelNativeSteamcmdJob(cancelKey: string): Promise<void> {
   cancelledNativeSteamcmdJobs.add(cancelKey)
-  activeNativeSteamcmdJobs.get(cancelKey)?.terminate()
+  const active = activeNativeSteamcmdJobs.get(cancelKey)
+  if (active) active.terminate()
+  await cancelRecordedNativeSteamcmdProcess(cancelKey)
+  if (active && !isNativeSteamcmdJobRunning(cancelKey)) activeNativeSteamcmdJobs.delete(cancelKey)
 }
 
 export function isNativeSteamcmdJobRunning(jobId: string): boolean {
   const child = activeNativeSteamcmdJobs.get(jobId)?.child
   return Boolean(child && child.exitCode === null && child.signalCode === null)
 }
+
+export function hasUnconfirmedNativeSteamcmdJob(jobId: string) { return activeNativeSteamcmdJobs.has(jobId) }

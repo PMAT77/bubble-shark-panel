@@ -1,5 +1,5 @@
 import { defineFakeRoute } from 'vite-plugin-fake-server/client'
-import type { InstanceInstallLogPayload } from '../../../shared/contracts/instance'
+import type { InstanceInstallLogPayload, InstanceInstallTask } from '../../../shared/contracts/instance'
 
 type InstanceStatus = 'pending_install' | 'running' | 'stopped' | 'installing' | 'error'
 
@@ -18,7 +18,9 @@ interface FakeInstanceItem {
   lastCommand: string | null
   lastError: string | null
   lastErrorPhase: 'install' | 'runtime' | null
-  installLogStatus: 'running' | 'success' | 'failed' | null
+  installLogStatus: 'running' | 'success' | 'failed' | 'cancelled' | null
+  installTaskId?: string
+  installTask?: InstanceInstallTask
   installPercent: number | null
   installLogUpdatedAt: string | null
   updateAvailable: boolean
@@ -57,6 +59,34 @@ const installableGames: InstallableGameItem[] = [
 ]
 
 let instanceList: FakeInstanceItem[] = []
+
+function beginFakeInstall(id: string, kind: 'install' | 'update') {
+  const taskId = generateId()
+  const startedAt = nowIso()
+  instanceList = instanceList.map(item => item.id !== id ? item : {
+    ...item, status: 'installing', installTaskId: taskId, installLogStatus: 'running', installPercent: 1,
+    lastError: null, lastErrorPhase: null, installLogUpdatedAt: startedAt, updatedAt: startedAt,
+    installTask: { taskId, kind, runtimeMode: 'docker', startedAt, phaseStartedAt: startedAt, overallPercent: 1,
+      phaseCode: 'prepare', phase: '准备安装环境', status: 'running', failure: null, updatedAt: startedAt,
+      attempt: 1, maxAttempts: 3, retryAt: null },
+  })
+  const steps = [
+    [3000, 23, 'download', '下载游戏文件'], [6000, 56, 'download', '下载游戏文件'],
+    [9000, 82, 'verify', '校验游戏文件'], [12000, 94, 'runtime', '准备游戏运行镜像'],
+    [15000, 100, 'complete', '安装完成'],
+  ] as const
+  for (const [delay, percent, phaseCode, phase] of steps) setTimeout(() => {
+    instanceList = instanceList.map(item => {
+      if (item.id !== id || item.installTaskId !== taskId || item.installLogStatus !== 'running') return item
+      const status = percent === 100 ? 'success' : 'running'
+      const at = nowIso()
+      return { ...item, status: status === 'success' ? 'stopped' : 'installing', installPercent: percent,
+        installLogStatus: status, installLogUpdatedAt: at, updatedAt: at,
+        installTask: { ...item.installTask!, status, overallPercent: percent, phaseCode, phase, updatedAt: at } }
+    })
+  }, delay)
+  return taskId
+}
 
 interface FakeUpdateCheckJobPayload {
   checking: boolean
@@ -175,9 +205,10 @@ export default defineFakeRoute([
       const status = target?.installLogStatus ?? (target?.status === 'installing' ? 'running' : 'unknown')
       const at = target?.installLogUpdatedAt ?? target?.updatedAt ?? nowIso()
       const progress: InstanceInstallLogPayload['progress'] = status === 'unknown' ? null : {
-        status, phaseCode: status === 'success' ? 'complete' : 'download',
-        phase: status === 'success' ? '安装完成' : '下载游戏文件',
-        percent: status === 'running' ? target?.installPercent ?? 56.25 : null,
+        ...target?.installTask,
+        status, phaseCode: target?.installTask?.phaseCode ?? (status === 'success' ? 'complete' : 'download'),
+        phase: status === 'cancelled' ? '安装已取消' : target?.installTask?.phase ?? '下载游戏文件',
+        percent: status === 'running' ? 56.25 : null,
         updatedAt: at, attempt: 1, maxAttempts: 3, retryAt: null,
         failure: status === 'failed' ? { message: target?.lastError ?? '安装未完成', advice: '查看原始日志，处理后点击“更新服务端”重试。' } : null,
         events: [
@@ -301,10 +332,11 @@ export default defineFakeRoute([
         updatedAt: createdAt,
       }
       instanceList = [...instanceList, item]
+      const taskId = beginFakeInstall(item.id, 'install')
       return {
         error: '',
         status: 1,
-        data: item,
+        data: { ...instanceList.find(row => row.id === item.id), taskId },
       }
     },
   },
@@ -360,46 +392,13 @@ export default defineFakeRoute([
     method: 'post',
     response: ({ body }) => {
       const id = body.id as string
-      const updatedAt = nowIso()
-      instanceList = instanceList.map((item) => {
-        if (item.id !== id) {
-          return item
-        }
-        return {
-          ...item,
-          status: 'installing',
-          lastCommand: '正在准备更新服务端...',
-          lastError: null,
-          lastErrorPhase: null,
-          installLogStatus: 'running',
-          installPercent: 12,
-          installLogUpdatedAt: updatedAt,
-          updatedAt,
-        }
-      })
-      setTimeout(() => {
-        instanceList = instanceList.map((item) => {
-          if (item.id !== id) {
-            return item
-          }
-          return {
-            ...item,
-            status: 'stopped',
-            lastCommand: '更新完成（fake）',
-            lastError: null,
-            lastErrorPhase: null,
-            installLogStatus: 'success',
-            installPercent: 100,
-            installLogUpdatedAt: nowIso(),
-            updatedAt: nowIso(),
-          }
-        })
-      }, 2500)
+      const taskId = beginFakeInstall(id, 'update')
       return {
         error: '',
         status: 1,
         data: {
           isSuccess: true,
+          taskId,
         },
       }
     },
@@ -424,7 +423,11 @@ export default defineFakeRoute([
     method: 'post',
     response: ({ body }) => {
       const id = body.id as string
-      instanceList = instanceList.map(item => item.id === id ? { ...item, status: 'stopped', updatedAt: nowIso() } : item)
+      instanceList = instanceList.map(item => item.id !== id ? item : {
+        ...item, status: 'stopped', updatedAt: nowIso(),
+        ...(item.installLogStatus === 'running' ? { installLogStatus: 'cancelled' as const, installPercent: null,
+          installTask: { ...item.installTask!, status: 'cancelled' as const, phase: '安装已取消' } } : {}),
+      })
       return {
         error: '',
         status: 1,

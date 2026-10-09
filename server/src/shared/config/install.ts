@@ -22,17 +22,7 @@ export function isInstallSeedEnabled(): boolean {
   return isTruthyEnv(raw) || true
 }
 
-/**
- * 安装完成时不拉取 DST 运行镜像，推迟到首次启动。
- * 默认 true；设 BSP_INSTALL_DEFER_DST_IMAGE_PULL=0 可在安装结束时仍 pull。
- */
+/** @deprecated 安装必须准备运行镜像；原延迟拉取配置已忽略。 */
 export function shouldDeferDstImagePullOnInstall(): boolean {
-  const raw = readBrandEnv('BSP_INSTALL_DEFER_DST_IMAGE_PULL')?.trim()
-  if (raw === undefined || raw === '') {
-    return true
-  }
-  if (isFalsyEnv(raw)) {
-    return false
-  }
-  return isTruthyEnv(raw) || true
+  return false
 }

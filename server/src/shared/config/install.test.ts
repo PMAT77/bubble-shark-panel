@@ -17,12 +17,12 @@ describe('install config', () => {
     assert.equal(isInstallSeedEnabled(), false)
   })
 
-  it('defers dst image pull on install by default', () => {
-    assert.equal(shouldDeferDstImagePullOnInstall(), true)
+  it('always prepares the runtime image before installation succeeds', () => {
+    assert.equal(shouldDeferDstImagePullOnInstall(), false)
   })
 
   it('pulls dst image on install when defer disabled', () => {
-    process.env.BSP_INSTALL_DEFER_DST_IMAGE_PULL = '0'
+    process.env.BSP_INSTALL_DEFER_DST_IMAGE_PULL = '1'
     assert.equal(shouldDeferDstImagePullOnInstall(), false)
   })
 })

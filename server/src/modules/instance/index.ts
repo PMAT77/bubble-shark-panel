@@ -76,8 +76,10 @@ import {
   reconcileOrphanedSteamcmdOnPanelReady,
   shouldAllowInstallDespiteUpToDate,
   startInstallJob,
+  getInstallTaskId,
+  projectInstanceInstallTask,
 } from './install-service'
-import { prepareInstallPathForRuntime, prepareInstallPathForSteamcmd } from './install-path'
+import { prepareInstallPathForRuntime } from './install-path'
 import { registerInstanceScheduledOps } from './scheduled-entry'
 import { buildInternalInstanceRequest, registerPluginInstanceOps } from './instance-plugin-ops'
 import { startInstanceExitWatch } from './exit-watch'
@@ -89,7 +91,6 @@ import { registerMigrationExportRoutes } from './migration-export-routes'
 import { registerInstanceRoutes } from './instance-routes'
 import { getPlayerSummaries, getRoomSummaries, getWorldSummaries, toInstanceSummaryItem } from './dst-summary'
 import type { InstanceUpdateCheckJobStatus } from './update-check'
-import { readLocalBuildId } from '../../shared/steam-update/build-id'
 import {
   enqueueInstanceUpdateCheck,
   getInstanceUpdateCheckJobStatus,
@@ -278,7 +279,7 @@ async function handleListInstances(
   if (resolved.error || !resolved.instances) {
     return resolved.error ?? businessError('无法确定可见实例范围', request)
   }
-  return success(resolved.instances, request)
+  return success(resolved.instances.map(projectInstanceInstallTask), request)
 }
 
 /** 单次遍历统计各状态实例数（全量口径，供统计卡使用） */
@@ -487,10 +488,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     const steamcmdCredentials = getSteamcmdLoginCredentials()
     const steamcmdConfig = await getSystemSteamcmdConfig()
     const steamcmdCommand = steamcmdConfig?.steamcmdPath?.trim() || (process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd')
-    const runtimeReady = await checkContainerInstallReady()
-    if (!runtimeReady.ok) {
-      return businessError(runtimeReady.message ?? '游戏运行时未就绪', request)
-    }
     const instanceId = randomUUID()
     const installPath = manualInstallPath || await getDefaultSteamInstallPath(gameCode, instanceId)
     const pathPolicy = loadServerConfig()
@@ -504,10 +501,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     const node = await getServerNodeById(nodeId)
     if (!node) {
       return businessError('节点不存在', request)
-    }
-    const ensureDirError = prepareInstallPathForSteamcmd(installPath)
-    if (ensureDirError) {
-      return businessError(`安装目录创建失败: ${ensureDirError}`, request)
     }
     if (!manualInstallPath) {
       app.log.info({
@@ -533,12 +526,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       gamePort,
       steamcmdCommand,
     }, '实例已创建，后台开始执行 SteamCMD 安装')
-    // 内存检查必须在写库之前：先创建记录再失败会留下一条 pending_install 的孤儿实例，
-    // 它没有对应的安装任务，也不在 reconcileStaleInstallingInstances 的处理范围内（只认 installing）。
-    const memoryPressure = getInstallHostMemoryPressure()
-    if (memoryPressure) {
-      return hostMemoryPressureError(memoryPressure, request)
-    }
     const instance = await createGameInstance({
       id: instanceId,
       nodeId,
@@ -554,6 +541,9 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       lastCommand: '等待安装任务启动',
       lastError: null,
     })
+    // 先授权再启动，后台任务即使很快结束，创建者也能看到实例及失败原因。
+    try { await addUserInstanceGrants(creatorUserId, [instance.id], creatorUserId) }
+    catch (error) { await deleteGameInstanceById(instance.id); throw error }
     const started = startInstallJob(app, {
       instanceId,
       appId: gameCode,
@@ -576,15 +566,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       }
       return businessError('宿主机内存不足，无法启动安装', request)
     }
-    /**
-     * 创建者自动获得这个实例的授权。
-     *
-     * 少了这一步，新建的实例**连创建它的人都看不到**——实例授权是唯一的可见性判据，
-     * 它不会因为「这个实例是我建的」而自动成立。放在安装任务起来之后：
-     * 上面几个失败分支都会回收实例记录，授权也跟着没必要存在。
-     */
-    await addUserInstanceGrants(creatorUserId, [instance.id], creatorUserId)
-    return success(instance, request)
+    return success({ ...instance, installTaskId: getInstallTaskId(instance.id), taskId: getInstallTaskId(instance.id) }, request)
   })
 
   app.post('/app/instance/check-updates', async (request): Promise<ApiSuccessResponse<InstanceUpdateCheckJobStatus> | ApiErrorResponse> => {
@@ -641,7 +623,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     }, request)
   })
 
-  app.post('/app/instance/update', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> => {
+  app.post('/app/instance/update', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> => {
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -654,10 +636,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (authorized.error) {
       return authorized.error
     }
-    const runtimeError = await requireContainerRuntime(request)
-    if (runtimeError) {
-      return runtimeError
-    }
     const current = await getGameInstanceById(id)
     if (!current) {
       return businessError('实例不存在', request)
@@ -668,7 +646,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (current.status === 'running') {
       return businessError('请先停止实例后再更新服务端', request)
     }
-    if (current.status === 'pending_install' || current.status === 'installing') {
+    if (current.status === 'pending_install' || current.status === 'installing' || isInstallJobActive(id)) {
       return businessError('实例正在安装中，请稍后再试', request)
     }
     if (isInstallJobActive(id)) {
@@ -680,10 +658,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (installPathError) {
       return businessError(installPathError, request)
     }
-    const ensureDirError = prepareInstallPathForSteamcmd(installPath)
-    if (ensureDirError) {
-      return businessError(`安装目录创建失败: ${ensureDirError}`, request)
-    }
     const steamcmdCredentials = getSteamcmdLoginCredentials()
     const steamcmdConfig = await getSystemSteamcmdConfig()
     const steamcmdCommand = steamcmdConfig?.steamcmdPath?.trim() || (process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd')
@@ -693,7 +667,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       updateAvailable: current.updateAvailable,
       lastErrorPhase: current.lastErrorPhase,
     }, installPath, body.data.force)
-    const localBuildId = readLocalBuildId(installPath, current.gameCode)
     if (!forceReinstall) {
       const checked = await refreshInstanceUpdateStatus(current, {
         steamcmdCommand,
@@ -714,27 +687,8 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         )
       }
     }
-    const memoryPressure = getInstallHostMemoryPressure()
-    if (memoryPressure) {
-      return hostMemoryPressureError(memoryPressure, request)
-    }
-    // 更新前自动备份存档（系统设置可关闭；失败仅告警，不阻断更新）
+    // 备份在同一后台任务和文件活动上下文中执行，失败必须停止更新。
     const backupSettings = await getSystemBackupSettings()
-    if (backupSettings.autoBackupBeforeUpdate && fs.existsSync(path.join(installPath, 'klei-storage'))) {
-      const backupResult = await createInstanceBackup({
-        app,
-        instanceId: id,
-        kind: 'pre_update',
-        note: `更新服务端前自动备份（Build ${localBuildId ?? '未知'}）`,
-        saveBeforeArchive: false,
-      })
-      if (backupResult.ok) {
-        app.log.info({ instanceId: id, backupId: backupResult.backup?.id }, '更新前自动备份完成')
-      }
-      else {
-        app.log.warn({ instanceId: id, message: backupResult.message }, '更新前自动备份失败，继续执行更新')
-      }
-    }
     // 须在 startInstallJob 之前写入 installing：本地复制可在数百毫秒内完成，
     // 若后置写入会覆盖 finalize 已设置的 stopped，重启后面板会误判为安装中断。
     await updateGameInstanceRuntime(id, {
@@ -746,6 +700,8 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     })
     const started = startInstallJob(app, {
       instanceId: id,
+      kind: current.lastErrorPhase === 'install' || current.installLogStatus === 'cancelled' ? 'install' : 'update',
+      backupBeforeUpdate: backupSettings.autoBackupBeforeUpdate && fs.existsSync(path.join(installPath, 'klei-storage')),
       appId: current.gameCode,
       instanceName: current.name,
       gamePort: current.gamePort,
@@ -779,7 +735,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       installPath,
       forceReinstall,
     }, '实例开始执行 SteamCMD 手动更新')
-    return success({ isSuccess: true }, request)
+    return success({ isSuccess: true, taskId: getInstallTaskId(id) }, request)
   })
 
   app.post('/app/instance/allocate-ports', async (request): Promise<ApiSuccessResponse<{ gamePort: number }> | ApiErrorResponse> => {
@@ -1121,26 +1077,14 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (current.status === 'stopped') {
       return success({ isSuccess: true }, request)
     }
-    const runtimeError = await requireContainerRuntime(request)
-    if (runtimeError) {
-      return runtimeError
-    }
-    if (current.status === 'pending_install' || current.status === 'installing') {
-      await cancelInstallJob(id)
-      // cancelInstallJob 内部按「安装意外中断」语义写成 error，但用户是主动停止，
-      // 不该看到异常态：这里按停止结果落状态。
-      await updateGameInstanceRuntime(id, {
-        status: 'stopped',
-        containerId: null,
-        runtimePid: null,
-        runtimeStartedAt: null,
-        installLogStatus: null,
-        installPercent: null,
-        lastError: null,
-      })
+    if (current.status === 'pending_install' || current.status === 'installing' || isInstallJobActive(id)) {
+      try { await cancelInstallJob(id) }
+      catch (error) { return businessError(error instanceof Error ? error.message : '安装任务尚未停止，请稍后重试', request) }
       app.log.info({ instanceId: id }, '实例安装已取消')
       return success({ isSuccess: true }, request)
     }
+    const runtimeError = await requireContainerRuntime(request)
+    if (runtimeError) return runtimeError
     try {
       app.log.info({ instanceId: id }, '实例停止命令已发送')
       await stopInstanceContainer(id)
@@ -1297,12 +1241,13 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (current.nodeId !== LOCAL_NODE_ID) {
       return businessError('当前仅支持本地节点执行实例命令', request)
     }
+    if (current.status === 'pending_install' || current.status === 'installing' || isInstallJobActive(id)) {
+      try { await cancelInstallJob(id) }
+      catch (error) { return businessError(error instanceof Error ? error.message : '安装任务清理失败，请稍后再次停止', request) }
+    }
     const runtimeError = await requireContainerRuntime(request)
     if (runtimeError) {
       return runtimeError
-    }
-    if (current.status === 'pending_install' || current.status === 'installing' || isInstallJobActive(id)) {
-      await cancelInstallJob(id)
     }
     if (current.status === 'running' || current.containerId) {
       try {

@@ -1,4 +1,5 @@
 import { readBrandEnv } from '../../../../shared/brand-env'
+import { abortable } from '../../shared/abort'
 let chain: Promise<void> = Promise.resolve()
 let inFlight = 0
 
@@ -28,6 +29,7 @@ export function isSteamcmdAppUpdateQueued(): boolean {
 }
 
 export interface SteamcmdAppUpdateLockOptions {
+  signal?: AbortSignal
   /** 当前任务需等待其他 app_update 完成时调用（用于更新排队 UI） */
   onQueued?: () => void | Promise<void>
 }
@@ -46,21 +48,26 @@ export async function withSteamcmdAppUpdateLock<T>(
     release = resolve
   })
   inFlight++
+  let started = false
   try {
     if (inFlight > 1 && options?.onQueued) {
       await options.onQueued()
     }
-    await previous
+    await abortable(previous, options?.signal)
+    options?.signal?.throwIfAborted()
+    started = true
     return await fn()
   }
   finally {
-    // 通知失败也必须等前序任务结束，不能提前放行下一项。
-    await previous
     inFlight--
-    const cooldownMs = resolveInterJobCooldownMs()
-    if (cooldownMs > 0) {
-      await sleep(cooldownMs)
+    if (started) {
+      const cooldownMs = resolveInterJobCooldownMs()
+      if (cooldownMs > 0) await sleep(cooldownMs)
+      release()
     }
-    release()
+    else {
+      // 取消立即返回，但链中的占位仍等前序完成，后续任务不能越过正在运行的任务。
+      void previous.then(release)
+    }
   }
 }

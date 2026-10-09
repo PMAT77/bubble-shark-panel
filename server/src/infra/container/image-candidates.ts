@@ -1,5 +1,43 @@
 import type DockerClient from 'dockerode'
 import { parseImageRef } from './image-ref'
+import { abortable, abortableDelay } from '../../shared/abort'
+
+export interface ImagePreparationOptions {
+  signal?: AbortSignal
+  timeoutMs?: number
+  onProgress?: (event: unknown) => void
+}
+const sharedPulls = new Map<string, { controller: AbortController, promise: Promise<unknown>, listeners: Set<(event: unknown) => void> }>()
+
+/** 每位等待者独立取消；最后一位离开时才停止拉取流。 */
+export async function shareImagePreparation<T>(key: string, options: ImagePreparationOptions, run: (options: ImagePreparationOptions) => Promise<T>): Promise<T> {
+  options.signal?.throwIfAborted()
+  let entry = sharedPulls.get(key)
+  if (!entry) {
+    const controller = new AbortController()
+    const listeners = new Set<(event: unknown) => void>()
+    const timer = setTimeout(() => controller.abort(new Error('镜像准备超过等待时间')), options.timeoutMs ?? 60 * 60 * 1000)
+    timer.unref()
+    const promise = Promise.resolve().then(() => abortable(run({ signal: controller.signal, onProgress: event => {
+      for (const listener of listeners) listener(event)
+    } }), controller.signal)).finally(() => {
+      clearTimeout(timer)
+      if (sharedPulls.get(key)?.controller === controller) sharedPulls.delete(key)
+    })
+    entry = { controller, promise, listeners }
+    sharedPulls.set(key, entry)
+  }
+  const listener = options.onProgress ?? (() => {})
+  entry.listeners.add(listener)
+  try { return await abortable(entry.promise as Promise<T>, options.signal) }
+  finally {
+    entry.listeners.delete(listener)
+    if (!entry.listeners.size) {
+      entry.controller.abort(new Error('没有等待该镜像的任务'))
+      if (sharedPulls.get(key) === entry) sharedPulls.delete(key)
+    }
+  }
+}
 
 /**
  * 通用镜像候选拉取：
@@ -127,26 +165,37 @@ export function pullImageOnce(
   docker: DockerClient,
   image: string,
   onProgress?: (event: unknown) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    signal?.throwIfAborted()
+    let activeStream: NodeJS.ReadableStream | undefined
+    const aborted = () => {
+      ;(activeStream as NodeJS.ReadableStream & { destroy?: () => void })?.destroy?.()
+      reject(signal?.reason)
+    }
+    const finish = (error?: Error | null) => {
+      signal?.removeEventListener('abort', aborted)
+      if (error) reject(error)
+      else resolve()
+    }
+    signal?.addEventListener('abort', aborted, { once: true })
     docker.pull(image, (pullError: Error | null, stream: NodeJS.ReadableStream) => {
       if (pullError) {
-        reject(pullError)
+        finish(pullError)
         return
       }
+      activeStream = stream
+      if (signal?.aborted) { aborted(); signal.removeEventListener('abort', aborted); return }
       docker.modem.followProgress(stream, (progressError: Error | null) => {
-        if (progressError) {
-          reject(progressError)
-        }
-        else {
-          resolve()
-        }
+        finish(progressError)
       }, onProgress)
     })
   })
 }
 
 export interface PullCandidatesOptions {
+  signal?: AbortSignal
   maxAttempts?: number
   retryBaseMs?: number
   sleep?: (ms: number) => Promise<void>
@@ -170,6 +219,7 @@ export async function pullImageWithCandidates(
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
   for (const candidate of candidates) {
+    options.signal?.throwIfAborted()
     if (await isImagePresentByRef(docker, candidate)) {
       await tagImageAlias(docker, candidate, targetRef)
       return { ok: true, image: candidate }
@@ -182,14 +232,17 @@ export async function pullImageWithCandidates(
     tried.push(candidate)
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        await pullImageOnce(docker, candidate, options.onProgress)
+        await pullImageOnce(docker, candidate, options.onProgress, options.signal)
         await tagImageAlias(docker, candidate, targetRef)
         return { ok: true, image: candidate }
       }
       catch (error) {
+        options.signal?.throwIfAborted()
         lastError = error instanceof Error ? error.message : String(error)
+        if (!/timeout|timed out|deadline|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|ENOTFOUND|network|connection|unexpected EOF|HTTP.*(?:429|50[0234])|too many requests|temporar(?:y|ily)|service unavailable/i.test(lastError)) break
         if (attempt < maxAttempts) {
-          await sleep(retryBaseMs * attempt)
+          if (options.signal) await abortableDelay(retryBaseMs * attempt, options.signal)
+          else await sleep(retryBaseMs * attempt)
         }
       }
     }

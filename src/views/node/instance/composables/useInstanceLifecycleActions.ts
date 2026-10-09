@@ -37,6 +37,7 @@ export interface UseInstanceLifecycleActionsOptions {
   onBeforeUpdate?: () => void
   /** 更新请求受理后的钩子（列表页打开安装日志弹窗） */
   onUpdateAccepted?: (row: InstanceItem) => Promise<void> | void
+  onInstallTaskAccepted?: (row: InstanceItem, taskId: string) => void
 }
 
 /**
@@ -349,7 +350,8 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
     const operationKey = `update:${row.id}`
     actionLoadingIds.value = new Set([...actionLoadingIds.value, operationKey])
     try {
-      await apiInstance.updateInstance(row.id, { force })
+      const accepted = await apiInstance.updateInstance(row.id, { force })
+      if (accepted.data.taskId) options.onInstallTaskAccepted?.(row, accepted.data.taskId)
       await options.refresh()
       if (!batch) {
         faToast.success('已开始更新服务端，请查看安装日志了解进度')
@@ -383,7 +385,7 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
       },
       cancel_install: {
         title: '确认取消安装',
-        content: `将中断「${row.name}」的安装，实例将标记为异常。可查看安装日志后删除并重新创建。`,
+          content: `将停止「${row.name}」的安装任务并等待清理，已下载文件和存档会保留。取消后可重试安装。`,
         positiveText: '取消安装',
         type: 'warning' as const,
       },

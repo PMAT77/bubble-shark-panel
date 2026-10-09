@@ -3,6 +3,7 @@ import path from 'node:path'
 import { instanceInstallProgressSchema, type InstanceInstallProgress } from '../../../../shared/contracts/instance'
 import { STEAMCMD_FAILURE_LINE } from '../../infra/container/steamcmd-errors'
 import { formatInstallLogContent, INSTALL_PHASE_LABELS, normalizeInstallLogLine, parseInstallLogPhase, parseSteamcmdProgressPercent, summarizeInstallFailure } from './log-format'
+import { OverallInstallProgress, type InstallWork } from './overall-progress'
 
 export const INSTALL_LOG_TAIL_BYTES = 64 * 1024
 export const INSTALL_LOG_TAIL_LINES = 500
@@ -75,6 +76,7 @@ export class InstanceInstallLogWriter {
   private readonly snapshotPath: string
   private timer?: ReturnType<typeof setTimeout>
   private lastSavedAt = 0
+  private overall?: OverallInstallProgress
   progress: InstanceInstallProgress
 
   constructor(dir: string, id: string) {
@@ -89,10 +91,15 @@ export class InstanceInstallLogWriter {
       updatedAt: null, attempt: 1, maxAttempts: 1, retryAt: null, status: 'running', failure: null, events: [] }
   }
 
-  clear(maxAttempts = 1) {
+  clear(maxAttempts = 1, task?: { taskId: string, kind: 'install' | 'update', runtimeMode: 'docker' | 'native', backup: boolean }) {
     this.dispose()
     this.progress = this.initialProgress()
     this.progress.maxAttempts = maxAttempts
+    if (task) {
+      this.overall = new OverallInstallProgress(task.runtimeMode, task.backup)
+      Object.assign(this.progress, { taskId: task.taskId, kind: task.kind, runtimeMode: task.runtimeMode,
+        startedAt: new Date().toISOString(), phaseStartedAt: new Date().toISOString(), overallPercent: 1, timings: {} })
+    }
     fs.writeFileSync(this.filePath, '', 'utf8')
     this.event('安装任务已开始')
   }
@@ -115,13 +122,20 @@ export class InstanceInstallLogWriter {
       }
     }
     this.scheduleSave()
+    this.tick()
   }
 
   setPhase(code: InstanceInstallProgress['phaseCode']) {
     if (this.progress.status !== 'running' || this.progress.phaseCode === code) return
+    if (this.progress.phaseStartedAt) {
+      const timings = this.progress.timings ??= {}
+      timings[this.progress.phaseCode] = (timings[this.progress.phaseCode] ?? 0) + Math.max(0, Date.now() - Date.parse(this.progress.phaseStartedAt))
+    }
+    this.progress.phaseStartedAt = new Date().toISOString()
     this.progress.phaseCode = code
     this.progress.phase = INSTALL_PHASE_LABELS[code]
     this.progress.percent = null
+    this.overall?.observe(code, null)
     if (code !== 'retry') this.progress.retryAt = null
     this.event(this.progress.phase)
   }
@@ -131,8 +145,33 @@ export class InstanceInstallLogWriter {
     this.progress.attempt = attempt
     this.progress.maxAttempts = maxAttempts
     this.progress.percent = null
+    this.overall?.beginAttempt()
     this.setPhase('connect')
     this.event(`第 ${attempt}/${maxAttempts} 次尝试，${account ? '使用 Steam 账号连接' : '匿名连接 Steam'}`)
+  }
+
+  completeWork(work: InstallWork) {
+    if (this.progress.status !== 'running') return
+    if (this.overall) this.progress.overallPercent = this.overall.complete(work)
+    this.scheduleSave()
+  }
+
+  setMeasuredPercent(percent: number | null) {
+    if (this.progress.status !== 'running') return
+    this.progress.percent = percent === null ? null : Math.max(0, Math.min(100, percent))
+    this.tick()
+  }
+
+  tick() {
+    if (!this.overall || this.progress.status !== 'running') return
+    this.progress.overallPercent = this.overall.observe(this.progress.phaseCode, this.progress.percent)
+    this.scheduleSave()
+  }
+
+  recordBytes(completed: number, total: number) {
+    if (this.progress.status !== 'running') return
+    const bytes = this.progress.bytes ??= {}
+    bytes[this.progress.phaseCode] = { completed, total }
   }
 
   waitForRetry(attempt: number, maxAttempts: number, delayMs: number) {
@@ -154,14 +193,19 @@ export class InstanceInstallLogWriter {
     this.flush()
   }
 
-  finish(status: 'success' | 'failed', message: string) {
+  finish(status: 'success' | 'failed' | 'cancelled', message: string) {
     if (this.progress.status !== 'running') return
+    if (this.progress.phaseStartedAt) {
+      const timings = this.progress.timings ??= {}
+      timings[this.progress.phaseCode] = (timings[this.progress.phaseCode] ?? 0) + Math.max(0, Date.now() - Date.parse(this.progress.phaseStartedAt))
+    }
     if (status === 'success') {
       this.progress.phaseCode = 'complete'
       this.progress.phase = INSTALL_PHASE_LABELS.complete
+      if (this.overall || this.progress.taskId) this.progress.overallPercent = 100
     }
-    else this.progress.failure = summarizeInstallFailure(message)
-    this.event(status === 'success' ? '安装完成，可以启动实例。' : this.progress.failure!.message, status === 'success' ? 'info' : 'error')
+    else if (status === 'failed') this.progress.failure = { ...summarizeInstallFailure(message), phase: this.progress.phaseCode }
+    this.event(status === 'success' ? '安装完成，可以启动实例。' : status === 'cancelled' ? '安装已取消。' : this.progress.failure!.message, status === 'failed' ? 'error' : 'info')
     this.progress.status = status
     this.progress.percent = null
     this.progress.retryAt = null

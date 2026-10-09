@@ -9,6 +9,7 @@ import { formatSteamcmdTimeoutForLog } from '../../shared/config/steamcmd'
 import { resolveSteamcmdContainerMemoryLimits } from './steamcmd-container-resources'
 import { SteamcmdOutput } from './steamcmd-output'
 import { collectDockerSteamcmdDiagnostics, steamcmdLogDirectory } from './steamcmd-log-diagnostics'
+import { abortable } from '../../shared/abort'
 
 export const STEAMCMD_LABEL_MANAGED = 'bsp.managed'
 export const STEAMCMD_LABEL_MANAGED_VALUE = 'steamcmd-install'
@@ -53,7 +54,7 @@ async function safeKillContainer(container: Docker.Container): Promise<void> {
   }
 }
 
-export async function forceRemoveSteamcmdContainer(container: Docker.Container): Promise<void> {
+export async function forceRemoveSteamcmdContainer(container: Docker.Container): Promise<boolean> {
   try {
     await safeKillContainer(container)
   }
@@ -62,9 +63,10 @@ export async function forceRemoveSteamcmdContainer(container: Docker.Container):
   }
   try {
     await container.remove({ force: true })
+    return true
   }
-  catch {
-    // already removed
+  catch (error) {
+    return (error as { statusCode?: number }).statusCode === 404
   }
 }
 
@@ -198,21 +200,33 @@ export function clearSteamcmdJobCancelFlag(jobId: string): void {
   cancelledSteamcmdInstallKeys.delete(jobId)
 }
 
-export async function cancelSteamcmdInstallContainer(cancelKey: string): Promise<void> {
+export async function cancelSteamcmdInstallContainer(cancelKey: string, verifyOrphans = false): Promise<void> {
   cancelledSteamcmdInstallKeys.add(cancelKey)
-  try {
     const tracked = activeSteamcmdInstallContainers.get(cancelKey)
     if (tracked) {
-      await safeKillContainer(tracked)
+      const removed = await abortable(forceRemoveSteamcmdContainer(tracked), AbortSignal.timeout(15_000))
+      if (!removed) throw new Error('无法确认 Docker 安装任务已停止，请恢复 Docker 连接后再次停止')
+      activeSteamcmdInstallContainers.delete(cancelKey)
     }
-    if (!tracked) await cleanupOrphanedSteamcmdInstallContainers(cancelKey)
-  }
-  catch {
-    // cleanup best-effort; must not crash panel
-  }
+    if (!tracked && verifyOrphans) {
+      const docker = resolveDocker()
+      const containers = await abortable(listManagedContainers(docker, { all: true, filters: {
+        label: [`${STEAMCMD_LABEL_MANAGED}=${STEAMCMD_LABEL_MANAGED_VALUE}`, `${STEAMCMD_LABEL_JOB}=${cancelKey}`],
+      } }), AbortSignal.timeout(15_000))
+      for (const item of containers) {
+        const container = docker.getContainer(item.Id)
+        activeSteamcmdInstallContainers.set(cancelKey, container)
+        const removed = await abortable(forceRemoveSteamcmdContainer(container), AbortSignal.timeout(15_000))
+        if (!removed) throw new Error('无法确认 Docker 安装任务已停止，请恢复 Docker 连接后再次停止')
+        activeSteamcmdInstallContainers.delete(cancelKey)
+      }
+    }
 }
 
+export function hasUnconfirmedSteamcmdJob(jobId: string): boolean { return activeSteamcmdInstallContainers.has(jobId) }
+
 export interface SteamcmdJobSpec {
+  signal?: AbortSignal
   image: string
   cmd: string[]
   hostBinds?: string[]
@@ -250,6 +264,7 @@ async function followContainerLogs(
   try {
     await new Promise<void>((resolve, reject) => {
       stream.on('data', (chunk: Buffer) => {
+        try {
         const decoded = decodeDockerMultiplexLogChunk(frameCarry, chunk)
         frameCarry = decoded.carry
         if (!acceptChunk(decoded.text)) {
@@ -265,6 +280,8 @@ async function followContainerLogs(
             pushLine(text)
           }
         }
+        }
+        catch (error) { reject(error) }
       })
       stream.on('end', () => resolve())
       stream.on('error', reject)
@@ -282,6 +299,7 @@ async function followContainerLogs(
 }
 
 export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJobResult> {
+  spec.signal?.throwIfAborted()
   const docker = resolveDocker()
   const collected = new SteamcmdOutput(spec.kind === 'app-info')
   const steamcmdConfig = loadSteamcmdRuntimeConfig()
@@ -349,8 +367,15 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
     return { ok: false, exitCode: -1, output: 'SteamCMD 任务已取消（创建前被取消）', cancelled: true }
   }
 
-  const container = await docker.createContainer({
-    name: buildSteamcmdInstallContainerName(jobId),
+  const containerName = buildSteamcmdInstallContainerName(jobId)
+  spec.signal?.throwIfAborted()
+  // 创建请求失败时不能证明 Docker 未创建资源，保留可按名称清理的占用记录。
+  const provisional = containerName ? docker.getContainer(containerName) : undefined
+  if (jobId && provisional) activeSteamcmdInstallContainers.set(jobId, provisional)
+  let container: Docker.Container
+  try {
+  container = await docker.createContainer({
+    name: containerName,
     Image: spec.image,
     Cmd: spec.cmd,
     User: spec.user,
@@ -361,7 +386,13 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
     HostConfig: hostConfig,
     AttachStdout: true,
     AttachStderr: true,
-  })
+    abortSignal: spec.signal ? AbortSignal.any([spec.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+  } as Docker.ContainerCreateOptions)
+  }
+  catch (error) {
+    if (jobId && provisional) activeSteamcmdInstallContainers.set(jobId, provisional)
+    throw error
+  }
 
   if (jobId) {
     activeSteamcmdInstallContainers.set(jobId, container)
@@ -373,27 +404,32 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
   let timeout: ReturnType<typeof setTimeout> | undefined
   let started = false
   let taskFailed = false
-  const isCancelled = () => Boolean(jobId && cancelledSteamcmdInstallKeys.has(jobId))
+  const isCancelled = () => Boolean(spec.signal?.aborted || (jobId && cancelledSteamcmdInstallKeys.has(jobId)))
+  const execution = new AbortController()
+  const cancel = () => execution.abort(new Error('SteamCMD 任务已取消'))
+  spec.signal?.addEventListener('abort', cancel, { once: true })
+  if (spec.signal?.aborted) cancel()
 
   try {
     if (!isCancelled()) {
-      await container.start()
+      await abortable(container.start(), AbortSignal.any([execution.signal, AbortSignal.timeout(15_000)]))
       started = true
       pushLine('SteamCMD 容器已启动')
       if (isCancelled()) await safeKillContainer(container)
       timeout = setTimeout(() => {
         timedOut = true
+        execution.abort(new Error('SteamCMD 任务超时'))
         void safeKillContainer(container).catch(() => {})
       }, spec.timeoutMs)
       const waitPromise = container.wait().then(result => result.StatusCode ?? -1)
       const logsPromise = followContainerLogs(container, pushLine, text => collected.acceptChunk(text))
       try {
-        const [code] = await Promise.all([waitPromise, logsPromise])
+        const [code] = await abortable(Promise.all([waitPromise, logsPromise]), execution.signal)
         exitCode = code
       }
       catch (error) {
-        await safeKillContainer(container).catch(() => {})
-        const [waitResult] = await Promise.allSettled([waitPromise, logsPromise])
+        await abortable(safeKillContainer(container), AbortSignal.timeout(15_000)).catch(() => {})
+        const [waitResult] = await Promise.allSettled([abortable(waitPromise, AbortSignal.timeout(15_000)), abortable(logsPromise, AbortSignal.timeout(15_000))])
         if (waitResult.status === 'fulfilled') exitCode = waitResult.value
         throw error
       }
@@ -406,10 +442,11 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
   }
   finally {
     clearTimeout(timeout)
+    spec.signal?.removeEventListener('abort', cancel)
     try {
       if (started) {
         try {
-          const inspect = await container.inspect()
+          const inspect = await abortable(container.inspect(), AbortSignal.timeout(15_000))
           oomKilled = inspect.State.OOMKilled
           if (oomKilled) pushLine(`${STEAMCMD_OOM_MARKER}: Docker 确认容器被 OOM 终止`)
         }
@@ -420,23 +457,25 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
           pushLine(`${STEAMCMD_TIMEOUT_MARKER}: SteamCMD 任务超过 ${formatSteamcmdTimeoutForLog(spec.timeoutMs)} 上限，已终止容器；已下载内容保留，重试将断点续传`)
         }
         if (kind !== 'app-info' && (exitCode !== 0 || timedOut || oomKilled || taskFailed) && !isCancelled()) {
-          await collectDockerSteamcmdDiagnostics(container, logDirectory, line => {
+          await abortable(collectDockerSteamcmdDiagnostics(container, logDirectory, line => {
             const text = redactSteamcmdLogLine(line, secrets)
             if (text) {
               collected.pushDiagnostic(text)
               spec.onLogLine?.(text.startsWith('[SteamCMD 诊断]') ? text : `[SteamCMD 诊断] ${text}`)
             }
-          })
+          }), AbortSignal.timeout(15_000)).catch(() => {})
         }
       }
     }
     finally {
-      if (jobId) {
-        activeSteamcmdInstallContainers.delete(jobId)
+      const removed = await abortable(forceRemoveSteamcmdContainer(container), AbortSignal.timeout(15_000)).catch(() => false)
+      if (!removed) {
+        taskFailed = true
+        collected.push('无法确认 Docker 安装任务已停止，请恢复 Docker 连接后再次停止')
       }
-      await forceRemoveSteamcmdContainer(container)
+      if (jobId && removed) activeSteamcmdInstallContainers.delete(jobId)
       if (jobId) {
-        await cleanupOrphanedSteamcmdInstallContainers(jobId)
+        await abortable(cleanupOrphanedSteamcmdInstallContainers(jobId), AbortSignal.timeout(15_000)).catch(() => {})
       }
       else if (kind === 'app-info') {
         await cleanupStoppedSteamcmdAppInfoContainers()
@@ -444,7 +483,7 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
     }
   }
 
-  const wasCancelled = Boolean(jobId && cancelledSteamcmdInstallKeys.has(jobId))
+  const wasCancelled = isCancelled()
   if (wasCancelled && jobId) {
     cancelledSteamcmdInstallKeys.delete(jobId)
   }

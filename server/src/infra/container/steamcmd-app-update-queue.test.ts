@@ -6,6 +6,22 @@ process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
 const { isSteamcmdAppUpdateQueued, withSteamcmdAppUpdateLock } = await import('./steamcmd-app-update-queue.ts')
 
 describe('withSteamcmdAppUpdateLock', () => {
+  it('cancels a queued job immediately without releasing the active job', async () => {
+    let release!: () => void
+    const first = withSteamcmdAppUpdateLock('active', () => new Promise<void>(resolve => { release = resolve }))
+    await Promise.resolve()
+    const controller = new AbortController()
+    const cancelled = withSteamcmdAppUpdateLock('cancelled', async () => assert.fail('cancelled body ran'), { signal: controller.signal })
+    const rejection = assert.rejects(cancelled, /cancel queued/)
+    controller.abort(new Error('cancel queued'))
+    await rejection
+    let lastRan = false
+    const last = withSteamcmdAppUpdateLock('last', async () => { lastRan = true })
+    await Promise.resolve()
+    assert.equal(lastRan, false)
+    release()
+    await Promise.all([first, last])
+  })
   it('invokes onQueued when a second job must wait for the lock', async () => {
     let queued = 0
     const first = withSteamcmdAppUpdateLock('1', async () => {

@@ -53,6 +53,7 @@ export const gameInstances = sqliteTable('game_instances', {
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
   unexpectedExitAt: text('unexpected_exit_at'),
   installLogStatus: text('install_log_status'),
+  installTaskId: text('install_task_id'),
   installPercent: integer('install_percent'),
   installLogUpdatedAt: text('install_log_updated_at'),
   updateAvailable: integer('update_available').notNull().default(0),

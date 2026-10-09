@@ -29,6 +29,7 @@ export {
   runSteamcmdAppUpdateInContainer,
   runSteamcmdAppInfoInContainer,
   cancelSteamcmdInstallContainer,
+  hasUnconfirmedSteamcmdJob,
   cleanupOrphanedSteamcmdInstallContainers,
   cleanupAllRunningSteamcmdInstallContainers,
   isSteamcmdJobRunning,

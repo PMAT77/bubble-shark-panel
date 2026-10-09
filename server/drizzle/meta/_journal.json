@@ -211,6 +211,13 @@
       "when": 1791285829418,
       "tag": "0029_rainy_orphan",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1791539213451,
+      "tag": "0030_previous_sunfire",
+      "breakpoints": true
     }
   ]
 }

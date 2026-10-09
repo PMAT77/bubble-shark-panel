@@ -12,6 +12,7 @@ import { registerInstanceModule } from './index'
 import {
   addUserInstanceGrants, closeDatabase, createGameInstance, findUserByAccount,
   getGameInstanceById, initDatabase, updateGameInstanceRuntime, updateUserMustChangePassword,
+  getSystemBackupSettings, saveSystemBackupSettings,
 } from '../../shared/db'
 import { createMember, createRole } from '../system/rbac-service'
 import { clearRemoteBuildCache, fetchRemoteBuildId, REMOTE_BUILD_CACHE_MS } from '../../shared/steam-update/build-id'
@@ -19,10 +20,11 @@ import { resolveDockerStatus } from '../../infra/docker'
 import { runSteamcmdAppInfoInContainer } from '../../infra/container/steamcmd-runner'
 import { runSteamcmdJob } from '../../infra/container/steamcmd-job'
 import { checkInstancesForUpdates, getInstanceUpdateCheckJobStatus, refreshInstanceUpdateStatusAfterInstall, refreshInstanceUpdateStatusAfterSeed } from './update-check'
-import { isInstallJobActive, reconcileStaleInstallingInstances } from './install-service'
+import { getInstanceInstallProgress, isInstallJobActive, reconcileStaleInstallingInstances, startInstallJob } from './install-service'
 import { findInstallSeedDonor } from './install-seed'
 import { cancelInstallJob, getInstallLogsDirPath } from './install-service'
 import { InstanceInstallLogWriter, readInstallProgress } from '../../shared/instance-install/log-store'
+import { ensureDstLayout } from '../../infra/game-adapter/dst/cluster-config'
 import { redactSteamcmdLogLine } from '../../infra/container/steamcmd-errors'
 
 const app = Fastify({ logger: false })
@@ -112,6 +114,7 @@ before(async () => {
   mock.method(Docker.prototype, 'getImage', () => ({ inspect: async () => ({ Id: 'fixture' }) }))
   mock.method(os, 'freemem', () => 16 * 1024 ** 3)
   mock.method(fs, 'chownSync', () => {})
+  mock.method(fs.promises, 'chown', async () => {})
   mock.method(Docker.prototype, 'createContainer', async (options: Docker.ContainerCreateOptions) => {
     const cmd = options.Cmd ?? []
     const query = cmd.includes('+app_info_print')
@@ -239,6 +242,7 @@ describe('game update regression', () => {
     assert.equal(fs.readFileSync(manifest, 'utf8'), localMetadata('25540104'))
     assert.equal((await getGameInstanceById(current.id))?.updateAvailable, true)
     await updateGameInstanceRuntime(current.id, { status: 'installing' })
+    assert.equal(ensureDstLayout(current.installPath!, { instanceName: current.name }).ok, true)
     const writer = new InstanceInstallLogWriter(getInstallLogsDirPath(), current.id)
     writer.clear()
     writer.appendLine('Update state (0x61) downloading, progress: 56.25')
@@ -401,7 +405,8 @@ describe('game update regression', () => {
       const failed = await getGameInstanceById(current.id)
       assert.equal(failed?.status, 'error')
       assert.equal(failed?.installLogStatus, 'failed')
-      assert.match(failed?.lastError ?? '', /Timed out waiting/)
+      assert.match(failed?.lastError ?? '', /连接|未完成|超时/)
+      assert.match(new InstanceInstallLogWriter(getInstallLogsDirPath(), current.id).readContent(), /Timed out waiting/)
       assert.equal(updates, count + 2)
       const progress = readInstallProgress(getInstallLogsDirPath(), current.id)!
       assert.equal(progress.status, 'failed')
@@ -457,6 +462,139 @@ describe('game update regression', () => {
 })
 
 describe('installation progress and raw log routes', () => {
+  it('task identity rejects old snapshots and old database writes', async () => {
+    const current = await instance()
+    const writer = new InstanceInstallLogWriter(getInstallLogsDirPath(), current.id)
+    writer.clear(2, { taskId: 'old-task', kind: 'install', runtimeMode: 'docker', backup: false })
+    writer.setPhase('download')
+    writer.setMeasuredPercent(56.25)
+    writer.flush()
+    await updateGameInstanceRuntime(current.id, { installTaskId: 'new-task', installPercent: 20, installLogStatus: 'running' })
+    await updateGameInstanceRuntime(current.id, { status: 'error', installLogStatus: 'failed', whereInstallTaskId: 'old-task' })
+    const saved = (await getGameInstanceById(current.id))!
+    assert.equal(saved.installLogStatus, 'running')
+    const snapshot = getInstanceInstallProgress(saved)!
+    assert.equal(snapshot.taskId, 'new-task')
+    assert.equal(snapshot.percent, null)
+    assert.equal(snapshot.overallPercent, 20)
+    writer.dispose()
+  })
+
+  it('an actual copy failure stops without downloading through SteamCMD', async () => {
+    await instance('25643504')
+    clearRemoteBuildCache()
+    queryOutput = metadata()
+    const recipientPath = path.join(root, 'instances', 'copy-failure-target')
+    const recipient = await createGameInstance({ nodeId: 'local-node', name: '复制失败', gameCode: '343050', status: 'pending_install', installPath: recipientPath })
+    const original = fs.createWriteStream
+    const stream = mock.method(fs, 'createWriteStream', (...args: Parameters<typeof fs.createWriteStream>) => {
+      if (String(args[0]).startsWith(recipientPath)) throw new Error('ENOSPC: no space left on device')
+      return original(...args)
+    })
+    const beforeUpdates = updates
+    try {
+      assert.equal(startInstallJob(app, { instanceId: recipient.id, instanceName: recipient.name, installPath: recipientPath, appId: '343050', steamcmdCommand: 'steamcmd' }), 'started')
+      while (isInstallJobActive(recipient.id)) await new Promise(resolve => setTimeout(resolve, 10))
+      const failed = (await getGameInstanceById(recipient.id))!
+      assert.equal(failed.installLogStatus, 'failed')
+      assert.match(failed.lastError ?? '', /复制|磁盘/)
+      assert.equal(updates, beforeUpdates)
+    }
+    finally { stream.mock.restore() }
+  })
+
+  it('restart requires a matching completion checkpoint even if old files and layout are complete', async () => {
+    const current = await instance()
+    ensureDstLayout(current.installPath!, { instanceName: current.name })
+    const writer = new InstanceInstallLogWriter(getInstallLogsDirPath(), current.id)
+    writer.clear(1, { taskId: 'interrupted-update', kind: 'update', runtimeMode: 'docker', backup: false })
+    writer.progress.readyToCommit = false
+    writer.flush()
+    await updateGameInstanceRuntime(current.id, { status: 'installing', installLogStatus: 'running', installTaskId: 'interrupted-update' })
+    await reconcileStaleInstallingInstances(app)
+    assert.equal((await getGameInstanceById(current.id))?.installLogStatus, 'failed')
+    writer.dispose()
+  })
+  it('backup failure stops an accepted update before any game file write', async () => {
+    const current = await instance()
+    fs.mkdirSync(path.join(current.installPath!, 'klei-storage'))
+    const settings = await getSystemBackupSettings()
+    await saveSystemBackupSettings({ autoBackupBeforeUpdate: true })
+    const original = fs.mkdirSync
+    const failure = mock.method(fs, 'mkdirSync', (...args: Parameters<typeof fs.mkdirSync>) => {
+      if (String(args[0]).includes('backups')) throw new Error('ENOSPC: no space left on device')
+      return original(...args)
+    })
+    const beforeUpdates = updates
+    try {
+      const res = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id, force: true } })
+      assert.equal(JSON.parse(res.body).error, '', res.body)
+      while (isInstallJobActive(current.id)) await new Promise(resolve => setTimeout(resolve, 10))
+      assert.equal(updates, beforeUpdates)
+      assert.equal((await getGameInstanceById(current.id))?.installLogStatus, 'failed')
+    }
+    finally { failure.mock.restore(); await saveSystemBackupSettings(settings) }
+  })
+  it('HTTP stop records cancellation even if the cached Docker readiness check is unavailable', async () => {
+    const current = await instance()
+    hang = true
+    try {
+      const res = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id, force: true } })
+      assert.equal(JSON.parse(res.body).error, '', res.body)
+      const stopped = await app.inject({ method: 'POST', url: '/app/instance/stop', headers: { token }, payload: { id: current.id } })
+      assert.equal(JSON.parse(stopped.body).error, '', stopped.body)
+      assert.equal((await getGameInstanceById(current.id))?.installLogStatus, 'cancelled')
+      const log = await app.inject({ method: 'GET', url: '/app/instance/install-log?id=' + current.id + '&view=summary', headers: { token } })
+      assert.equal(JSON.parse(log.body).data.status, 'cancelled')
+    }
+    finally { hang = false }
+  })
+
+  it('log initialization failure records a terminal failure and releases the task', async () => {
+    const current = await instance()
+    const original = fs.writeFileSync
+    const failure = mock.method(fs, 'writeFileSync', (...args: Parameters<typeof fs.writeFileSync>) => {
+      if (String(args[0]).endsWith(current.id + '.log')) throw new Error('EACCES: permission denied writing install log')
+      return original(...args)
+    })
+    try {
+      const res = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id, force: true } })
+      assert.equal(JSON.parse(res.body).error, '', res.body)
+      while (isInstallJobActive(current.id)) await new Promise(resolve => setTimeout(resolve, 10))
+      assert.equal((await getGameInstanceById(current.id))?.installLogStatus, 'failed')
+      assert.match((await getGameInstanceById(current.id))?.lastError ?? '', /权限|无法写入/)
+    }
+    finally { failure.mock.restore() }
+  })
+
+  it('runtime image failure cannot record installation success', async () => {
+    const current = await instance()
+    const beforeUpdates = updates
+    const image = mock.method(Docker.prototype, 'getImage', () => ({ inspect: async () => {
+      if (updates > beforeUpdates) throw new Error('image unavailable')
+      return { Id: 'fixture' }
+    } }))
+    const pull = mock.method(Docker.prototype, 'pull', (_image: string, callback: (error: Error) => void) => callback(new Error('unauthorized')))
+    try {
+      const res = await app.inject({ method: 'POST', url: '/app/instance/update', headers: { token }, payload: { id: current.id, force: true } })
+      assert.equal(JSON.parse(res.body).error, '', res.body)
+      while (isInstallJobActive(current.id)) await new Promise(resolve => setTimeout(resolve, 10))
+      const failed = await getGameInstanceById(current.id)
+      assert.equal(failed?.installLogStatus, 'failed')
+      assert.equal(failed?.lastErrorPhase, 'install')
+      assert.notEqual(failed?.installPercent, 100)
+      assert.match(failed?.lastError ?? '', /镜像|仓库/)
+    }
+    finally { image.mock.restore(); pull.mock.restore() }
+  })
+
+  it('restart does not treat an incomplete manifest or pending row as success', async () => {
+    const current = await instance()
+    fs.rmSync(path.join(current.installPath!, 'steamapps', 'appmanifest_343050.acf'))
+    await updateGameInstanceRuntime(current.id, { status: 'pending_install', installLogStatus: 'running' })
+    await reconcileStaleInstallingInstances(app)
+    assert.equal((await getGameInstanceById(current.id))?.installLogStatus, 'failed')
+  })
   it('persists cancellation on the active recorder and reconciles interrupted snapshots after restart', async () => {
     const current = await instance()
     hang = true
@@ -468,8 +606,8 @@ describe('installation progress and raw log routes', () => {
       while (isInstallJobActive(current.id) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
       assert.equal(isInstallJobActive(current.id), false)
       const cancelled = readInstallProgress(getInstallLogsDirPath(), current.id)!
-      assert.equal(cancelled.status, 'failed')
-      assert.match(cancelled.failure!.message, /中断/)
+      assert.equal(cancelled.status, 'cancelled')
+      assert.equal(cancelled.failure, null)
       assert.ok(!cancelled.events.some(event => /安装完成，可以启动/.test(event.message)))
     }
     finally { hang = false }

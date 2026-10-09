@@ -125,15 +125,25 @@ export const instanceInstallLogSourceSchema = z.enum(['install_log', 'status_sum
 export type InstanceInstallLogSource = z.infer<typeof instanceInstallLogSourceSchema>
 
 export const instanceInstallProgressSchema = z.object({
-  phaseCode: z.enum(['prepare', 'queue', 'connect', 'download', 'verify', 'stage', 'commit', 'finalize', 'runtime', 'copy', 'retry', 'complete']),
+  phaseCode: z.enum(['prepare', 'steamcmd_image', 'source', 'backup', 'queue', 'connect', 'download', 'verify', 'stage', 'commit', 'finalize', 'runtime', 'copy', 'retry', 'cancelling', 'complete']),
+  taskId: z.string().optional(),
+  kind: z.enum(['install', 'update']).optional(),
+  runtimeMode: z.enum(['docker', 'native']).optional(),
+  startedAt: z.string().optional(),
+  phaseStartedAt: z.string().optional(),
+  overallPercent: z.number().int().min(0).max(100).nullable().optional(),
+  cleanupPending: z.boolean().optional(),
+  readyToCommit: z.boolean().optional(),
+  timings: z.record(z.string(), z.number().nonnegative()).optional(),
+  bytes: z.record(z.string(), z.object({ completed: z.number().nonnegative(), total: z.number().nonnegative() })).optional(),
   phase: z.string(),
   percent: z.number().min(0).max(100).nullable(),
   updatedAt: z.string().nullable(),
   attempt: z.number().int().positive(),
   maxAttempts: z.number().int().positive(),
   retryAt: z.string().nullable(),
-  status: z.enum(['running', 'success', 'failed']),
-  failure: z.object({ message: z.string(), advice: z.string() }).nullable(),
+  status: z.enum(['running', 'success', 'failed', 'cancelled']),
+  failure: z.object({ message: z.string(), advice: z.string(), code: z.string().optional(), phase: z.string().optional() }).nullable(),
   events: z.array(z.object({
     at: z.string(),
     level: z.enum(['info', 'warning', 'error']),
@@ -142,9 +152,16 @@ export const instanceInstallProgressSchema = z.object({
 })
 export type InstanceInstallProgress = z.infer<typeof instanceInstallProgressSchema>
 
+export const instanceInstallTaskSchema = instanceInstallProgressSchema.pick({
+  taskId: true, kind: true, runtimeMode: true, startedAt: true, phaseStartedAt: true,
+  overallPercent: true, phaseCode: true, phase: true, status: true, failure: true,
+  attempt: true, maxAttempts: true, retryAt: true, updatedAt: true, cleanupPending: true,
+})
+export type InstanceInstallTask = z.infer<typeof instanceInstallTaskSchema>
+
 export const instanceInstallLogPayloadSchema = z.object({
   content: z.string(),
-  status: z.enum(['success', 'failed', 'running', 'unknown']),
+  status: z.enum(['success', 'failed', 'cancelled', 'running', 'unknown']),
   updatedAt: z.string().nullable(),
   source: instanceInstallLogSourceSchema,
   phase: z.string().nullable().optional(),
@@ -198,7 +215,10 @@ export const instanceItemSchema = z.object({
   runtimeFailureKind: z.enum(['memory', 'not_ready']).nullable(),
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
   unexpectedExitAt: z.string().nullable(),
-  installLogStatus: z.enum(['running', 'success', 'failed']).nullable(),
+  installLogStatus: z.enum(['running', 'success', 'failed', 'cancelled']).nullable(),
+  installTaskId: z.string().nullable().optional(),
+  installTask: instanceInstallTaskSchema.nullable().optional(),
+  /** 整个安装任务的整数估算；阶段实际百分比在安装日志 progress.percent 中。 */
   installPercent: z.number().nullable(),
   installLogUpdatedAt: z.string().nullable(),
   updateAvailable: z.boolean(),

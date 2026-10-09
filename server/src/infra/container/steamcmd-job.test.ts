@@ -6,12 +6,14 @@ import tar from 'tar-stream'
 import {
   cleanupOrphanedSteamcmdInstallContainers, cleanupAllRunningSteamcmdInstallContainers,
   cancelSteamcmdInstallContainer, runSteamcmdJob,
+  clearSteamcmdJobCancelFlag,
 } from './steamcmd-job.ts'
 import { classifySteamcmdInstallFailure } from './steamcmd-errors'
 
 const previousProxy = process.env.BSP_STEAMCMD_HTTPS_PROXY
 afterEach(() => {
   mock.restoreAll()
+  clearSteamcmdJobCancelFlag('job-fixture')
   if (previousProxy === undefined) delete process.env.BSP_STEAMCMD_HTTPS_PROXY
   else process.env.BSP_STEAMCMD_HTTPS_PROXY = previousProxy
 })
@@ -56,6 +58,7 @@ function fakeDocker(options: { text?: string, code?: number, oom?: boolean, insp
     },
   }
   mock.method(DockerClient.prototype, 'listContainers', async () => [])
+  mock.method(DockerClient.prototype, 'getContainer', () => container)
   mock.method(DockerClient.prototype, 'createContainer', async (spec: DockerClient.ContainerCreateOptions) => {
     createOptions = spec
     events.push('create')
@@ -66,6 +69,23 @@ function fakeDocker(options: { text?: string, code?: number, oom?: boolean, insp
 }
 
 const spec = { image: 'fixture', cmd: ['steamcmd', '+login', 'anonymous'], jobId: 'job-fixture', timeoutMs: 1000 }
+
+it('does not succeed until cleanup is confirmed, and permits cleanup to be retried', async () => {
+  const fake = fakeDocker({ code: 0, text: 'Success!' })
+  const remove = mock.method(fake.container, 'remove', async () => { throw new Error('Docker disconnected') })
+  const result = await runSteamcmdJob(spec)
+  assert.equal(result.ok, false)
+  assert.match(result.output, /无法确认.*停止/)
+  await assert.rejects(cancelSteamcmdInstallContainer(spec.jobId), /无法确认/)
+  remove.mock.restore()
+  await cancelSteamcmdInstallContainer(spec.jobId)
+})
+
+it('a log callback failure still removes the running container', async () => {
+  const fake = fakeDocker()
+  await assert.rejects(runSteamcmdJob({ ...spec, onLogLine: () => { throw new Error('log unavailable') } }), /log unavailable/)
+  assert.ok(fake.events.includes('remove'))
+})
 
 it('inspects and collects diagnostics before removing containers, mapping host proxies', async () => {
   process.env.BSP_STEAMCMD_HTTPS_PROXY = 'http://host.docker.internal:7890'

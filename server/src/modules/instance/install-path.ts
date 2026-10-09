@@ -104,6 +104,35 @@ export function prepareInstallPathForSteamcmd(installPath: string): string | und
   return ensureInstallDirectoryOwnership(installPath)
 }
 
+/** 大量半成品文件的权限准备不能阻塞取消和其它实例请求。 */
+export async function prepareInstallPathForSteamcmdAsync(installPath: string, signal?: AbortSignal): Promise<string | undefined> {
+  signal?.throwIfAborted()
+  if (getServerContainerConfig().runtimeMode === 'native' || findDstServerBinary(installPath)) {
+    return prepareInstallPathForSteamcmd(installPath)
+  }
+  const rootError = ensureInstancesRootForSteamcmd()
+  if (rootError) return rootError
+  try {
+    await fs.promises.mkdir(installPath, { recursive: true })
+    const { uid, gid } = resolveSteamcmdContainerUidGid()
+    const visit = async (target: string) => {
+      signal?.throwIfAborted()
+      const stat = await fs.promises.lstat(target)
+      if (stat.isSymbolicLink()) throw new Error('安装目录包含符号链接，无法安全调整权限')
+      await fs.promises.chown(target, uid, gid)
+      await fs.promises.chmod(target, (stat.isDirectory() ? 0o775 : 0o664) | (stat.mode & 0o111))
+      if (stat.isDirectory()) {
+        for (const entry of await fs.promises.readdir(target)) await visit(path.join(target, entry))
+      }
+    }
+    await visit(installPath)
+  }
+  catch (error) {
+    signal?.throwIfAborted()
+    return '安装目录准备失败：' + (error instanceof Error ? error.message : String(error))
+  }
+}
+
 /**
  * 实例启动前：确保目录存在并补齐 DST 二进制可执行位，不递归 chmod 已安装文件树。
  */

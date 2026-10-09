@@ -26,14 +26,14 @@ const phaseLabel = computed(() => progress.value?.phase || meta.value?.phase || 
 const lastOutputHint = computed(() => {
   const at = progress.value?.updatedAt ?? meta.value?.updatedAt
   const time = at ? Date.parse(at) : Number.NaN
-  if (!Number.isFinite(time)) return '等待安装输出'
+  if (!Number.isFinite(time)) return '等待更新'
   const seconds = Math.max(0, Math.floor((now.value - time) / 1000))
-  return seconds < 1 ? '刚刚收到输出' : `最近输出：${seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分钟`}前`
+  return seconds < 1 ? '刚刚更新' : `最近更新：${seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分钟`}前`
 })
 const retryHint = computed(() => {
   if (!progress.value?.retryAt || meta.value?.status !== 'running') return ''
   const seconds = Math.max(0, Math.ceil((Date.parse(progress.value.retryAt) - now.value) / 1000))
-  return seconds > 0 ? `${seconds} 秒后重试，已下载内容会保留` : '正在准备重试，已下载内容会保留'
+  return seconds > 0 ? `${seconds} 秒后自动重试` : '正在重试…'
 })
 
 let pollTimer: ReturnType<typeof setInterval> | undefined
@@ -172,6 +172,9 @@ defineExpose({ stopPolling })
             {{ getInstallLogStatusLabel(meta?.status) }}
           </NTag>
         </div>
+        <p v-if="progress?.overallPercent != null" class="text-sm text-sky-600 dark:text-sky-400">
+          安装进度 {{ progress.overallPercent }}%
+        </p>
         <NProgress
           v-if="meta?.status === 'running' && progress?.percent != null"
           type="line"
@@ -179,13 +182,11 @@ defineExpose({ stopPolling })
           :show-indicator="false"
           :processing="true"
         />
-        <p v-else-if="meta?.status === 'running'" class="text-sm text-muted-foreground">正在处理，等待当前阶段的进度输出…</p>
+        <p v-else-if="meta?.status === 'running' && !retryHint" class="text-sm text-muted-foreground">正在处理，请稍候…</p>
         <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span>{{ lastOutputHint }}</span>
-          <span v-if="progress && meta?.status === 'running'">第 {{ progress.attempt }}/{{ progress.maxAttempts }} 次尝试</span>
-          <span v-if="meta?.status === 'running'">每 1 秒自动刷新</span>
+          <span v-if="progress && progress.attempt > 1 && meta?.status === 'running'">第 {{ progress.attempt - 1 }} 次重试</span>
         </div>
-        <p v-if="percentLabel && meta?.status === 'running'" class="text-xs text-muted-foreground">百分比为当前阶段进度，后续可能仍需校验和准备启动文件。</p>
         <p v-if="retryHint" class="text-sm text-amber-600 dark:text-amber-400">{{ retryHint }}</p>
         <div v-if="meta?.status === 'failed' && progress?.failure" class="text-sm text-red-600 dark:text-red-400 space-y-1">
           <p>{{ progress.failure.message }}</p>

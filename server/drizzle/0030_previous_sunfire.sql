@@ -1,0 +1,1 @@
+ALTER TABLE `game_instances` ADD `install_task_id` text;

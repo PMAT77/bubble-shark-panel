@@ -1,11 +1,13 @@
 import path from 'node:path'
 import type { DbGameInstance } from '../../shared/db/index'
-import { listGameInstances } from '../../shared/db/index'
+import { getGameInstanceById, listGameInstances } from '../../shared/db/index'
 import { isInstallSeedEnabled } from '../../shared/config/install'
 import { diagnoseDstInstallReadiness } from '../../infra/game-adapter/dst/install-readiness'
-import { copyGameDepotFromDonor } from '../../infra/game-adapter/dst/depot-copy'
+import { copyGameDepotFromDonorAsync, installPathsOverlap } from '../../infra/game-adapter/dst/depot-copy'
 import { checkGameUpdateAvailable, fetchRemoteAppInfo, readLocalBuildId } from '../../shared/steam-update/build-id'
-import { isSteamcmdJobRunning } from '../../infra/container/steamcmd-job'
+import { isSteamcmdJobRunning } from '../../infra/container'
+import { InstanceContentBusyError, withInstanceContentOperation } from '../../shared/instance-content/operation'
+import { abortable } from '../../shared/abort'
 import { prepareInstallPathForSteamcmd } from './install-path'
 
 const LOCAL_NODE_ID = 'local-node'
@@ -21,7 +23,7 @@ export interface InstallSeedDonor {
 
 export type InstallSeedAttemptResult =
   | { ok: true, donor: InstallSeedDonor }
-  | { ok: false, reason: string }
+  | { ok: false, reason: string, failed?: boolean }
 
 function normalizeInstallPath(value: string): string {
   return path.resolve(value.trim())
@@ -38,6 +40,7 @@ function scoreDonor(instance: DbGameInstance, localBuildId: string | null): numb
 }
 
 export async function findInstallSeedDonor(input: {
+  signal?: AbortSignal
   recipientId: string
   recipientPath: string
   appId: string
@@ -47,14 +50,20 @@ export async function findInstallSeedDonor(input: {
   }
   const recipientPath = normalizeInstallPath(input.recipientPath)
   const appId = input.appId.trim()
-  const remoteInfo = await fetchRemoteAppInfo('', appId, { force: true })
+  const instances = (await listGameInstances({ nodeId: LOCAL_NODE_ID })).filter(instance =>
+    instance.id !== input.recipientId && instance.gameCode.trim() === appId
+    && isEligibleDonorStatus(instance.status) && instance.installPath
+    && !installPathsOverlap(instance.installPath, recipientPath)
+    && diagnoseDstInstallReadiness(instance.installPath).ready,
+  )
+  if (!instances.length) return null
+  const remoteInfo = await abortable(fetchRemoteAppInfo('', appId, { force: true }), input.signal)
   if (!remoteInfo) {
     return null
   }
   const remoteBuildId = remoteInfo.buildId
   const candidates: Array<{ instance: DbGameInstance, localBuildId: string | null, score: number }> = []
 
-  const instances = await listGameInstances({ nodeId: LOCAL_NODE_ID })
   for (const instance of instances) {
     if (instance.id === input.recipientId) {
       continue
@@ -117,6 +126,8 @@ export async function findInstallSeedDonor(input: {
 }
 
 export async function tryInstallGameDepotFromSeed(input: {
+  signal?: AbortSignal
+  onProgress?: (copiedBytes: number, totalBytes: number) => void
   recipientId: string
   recipientPath: string
   appId: string
@@ -125,21 +136,33 @@ export async function tryInstallGameDepotFromSeed(input: {
   if (!donor) {
     return { ok: false, reason: '未找到可用的供体实例（需已停止、游戏文件完整且版本最新）' }
   }
-  const copyResult = copyGameDepotFromDonor(donor.installPath, input.recipientPath)
+  input.signal?.throwIfAborted()
+  return withInstanceContentOperation(donor.instanceId, async (): Promise<InstallSeedAttemptResult> => {
+  const current = await getGameInstanceById(donor.instanceId)
+  if (current?.status !== 'stopped' || !current.installPath || normalizeInstallPath(current.installPath) !== donor.installPath
+    || !diagnoseDstInstallReadiness(donor.installPath).ready
+    || readLocalBuildId(donor.installPath, input.appId) !== donor.localBuildId) {
+    return { ok: false, reason: '复制源状态已变化，使用 SteamCMD 安装' }
+  }
+  const copyResult = await copyGameDepotFromDonorAsync(donor.installPath, input.recipientPath, input)
   if (!copyResult.ok) {
-    return { ok: false, reason: copyResult.error }
+    return { ok: false, reason: copyResult.error, failed: true }
   }
   const pathError = prepareInstallPathForSteamcmd(input.recipientPath)
   if (pathError) {
-    return { ok: false, reason: pathError }
+    return { ok: false, reason: pathError, failed: true }
   }
   const readiness = diagnoseDstInstallReadiness(input.recipientPath)
   if (!readiness.ready) {
-    return { ok: false, reason: `复制后校验失败: ${readiness.message}` }
+    return { ok: false, reason: `复制后校验失败: ${readiness.message}`, failed: true }
   }
   const localBuildId = readLocalBuildId(input.recipientPath, input.appId)
   if (donor.localBuildId && localBuildId !== donor.localBuildId) {
-    return { ok: false, reason: '复制后 buildid 与供体不一致' }
+    return { ok: false, reason: '复制后 buildid 与供体不一致', failed: true }
   }
   return { ok: true, donor }
+  }).catch(error => {
+    if (error instanceof InstanceContentBusyError) return { ok: false, reason: '复制源正在执行文件操作，使用 SteamCMD 安装' }
+    throw error
+  })
 }

@@ -6,11 +6,12 @@ import {
   formatPullError,
   isImagePresentByRef,
   pullImageWithCandidates,
+  shareImagePreparation,
+  type ImagePreparationOptions,
 } from './image-candidates'
 
 export type GameDstImagePullResult = { ok: true } | { ok: false, error: string }
 
-let gameDstImagePullInFlight: Promise<GameDstImagePullResult> | null = null
 
 function resolveDocker(): DockerClient {
   const { dockerHost } = getServerContainerConfig()
@@ -51,9 +52,6 @@ export async function isGameDstImagePresent(): Promise<boolean> {
 const PULL_MAX_ATTEMPTS = 3
 const PULL_RETRY_BASE_MS = 2_000
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
 
 function resolveDstMirrorsRaw(): string {
   const { imageMirrors } = getServerContainerConfig()
@@ -64,28 +62,20 @@ function resolveDstMirrorsRaw(): string {
 }
 
 /** 幂等拉取；启动实例或初始化运行时时调用，勿在列表轮询中调用 */
-export async function pullGameDstImage(options?: { force?: boolean }): Promise<GameDstImagePullResult> {
+export async function pullGameDstImage(options: ImagePreparationOptions & { force?: boolean } = {}): Promise<GameDstImagePullResult> {
   const force = options?.force ?? false
-  if (!force && await isGameDstImagePresent()) {
-    return { ok: true }
-  }
-  if (gameDstImagePullInFlight) {
-    return gameDstImagePullInFlight
-  }
   const { gameDstImage } = getServerContainerConfig()
-  gameDstImagePullInFlight = (async (): Promise<GameDstImagePullResult> => {
+  return shareImagePreparation('runtime:' + gameDstImage, options, async (shared): Promise<GameDstImagePullResult> => {
+    if (!force && await isGameDstImagePresent()) return { ok: true }
     const candidates = buildImageCandidates(gameDstImage, resolveDstMirrorsRaw())
     const result = await pullImageWithCandidates(resolveDocker(), candidates, gameDstImage, {
       maxAttempts: PULL_MAX_ATTEMPTS,
       retryBaseMs: PULL_RETRY_BASE_MS,
-      sleep,
+      ...shared,
     })
     if (result.ok) {
       return { ok: true }
     }
     return { ok: false, error: formatGameDstImageError(formatPullError(result.error, gameDstImage, result.tried), gameDstImage) }
-  })().finally(() => {
-    gameDstImagePullInFlight = null
   })
-  return gameDstImagePullInFlight
 }

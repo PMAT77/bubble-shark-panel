@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { resolveInstanceUpdateState } from '../../../../shared/instance-update-state'
-import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm'
 import {
   gameInstances,
   instanceMods,
@@ -75,6 +75,7 @@ function mapDbGameInstance(row: {
   runtimeFailureKind: string | null
   unexpectedExitAt: string | null
   installLogStatus: string | null
+  installTaskId: string | null
   installPercent: number | null
   installLogUpdatedAt: string | null
   updateAvailable: number | null
@@ -98,7 +99,7 @@ function mapDbGameInstance(row: {
     lastErrorPhase: normalizeInstanceErrorPhase(row.lastErrorPhase),
     runtimeReadyAt: row.runtimeReadyAt?.trim() || null,
     runtimeFailureKind: normalizeInstanceRuntimeFailureKind(row.runtimeFailureKind),
-    installLogStatus: installLogStatus === 'running' || installLogStatus === 'success' || installLogStatus === 'failed'
+    installLogStatus: installLogStatus === 'running' || installLogStatus === 'success' || installLogStatus === 'failed' || installLogStatus === 'cancelled'
       ? installLogStatus
       : null,
     installPercent: row.installPercent === null ? null : Number(row.installPercent),
@@ -136,6 +137,7 @@ function gameInstanceSelectFields() {
     runtimeFailureKind: gameInstances.runtimeFailureKind,
     unexpectedExitAt: gameInstances.unexpectedExitAt,
     installLogStatus: gameInstances.installLogStatus,
+    installTaskId: gameInstances.installTaskId,
     installPercent: gameInstances.installPercent,
     installLogUpdatedAt: gameInstances.installLogUpdatedAt,
     updateAvailable: gameInstances.updateAvailable,
@@ -608,6 +610,7 @@ export async function updateGameInstanceRuntime(
     runtimeFailureKind?: DbInstanceRuntimeFailureKind | null
     unexpectedExitAt?: string | null
     installLogStatus?: DbInstallLogStatus | null
+    installTaskId?: string | null
     installPercent?: number | null
     installLogUpdatedAt?: string | null
     updateAvailable?: number
@@ -667,6 +670,7 @@ export async function updateGameInstanceRuntime(
   if (typeof input.installLogStatus !== 'undefined') {
     setPayload.installLogStatus = input.installLogStatus
   }
+  if (typeof input.installTaskId !== 'undefined') setPayload.installTaskId = input.installTaskId
   if (typeof input.installPercent !== 'undefined') {
     const percent = input.installPercent
     setPayload.installPercent = percent === null
@@ -693,7 +697,7 @@ export async function updateGameInstanceRuntime(
   if (typeof input.updateCheckedAt !== 'undefined') {
     setPayload.updateCheckedAt = input.updateCheckedAt?.trim() || null
   }
-  const condition = input.whereStatus
+  const statusCondition = input.whereStatus
     ? and(
         eq(gameInstances.id, id),
         Array.isArray(input.whereStatus)
@@ -701,6 +705,8 @@ export async function updateGameInstanceRuntime(
           : eq(gameInstances.status, input.whereStatus),
       )
     : eq(gameInstances.id, id)
+  const condition = typeof input.whereInstallTaskId === 'undefined' ? statusCondition
+    : and(statusCondition, input.whereInstallTaskId === null ? isNull(gameInstances.installTaskId) : eq(gameInstances.installTaskId, input.whereInstallTaskId))
   await drizzleDb
     .update(gameInstances)
     .set(setPayload)

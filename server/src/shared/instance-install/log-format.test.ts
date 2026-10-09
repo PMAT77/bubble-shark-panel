@@ -28,4 +28,8 @@ it('uses evidence-based failure advice and removes technical output from the sum
   assert.equal(failure.message, '磁盘空间不足或写入失败。')
   assert.match(failure.advice, /磁盘/)
   assert.match(summarizeInstallFailure('SteamCMD 网络连接失败。SteamCMD 输出：network connection failed').advice, /网络/)
+  assert.equal(summarizeInstallFailure('SteamCMD 镜像未就绪：unauthorized').code, 'image_pull_failed')
+  const native = summarizeInstallFailure('SteamCMD 启动失败: spawn /tools/steamcmd EACCES')
+  assert.equal(native.code, 'steamcmd_unavailable')
+  assert.match(native.advice, /执行权限/)
 })

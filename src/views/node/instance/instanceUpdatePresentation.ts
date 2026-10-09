@@ -8,7 +8,7 @@ export function isInstanceUpToDate(instance: Pick<InstanceItem, 'updateCheckedAt
 }
 
 export function canRetryInstanceInstall(instance: InstanceItem) {
-  return (instance.lastErrorPhase === 'install' || instance.installLogStatus === 'failed')
+  return (instance.lastErrorPhase === 'install' || instance.installLogStatus === 'failed' || instance.installLogStatus === 'cancelled')
     || (instance.status === 'stopped' && !instance.installLogStatus && !instance.localBuildId && !instance.updateCheckedAt)
 }
 
@@ -17,8 +17,8 @@ export function canUpdateInstance(instance: InstanceItem) {
     && (canRetryInstanceInstall(instance) || resolveInstanceUpdateState(instance) === 'available')
 }
 
-export function canForceUpdateInstance(instance: Pick<InstanceItem, 'status'>) {
-  return instance.status === 'stopped' || instance.status === 'error'
+export function canForceUpdateInstance(instance: Pick<InstanceItem, 'status'> & Partial<Pick<InstanceItem, 'installTask'>>) {
+  return !instance.installTask?.cleanupPending && (instance.status === 'stopped' || instance.status === 'error')
 }
 
 export function buildInstanceUpdateCheckNotice(items: InstanceUpdateStatusItem[]): {

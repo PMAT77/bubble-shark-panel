@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { after, afterEach, it } from 'node:test'
+import { after, afterEach, beforeEach, it } from 'node:test'
 import { runNativeSteamcmdJob, cancelNativeSteamcmdJob, runSteamcmdWorkshopDownloadNative } from './native-steamcmd-runner'
 import { parsePublicBuildIdFromAppInfo } from '../../shared/steam-update/app-info'
 import { registerNativeSteamcmdProcess, cancelRecordedNativeSteamcmdProcess } from './native-steamcmd-process'
@@ -13,6 +13,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-steamcmd-query-'))
 const previousPath = process.env.BSP_NATIVE_STEAMCMD_PATH
 const envKeys = ['HOME', 'BSP_STEAMCMD_DOWNLOAD_REGION', 'GSH_STEAMCMD_DOWNLOAD_REGION', 'STEAMCMD_FORCE_DOWNLOAD_REGION', 'BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS', 'BSP_NATIVE_RUNTIME_DIR']
 const previousEnv = envKeys.map(key => process.env[key])
+beforeEach(() => { process.env.BSP_NATIVE_RUNTIME_DIR = root })
 afterEach(() => envKeys.forEach((key, index) => {
   if (previousEnv[index] === undefined) delete process.env[key]
   else process.env[key] = previousEnv[index]

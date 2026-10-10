@@ -3,12 +3,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { after, before, it } from 'node:test'
+import { after, before, it, mock } from 'node:test'
 import { eq } from 'drizzle-orm'
 import Fastify from 'fastify'
 import { ErrorCode } from '../../../../shared/constants/error-code'
 import { instanceResourcesPayloadSchema, type InstanceStartupSnapshot } from '../../../../shared/contracts/instance-resources'
-import { getContainerRuntime } from '../../infra/container'
+import { getContainerRuntime, type ContainerRuntime } from '../../infra/container'
 import { addUserInstanceGrants, closeDatabase, createGameInstance, findUserByAccount, getGameInstanceById, initDatabase, updateGameInstanceRuntime } from '../../shared/db'
 import { ensureDb, nowIso } from '../../shared/db/connection'
 import { userPermissions } from '../../shared/db/schema'
@@ -32,6 +32,7 @@ async function setPermissions(permissions: string[]) {
 }
 
 before(async () => {
+  mock.method(getContainerRuntime() as ContainerRuntime & Required<Pick<ContainerRuntime, 'hostResources'>>, 'hostResources', async () => null)
   await initDatabase(databasePath, migrations, databaseOptions)
   id = (await createGameInstance({ nodeId: 'local-node', name: 'resources', gameCode: '343050', status: 'stopped' })).id
   hiddenId = (await createGameInstance({ nodeId: 'local-node', name: 'hidden', gameCode: '343050', status: 'stopped' })).id
@@ -45,7 +46,7 @@ before(async () => {
   const login = await app.inject({ method: 'POST', url: '/app/account/login', payload: { account: 'resource-user', password: '123456' } })
   token = JSON.parse(login.body).data.token
 })
-after(async () => { await app.close(); closeDatabase(); fs.rmSync(dir, { recursive: true, force: true }) })
+after(async () => { await app.close(); mock.restoreAll(); closeDatabase(); fs.rmSync(dir, { recursive: true, force: true }) })
 
 it('resources require read/lifecycle permissions and the instance grant independently', async (t) => {
   t.mock.method(getContainerRuntime(), 'findByName', async () => undefined)

@@ -5,7 +5,7 @@ import { listGameInstances, updateGameInstanceRuntime, getInstanceRuntimeRevisio
 import { describeSystemdExitReason, readHostMemorySnapshot, readRuntimeMemoryCapMb } from '../../infra/container/exit-reason'
 import { getContainerRuntime } from '../../infra/container'
 import { resolveInstanceResourceSettings } from '../../infra/container/dst-container-resources'
-import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveInstanceContainerRef, stopInstanceContainer, recoverInstanceStartup } from './container-lifecycle'
+import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveInstanceContainerRef, stopInstanceContainer, recoverInstanceStartup, protectExitedShardOom } from './container-lifecycle'
 import { currentStartupTask, getStartupSnapshot, isCurrentStartupTask, startupIsActive } from './startup-state'
 import { reconcileStaleInstallingInstances } from './install-service'
 import { buildRestartLoopWarning, shouldClearRuntimeWarning } from './runtime-warning'
@@ -152,6 +152,13 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
       continue
     }
     const snapshot = probe.snapshot
+    if (snapshot && (!snapshot.running || snapshot.restarting) && (snapshot.oomKilled === true || snapshot.exitResult === 'oom-kill')) {
+      const ref = await resolveInstanceContainerRef(instance.id)
+      if (ref && await protectExitedShardOom(app, instance, ref, snapshot)) { reconciled++; continue }
+      // OOM 现场暂时无法读取时，保留引用供下一次保护采样，不能先声明已停止。
+      health.complete = false
+      continue
+    }
     const luaFailure = findShardLuaFailure(instance.id, instance.installPath ?? undefined, instance.runtimeStartedAt)
     if (luaFailure) {
       const message = instance.runtimeReadyAt ? luaFailure : `启动失败：${luaFailure}`

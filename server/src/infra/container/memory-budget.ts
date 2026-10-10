@@ -88,7 +88,7 @@ export function sampleRuntimeResources(runtime: ContainerRuntime, ref: Container
   if (!cache) { cache = new Map(); snapshots.set(runtime, cache) }
   const prior = cache.get(ref.id)
   const now = Date.now()
-  if (prior && now - prior.at < maxAgeMs) return prior.value
+  if (prior && now >= prior.at && now - prior.at < maxAgeMs) return prior.value
   const value = bounded(runtime.resourceSnapshot?.(ref) ?? Promise.resolve(null))
   cache.set(ref.id, { at: now, value })
   if (cache.size > 500) for (const [id, item] of cache) if (now - item.at > 30_000) cache.delete(id)
@@ -97,7 +97,7 @@ export function sampleRuntimeResources(runtime: ContainerRuntime, ref: Container
 export function sampleHostResources(runtime: ContainerRuntime): Promise<HostResourceSnapshot | null> {
   const prior = hosts.get(runtime)
   const now = Date.now()
-  if (prior && now - prior.at < 4500) return prior.value
+  if (prior && now >= prior.at && now - prior.at < 4500) return prior.value
   const value = bounded(runtime.hostResources?.() ?? Promise.resolve(null))
   hosts.set(runtime, { at: now, value })
   return value

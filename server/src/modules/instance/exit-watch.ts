@@ -4,7 +4,7 @@ import { LOCAL_NODE_ID } from '../../shared/dst/local-dst-instance'
 import { getGameInstanceById, listGameInstances, updateGameInstanceRuntime } from '../../shared/db/index'
 import { emitPanelEvent } from '../notify/events'
 import { isInstallJobActive } from './install-service'
-import { isInstanceContainerRunning } from './container-lifecycle'
+import { inspectInstanceShardRuntime, resolveInstanceContainerRef, protectExitedShardOom } from './container-lifecycle'
 import { getStartupSnapshot, startupIsActive } from './startup-state'
 
 const WATCH_INTERVAL_MS = 60_000
@@ -44,7 +44,14 @@ export async function reconcileUnexpectedExits(app: FastifyInstance): Promise<nu
     }
     let actuallyRunning: boolean
     try {
-      actuallyRunning = await isInstanceContainerRunning(instance.id)
+      const probe = await inspectInstanceShardRuntime(instance.id)
+      if (probe.unitExists && !probe.snapshot) continue
+      if (probe.snapshot && (!probe.snapshot.running || probe.snapshot.restarting) && (probe.snapshot.oomKilled === true || probe.snapshot.exitResult === 'oom-kill')) {
+        const ref = await resolveInstanceContainerRef(instance.id)
+        if (ref && await protectExitedShardOom(app, instance, ref, probe.snapshot)) detected++
+        continue
+      }
+      actuallyRunning = probe.snapshot?.running === true
     }
     catch (error) {
       app.log.debug({ instanceId: instance.id, err: error }, '异常退出对账：运行时探测失败，本轮跳过')

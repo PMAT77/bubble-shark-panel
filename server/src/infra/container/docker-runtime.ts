@@ -164,18 +164,21 @@ export class DockerContainerRuntime implements ContainerRuntime {
   async hostResources() {
     const unknown = (reason: string) => buildHostResourceSnapshot({ source: 'unknown', reason })
     if (!this.localDaemon) return unknown('远程 Docker 无法核验宿主机内存，共享保护不可用')
+    const root = '/run/bsp-host/cgroup'
+    const ownName = process.env.HOSTNAME?.trim()
+    const meminfo = readText('/run/bsp-host/meminfo')
+    if (!ownName || !meminfo || !readText(`${root}/cgroup.controllers`)) return unknown('宿主指标挂载或面板容器身份缺失，共享保护不可用')
     try {
       const info = await this.docker.info()
       if (info.CgroupDriver !== 'systemd' || info.CgroupVersion !== '2' || info.SecurityOptions?.some((value: string) => value.includes('rootless'))) {
         return unknown('共享保护需要宿主 rootful Docker、systemd 驱动和 cgroup v2')
       }
-      const panel = await this.docker.getContainer(process.env.HOSTNAME ?? '').inspect()
-      const root = '/run/bsp-host/cgroup'
+      const panel = await this.docker.getContainer(ownName).inspect()
       const group = `/system.slice/docker-${panel.Id}.scope`
       const pids = readText(`${root}${group}/cgroup.procs`)?.split(/\s+/)
       if (!panel.State.Pid || !pids?.includes(String(panel.State.Pid))) return unknown('宿主指标挂载与 Docker 节点身份未核验，按现有配置启动')
       return buildHostResourceSnapshot({
-        source: 'docker-host', meminfo: readText('/run/bsp-host/meminfo'), psi: readText('/run/bsp-host/memory-pressure'),
+        source: 'docker-host', meminfo, psi: readText('/run/bsp-host/memory-pressure'),
         panel: readCgroupMemory(root, group), pool: readCgroupMemory(root, `/${DST_MEMORY_SLICE}`), verified: true,
       })
     }
@@ -321,6 +324,7 @@ export class DockerContainerRuntime implements ContainerRuntime {
         oomKilled: Boolean(data.State?.OOMKilled),
         ...(data.State?.OOMKilled ? { exitResult: 'oom-kill' } : {}),
         startedAt: data.State?.StartedAt,
+        ...(data.State?.StartedAt ? { runtimeIdentity: data.State.StartedAt } : {}),
         ...(uptimeSeconds !== undefined ? { uptimeSeconds } : {}),
       }
     }

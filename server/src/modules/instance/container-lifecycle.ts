@@ -8,7 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { randomUUID } from 'node:crypto'
 import { buildDstStartupProbe, parseDstStartupProbe } from '../../infra/game-adapter/dst/startup-probe'
 import { resolveDstContainerResourceLimits } from '../../infra/container/dst-container-resources'
-import { DST_MEMORY_SLICE, sampleHostResources } from '../../infra/container/memory-budget'
+import { DST_MEMORY_SLICE, sampleHostResources, sampleRuntimeResources } from '../../infra/container/memory-budget'
 import { emitPanelEvent } from '../notify/events'
 import type { MemoryProtectionStop } from '../../../../shared/contracts/instance-resources'
 import { resolveInstanceResourceSettings } from './resource-settings'
@@ -91,7 +91,7 @@ export async function protectInstanceMemory(app: FastifyInstance, observed: DbGa
     const refs = (await Promise.all([runtime.findByName(buildMasterContainerName(id)), runtime.findByName(buildCavesContainerName(id))])).filter((r): r is ContainerRef => !!r)
     if (observedRefs?.some(ref => !refs.some(actual => actual.id === ref.id))) return
     for (const ref of refs) {
-      const before = ref.name === buildMasterContainerName(id) ? evidence.master : evidence.caves
+      const before = ref.name.endsWith('-caves') ? evidence.caves : evidence.master
       const now = await runtime.resourceSnapshot?.(ref)
       if (before?.runtimeIdentity && before.runtimeIdentity !== now?.runtimeIdentity) return
       if (now?.runtimeIdentity) ref.runtimeIdentity = now.runtimeIdentity
@@ -143,6 +143,21 @@ export async function protectInstanceMemory(app: FastifyInstance, observed: DbGa
     instanceConsoleLogStore.appendSystem(id, `内存保护停止：${evidence.message}${errors.length ? '；清理未完成' : '；两片已清理'}`)
   }
   finally { memoryProtectionInFlight.delete(id) }
+}
+
+/** 已退出的当前分片有明确 OOM 结果时，先保护两片，避免普通对账清掉主世界引用。 */
+export async function protectExitedShardOom(app: FastifyInstance, instance: DbGameInstance, ref: ContainerRef, inspected?: ContainerInspect): Promise<boolean> {
+  const runtime = getContainerRuntime()
+  const state = inspected ?? await runtime.inspect(ref)
+  if (state.probeFailed || (state.running && !state.restarting) || (state.oomKilled !== true && state.exitResult !== 'oom-kill')) return false
+  const resources = await sampleRuntimeResources(runtime, ref)
+  if (resources?.oomKilled !== true || (state.runtimeIdentity && state.runtimeIdentity !== resources.runtimeIdentity)) return false
+  const isCaves = ref.name.endsWith('-caves')
+  const other = await runtime.findByName(isCaves ? buildMasterContainerName(instance.id) : buildCavesContainerName(instance.id))
+  const peer = other ? await sampleRuntimeResources(runtime, other) : null
+  await protectInstanceMemory(app, instance, { code: 'oom', message: '确认当前分片因 OOM 退出，已保护停止整个实例',
+    master: isCaves ? peer : resources, caves: isCaves ? resources : peer, host: await sampleHostResources(runtime) }, [ref, ...(other ? [other] : [])])
+  return (await getGameInstanceById(instance.id))?.runtimeFailureKind === 'memory_protection'
 }
 /**
  * 等待主世界就绪的默认上限（秒）。

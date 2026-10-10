@@ -15,6 +15,7 @@ import { registerInstanceModule } from './index'
 import { resolvePluginInstanceOps } from './instance-plugin-ops'
 import { restartInstanceCore } from './restart-instance-core'
 import { inspectMemoryProtection, stopMemoryProtectionWatch } from './memory-watch'
+import { reconcileUnexpectedExits } from './exit-watch'
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-memory-protection-'))
 before(async () => {
@@ -25,13 +26,14 @@ after(() => { closeDatabase(); fs.rmSync(directory, { recursive: true, force: tr
 async function fixture(t: TestContext, loading = false) {
   const app = Fastify()
   const instance = await createGameInstance({ nodeId: 'local-node', name: 'memory-guard', gameCode: '343050', status: 'running', containerId: 'master-old' })
-  await updateGameInstanceRuntime(instance.id, { runtimeStartedAt: new Date().toISOString() })
+  const masterId = `master-${instance.id}`
+  await updateGameInstanceRuntime(instance.id, { containerId: masterId, runtimeStartedAt: new Date().toISOString() })
   const task = createStartupTask(instance.id)
   task.snapshot.status = loading ? 'running' : 'success'; task.snapshot.phase = loading ? 'master_loading' : 'ready'
   task.snapshot.master = { state: 'ready', memoryPeakMb: 3200 }
   task.snapshot.caves = { state: 'ready', memoryPeakMb: 1536 }
   await persistStartupTask(task)
-  const refs = new Map<string, ContainerRef>([[buildMasterContainerName(instance.id), { id: 'master-old', name: buildMasterContainerName(instance.id) }], [buildCavesContainerName(instance.id), { id: 'caves-old', name: buildCavesContainerName(instance.id) }]])
+  const refs = new Map<string, ContainerRef>([[buildMasterContainerName(instance.id), { id: masterId, name: buildMasterContainerName(instance.id) }], [buildCavesContainerName(instance.id), { id: `caves-${instance.id}`, name: buildCavesContainerName(instance.id) }]])
   const runtime = getContainerRuntime() as ContainerRuntime & Required<Pick<ContainerRuntime, 'resourceSnapshot' | 'emergencyRemove' | 'hostResources'>>
   t.mock.method(runtime, 'findByName', async (name: string) => refs.get(name))
   t.mock.method(runtime, 'inspect', async (ref: ContainerRef) => ({ ...ref, running: refs.has(ref.name) }))
@@ -77,7 +79,7 @@ it('loading protection becomes failure; failed cleanup keeps references and bloc
   const row = (await getGameInstanceById(f.instance.id))!
   assert.equal(row.lastStartupReport?.status, 'failed')
   assert.equal(row.lastStartupReport?.protectionStop?.cleanupCompleted, false)
-  assert.equal(row.containerId, 'master-old')
+  assert.equal(row.containerId, f.instance.containerId)
   assert.match(row.lastError!, /清理未完成/)
   const input = { instanceId: row.id, gameCode: row.gameCode, installPath: directory, instanceName: row.name, gamePort: null }
   assert.equal((await startInstanceContainer(f.app, { ...input, source: 'manual' })).ok, false)
@@ -155,4 +157,45 @@ it('a restarted runtime establishes a new OOM baseline instead of replaying hist
   oom++
   await inspectMemoryProtection(f.app)
   assert.equal((await getGameInstanceById(f.instance.id))?.lastStartupReport?.protectionStop?.code, 'oom')
+})
+
+it('reconciliation protects an OOM-exited master before clearing references, including the live cave', async t => {
+  const f = await fixture(t)
+  releaseStartupTask(f.task)
+  t.mock.method(f.runtime, 'hostResources', async () => null)
+  t.mock.method(f.runtime, 'inspect', async (ref: ContainerRef) => ({ ...ref, running: ref.name.endsWith('-caves'), runtimeIdentity: 'old-round',
+    startedAt: 'Sat 2026-10-10 19:00:00 CST', exitResult: ref.name.endsWith('-caves') ? 'success' : 'oom-kill' }))
+  t.mock.method(f.runtime, 'resourceSnapshot', async (ref: ContainerRef) => ({ ...emptyResourceSnapshot(), runtimeIdentity: 'old-round',
+    oomKilled: !ref.name.endsWith('-caves'), oomKillCount: 8, memoryMaxMb: 3072 }))
+  await reconcileInstanceRuntimeState(f.app)
+  const row = (await getGameInstanceById(f.instance.id))!
+  assert.equal(row.runtimeFailureKind, 'memory_protection')
+  assert.equal(row.lastStartupReport?.status, 'success')
+  assert.equal(row.lastStartupReport?.protectionStop?.cleanupCompleted, true)
+  assert.equal(f.refs.size, 0)
+})
+
+it('the first watch sample protects an OOM-exited cave while the master is alive', async t => {
+  const f = await fixture(t, true)
+  t.mock.method(f.runtime, 'hostResources', async () => null)
+  t.mock.method(f.runtime, 'inspect', async (ref: ContainerRef) => ({ ...ref, running: !ref.name.endsWith('-caves'),
+    exitResult: ref.name.endsWith('-caves') ? 'oom-kill' : 'success' }))
+  t.mock.method(f.runtime, 'resourceSnapshot', async (ref: ContainerRef) => ({ ...emptyResourceSnapshot(), runtimeIdentity: 'old-round',
+    oomKilled: ref.name.endsWith('-caves'), oomKillCount: 8 }))
+  await inspectMemoryProtection(f.app)
+  assert.equal((await getGameInstanceById(f.instance.id))?.runtimeFailureKind, 'memory_protection')
+  assert.equal((await getGameInstanceById(f.instance.id))?.lastStartupReport?.status, 'failed')
+  assert.equal(f.refs.size, 0)
+})
+
+it('the exit watch preserves OOM protection instead of marking only the master stopped', async t => {
+  const f = await fixture(t)
+  releaseStartupTask(f.task)
+  await updateGameInstanceRuntime(f.instance.id, { runtimeStartedAt: new Date(Date.now() - 120_000).toISOString() })
+  t.mock.method(f.runtime, 'hostResources', async () => null)
+  t.mock.method(f.runtime, 'inspect', async (ref: ContainerRef) => ({ ...ref, running: ref.name.endsWith('-caves'), exitResult: ref.name.endsWith('-caves') ? 'success' : 'oom-kill' }))
+  t.mock.method(f.runtime, 'resourceSnapshot', async (ref: ContainerRef) => ({ ...emptyResourceSnapshot(), runtimeIdentity: 'old-round', oomKilled: !ref.name.endsWith('-caves') }))
+  assert.equal(await reconcileUnexpectedExits(f.app), 1)
+  assert.equal((await getGameInstanceById(f.instance.id))?.runtimeFailureKind, 'memory_protection')
+  assert.equal(f.refs.size, 0)
 })

@@ -8,7 +8,7 @@ import { DST_MEMORY_SLICE, sampleHostResources, sampleRuntimeResources } from '.
 import { readBrandEnv } from '../../../../shared/brand-env'
 import { LOCAL_NODE_ID } from '../../shared/dst/local-dst-instance'
 import { currentStartupTask, getStartupSnapshot, refreshStartupProgress, startupIsActive } from './startup-state'
-import { protectInstanceMemory, runtimeMemoryEpoch } from './container-lifecycle'
+import { protectInstanceMemory, runtimeMemoryEpoch, protectExitedShardOom } from './container-lifecycle'
 import { MemoryPressureWindow, confirmedOom, shardPressure } from './memory-pressure'
 
 const windows = new Map<string, { epoch: string, master: MemoryPressureWindow, caves: MemoryPressureWindow, masterBaseline: ResourceSnapshot | null, cavesBaseline: ResourceSnapshot | null }>()
@@ -48,6 +48,10 @@ export async function inspectMemoryProtection(app: FastifyInstance): Promise<voi
     }
     if (confirmedOom(sample.master, state.masterBaseline) || confirmedOom(sample.caves, state.cavesBaseline)) {
       await stop(sample, 'oom', '确认本轮分片 OOM，已保护停止整个实例'); return
+    }
+    for (const ref of sample.refs) {
+      const resources = ref.name.endsWith('-caves') ? sample.caves : sample.master
+      if (resources?.oomKilled === true && await protectExitedShardOom(app, sample.instance, ref)) return
     }
     for (const role of ['master', 'caves'] as const) {
       const pressure = shardPressure(sample[role])

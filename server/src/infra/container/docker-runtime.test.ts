@@ -86,3 +86,14 @@ it('remote and rootless Docker never claim host protection from the panel namesp
   t.mock.method(docker, 'info', async () => ({ CgroupDriver: 'systemd', CgroupVersion: '2', SecurityOptions: ['name=rootless'] }))
   assert.equal((await local.hostResources()).budget.state, 'unavailable')
 })
+
+it('missing panel identity does not perform a Docker request', async t => {
+  const runtime = new DockerContainerRuntime('unix:///fixture.sock')
+  const docker = (runtime as unknown as { docker: Docker }).docker
+  const previous = process.env.HOSTNAME
+  delete process.env.HOSTNAME
+  t.after(() => { if (previous !== undefined) process.env.HOSTNAME = previous })
+  const info = t.mock.method(docker, 'info', async () => { throw new Error('must not connect') })
+  assert.equal((await runtime.hostResources()).source, 'unknown')
+  assert.equal(info.mock.callCount(), 0)
+})

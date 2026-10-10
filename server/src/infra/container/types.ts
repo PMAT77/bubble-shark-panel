@@ -56,6 +56,7 @@ export interface ContainerInspect {
   running: boolean
   pid?: number
   startedAt?: string
+  runtimeIdentity?: string
   /**
    * 进程已退出、运行时正在把它拉起来（Native 的 systemd `Restart=` 等待窗口）。
    * 此时 `running` 为 true —— 对上层而言实例仍算在运行中，否则状态会在运行/停止之间来回翻转。

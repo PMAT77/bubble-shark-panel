@@ -840,7 +840,7 @@ export class NativeSystemdRuntime implements ContainerRuntime {
       const { stdout } = await this.systemctl([
         'show',
         this.unitName(ref),
-        '--property=LoadState,ActiveState,SubState,MainPID,ExecMainStartTimestamp,ExecMainStartTimestampMonotonic,ExecMainStatus,ControlGroup,MemoryPeak,Result,NRestarts',
+        '--property=LoadState,ActiveState,SubState,MainPID,ExecMainStartTimestamp,ExecMainStartTimestampMonotonic,ExecMainStatus,ControlGroup,MemoryPeak,Result,NRestarts,InvocationID',
       ])
       const properties = parseSystemctlProperties(stdout)
       if (!properties.LoadState || properties.LoadState === 'error') throw new Error('无法读取单元状态')
@@ -855,6 +855,7 @@ export class NativeSystemdRuntime implements ContainerRuntime {
         ...(state.restarting ? { restarting: true } : {}),
         ...(Number.isInteger(pid) && pid > 0 ? { pid } : {}),
         ...(properties.ExecMainStartTimestamp ? { startedAt: properties.ExecMainStartTimestamp } : {}),
+        ...(properties.InvocationID ? { runtimeIdentity: properties.InvocationID } : {}),
         ...(state.uptimeSeconds !== undefined ? { uptimeSeconds: state.uptimeSeconds } : {}),
         ...(state.memPeakMb !== undefined ? { memPeakMb: state.memPeakMb } : {}),
         ...(memOomKillCount !== undefined ? { memOomKillCount } : {}),

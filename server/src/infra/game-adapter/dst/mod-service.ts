@@ -5,7 +5,7 @@ import { ensureClusterDirectory, resolveClusterPaths } from './cluster-service'
 import { buildLuaConfigurationOptionsInline, parseModInfoDependencies } from './mod-config'
 import { readWorldSeeds } from './panel-config-meta'
 import { resolveDstUgcShardFolders, type DstShardFolder } from './ugc-mod-install'
-import { ensureWorldSeedModLayout, toWorldSeedModName } from './world-seed'
+import { ensureWorldSeedModLayout, SHARD_ID_BY_FOLDER, toWorldSeedModName } from './world-seed'
 
 const MOD_SETUP_FILE_NAME = 'dedicated_server_mods_setup.lua'
 const MOD_OVERRIDES_FILE_NAME = 'modoverrides.lua'
@@ -74,8 +74,8 @@ function buildModOverridesContent(mods: DstModEntry[], extraRows: string[] = [])
  * 它不进 dedicated_server_mods_setup.lua：那个文件是给 SteamCMD 拉取创意工坊内容用的，
  * 内置 Mod 的文件由面板自己落位，列进去只会让游戏去工坊找一份并不存在的 Mod。
  */
-function buildWorldSeedModRow(): string {
-  return `  ["${toWorldSeedModName()}"]={ enabled=true },`
+function buildWorldSeedModRow(seed: string): string {
+  return `  ["${toWorldSeedModName()}"]={ enabled=true${buildLuaConfigurationOptionsInline({ seed })} },`
 }
 
 function writeModOverridesByShard(
@@ -170,14 +170,15 @@ export function writeInstanceModFiles(installPath: string, mods: DstModEntry[], 
   writeClusterModSetup(installPath, modSetupContent, options.backup)
   // 世界种子（面板内置 Mod）：先落位文件、再按分片注入启用条目，两件事必须一起做，
   // 否则会出现"启用了但文件不在"或"文件在但没启用"的不一致状态。
+  const seeds = readWorldSeeds(installPath)
   const seedFolders = ensureWorldSeedModLayout(
     installPath,
     resolveDstUgcShardFolders(installPath),
-    readWorldSeeds(installPath),
+    seeds,
   )
   writeModOverridesByShard(installPath, shardFolder =>
     buildModOverridesContent(
       mods,
-      seedFolders.includes(shardFolder) ? [buildWorldSeedModRow()] : [],
+      seedFolders.includes(shardFolder) ? [buildWorldSeedModRow(seeds[SHARD_ID_BY_FOLDER[shardFolder]]!)] : [],
     ), options.backup)
 }

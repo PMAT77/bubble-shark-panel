@@ -23,13 +23,34 @@ export function shouldPollStartup(instance: Pick<InstanceItem, 'status' | 'runti
   return isStartupActive(instance.startup) || (instance.status === 'running' && !instance.startup && !instance.runtimeReadyAt)
 }
 
-/** 只通知当前页面会话发起的启动；旧任务、重复轮询与跨页面重连均不再弹提示。 */
+/** 启动终态只通知本会话发起的任务；swap 提示按浏览器会话去重，忽略历史失败。 */
 export function createStartupNoticeTracker() {
   const accepted = new Map<string, { startedAfter: number, taskId?: string, matched: boolean }>()
   const notified = new Set<string>()
+  const observed = new Set<string>()
+  const swapNotified = new Set<string>()
   return {
     accept(id: string, startedAfter: number, taskId?: string) { accepted.set(id, { startedAfter, taskId, matched: false }) },
     pending(id: string) { return accepted.has(id) },
+    consumeSwap(id: string, snapshot: InstanceStartupSnapshot) {
+      const key = `${id}:${snapshot.taskId}`
+      const request = accepted.get(id)
+      const matchesRequest = request && (request.taskId ? request.taskId === snapshot.taskId : Date.parse(snapshot.startedAt) >= request.startedAfter)
+      if (request && !matchesRequest) return null
+      if (isStartupActive(snapshot)) observed.add(key)
+      if (snapshot.status === 'cancelled' || snapshot.status === 'success'
+        || (!isStartupActive(snapshot) && !matchesRequest && !observed.has(key))) return null
+      const advice = snapshot.swapAdvice
+      if (!advice?.command || !['none', 'low', 'exhausted'].includes(advice.state) || swapNotified.has(key)) return null
+      swapNotified.add(key)
+      try {
+        const storageKey = `bsp_startup_swap:${key}`
+        if (globalThis.sessionStorage?.getItem(storageKey) === '1') return null
+        globalThis.sessionStorage?.setItem(storageKey, '1')
+      }
+      catch { /* 浏览器禁用存储时仍使用内存去重。 */ }
+      return advice
+    },
     consume(id: string, snapshot: InstanceStartupSnapshot): 'success' | 'failed' | null {
       const request = accepted.get(id)
       if (!request) return null

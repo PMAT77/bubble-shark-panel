@@ -657,9 +657,6 @@ function renderInstanceStateColumn(row: InstanceItem) {
       ),
     )
   }
-  if (row.runtimeFailureKind === 'memory' || row.startup?.diagnosis?.code.match(/memory|oom|pressure|resource|throttl/i)) {
-    badges.push(h(NButton, { text: true, size: 'tiny', onClick: () => router.push({ name: 'nodeInstanceDetail', params: { instanceId: row.id }, hash: '#instance-resources' }) }, { default: () => '查看资源' }))
-  }
   const badgeGroup = h('span', { class: 'inline-flex flex-wrap items-center gap-1' }, badges)
   const errorText = row.lastError?.trim()
   if (!errorText || isInstanceInstallingStatus(row.status)) {

@@ -13,7 +13,7 @@ import { emitPanelEvent } from '../notify/events'
 import type { MemoryProtectionStop } from '../../../../shared/contracts/instance-resources'
 import { resolveInstanceResourceSettings } from './resource-settings'
 import { runStartupMonitor } from './startup-monitor'
-import { cancelStartupTask, changeStartupPhase, createStartupTask, currentStartupTask, enqueueStartupTask, isCurrentStartupTask, persistStartupTask, releaseStartupTask, startupIsActive, type StartupTask } from './startup-state'
+import { cancelStartupTask, changeStartupPhase, createStartupTask, currentStartupTask, enqueueStartupTask, isCurrentStartupTask, persistStartupTask, recordStartupSwapAdvice, releaseStartupTask, startupIsActive, type StartupTask } from './startup-state'
 import { isSteamcmdAppUpdateBusy } from '../../infra/container/steamcmd-app-update-queue'
 import { resolveDockerStatus } from '../../infra/docker'
 import { createDockerClient } from '../../infra/docker-connect'
@@ -139,7 +139,7 @@ export async function protectInstanceMemory(app: FastifyInstance, observed: DbGa
       ...(stop.cleanupCompleted ? { containerId: null, runtimePid: null, runtimeStartedAt: null } : { lastError: `${evidence.message}；清理未完成：${errors.join('；')}` }) })
     const mb = (value: number | null | undefined) => value == null ? '未知' : `${Math.round(value)} MiB`
     emitPanelEvent({ type: 'instance_exited_unexpectedly', subjectId: id, subjectName: current.name, severity: 'critical', at, occurrenceKey: `memory:${report.taskId}:${at}`,
-      message: `实例「${current.name}」内存保护停止：${evidence.message}。主世界 ${mb(evidence.master?.memoryCurrentMb)}/${mb(evidence.master?.memoryMaxMb)}，洞穴 ${mb(evidence.caves?.memoryCurrentMb)}/${mb(evidence.caves?.memoryMaxMb)}，共享预算 ${mb(evidence.host?.budget.maxMb)}，可用 swap ${mb(evidence.host?.swapFreeMb)}。请打开实例 → 资源与启动设置，检查限额或按 root 命令追加 swap 后手动启动。${errors.length ? '分片清理失败，请先再次停止。' : ''}` })
+      message: `实例「${current.name}」内存保护停止：${evidence.message}。主世界 ${mb(evidence.master?.memoryCurrentMb)}/${mb(evidence.master?.memoryMaxMb)}，洞穴 ${mb(evidence.caves?.memoryCurrentMb)}/${mb(evidence.caves?.memoryMaxMb)}，共享预算 ${mb(evidence.host?.budget.maxMb)}，可用 swap ${mb(evidence.host?.swapFreeMb)}。请在服务器 panel.env 检查限额，或以 root 追加 swap 后手动启动。${errors.length ? '分片清理失败，请先再次停止。' : ''}` })
     instanceConsoleLogStore.appendSystem(id, `内存保护停止：${evidence.message}${errors.length ? '；清理未完成' : '；两片已清理'}`)
   }
   finally { memoryProtectionInFlight.delete(id) }
@@ -1056,6 +1056,7 @@ async function startInstanceContainerUnlocked(
     memoryCapMb: settings.masterMemoryMb,
     measuredDemandMb: measuredStartupDemand(previous?.lastStartupReport, cavesConfigured),
   }, host ? hostGuardReading(host) : undefined)
+  await recordStartupSwapAdvice(task, host, memoryPressure.requiredMb)
   if (!memoryPressure.ok) {
     return { ok: false, message: memoryPressure.detail, hostMemoryPressure: memoryPressure }
   }
@@ -1185,6 +1186,7 @@ async function startInstanceContainerUnlocked(
           shardCount: 1, modCount: await countEnabledInstanceMods(input.instanceId), memoryCapMb: settings.cavesMemoryMb,
           measuredDemandMb: previous?.lastStartupReport?.planningDemand?.cavesMb ?? previous?.lastStartupReport?.caves.memoryAndSwapPeakMb,
         }, caveHost ? hostGuardReading(caveHost) : undefined)
+        await recordStartupSwapAdvice(task, caveHost, pressure.requiredMb)
         if (!pressure.ok) return { ok: false as const, message: pressure.detail }
         const result = await startSingleShardContainer(runtime, cavesSpec, gameDstImage, runtimeMode)
         if (result.ok && stale()) {
@@ -1422,7 +1424,7 @@ export async function sendInstanceContainerCommand(
 
 async function failPreparation(app: FastifyInstance, task: StartupTask, message: string, code = 'prepare_failed') {
   if (!isCurrentStartupTask(task)) return
-  task.snapshot.diagnosis = { code, message: code === 'host_memory_pressure' ? '宿主机内存与 swap 余量不足，请查看资源设置和控制台' : code === 'probe_unavailable' ? '运行时查询通道不可用，已超过原启动期限' : '启动准备失败，请检查资源与控制台' }
+  task.snapshot.diagnosis = { code, message: code === 'host_memory_pressure' ? '宿主机内存与 swap 余量不足，请按通知中的服务器命令处理后重试' : code === 'probe_unavailable' ? '运行时查询通道不可用，已超过原启动期限' : '启动准备失败，请检查服务器配置与控制台' }
   await changeStartupPhase(task, 'failed')
   if (!isCurrentStartupTask(task)) return
   instanceConsoleLogStore.appendSystem(task.instanceId, `启动失败：${message}`)
@@ -1538,6 +1540,7 @@ export async function recoverInstanceStartup(app: FastifyInstance, instance: Non
         startCaves: cavesSpec ? async () => {
           const host = await sampleHostResources(runtime)
           const pressure = assessHostMemoryForHeavyOperation('dst-container-start', { shardCount: 1, modCount: await countEnabledInstanceMods(instance.id), memoryCapMb: task.snapshot.settings!.cavesMemoryMb, measuredDemandMb: report.planningDemand?.cavesMb }, host ? hostGuardReading(host) : undefined)
+          await recordStartupSwapAdvice(task, host, pressure.requiredMb)
           if (!pressure.ok) return { ok: false as const, message: pressure.detail }
           const result = await startSingleShardContainer(runtime, cavesSpec, gameDstImage, runtimeMode)
           if (result.ok && !isCurrentStartupTask(task)) {

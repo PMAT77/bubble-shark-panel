@@ -43,7 +43,7 @@ export default {
   /** 向正在运行的分片询问当前世界的真实种子（读到后会被面板记录下来） */
   readWorldSeed: (payload: { instanceId: string, shard: ShardId }) =>
     api.post('app/instance/shards/read-world-seed', payload) as Promise<{ data: ShardWorldSeedProbe }>,
-  /** 按填写的种子重置世界并重新启动实例（要求实例已停止） */
+  /** 兼容入口：按种子生成所选分片，返回后台操作 ID */
   resetWorldWithSeed: (payload: { instanceId: string, shard: ShardId, worldSeed: string | null }) =>
     api.post('app/instance/shards/reset-world-with-seed', payload) as Promise<{ data: ShardResetWorldWithSeedResult }>,
   getShardSnapshots: (instanceId: string, shard: ShardId) => api.get('app/instance/shards/snapshots', {

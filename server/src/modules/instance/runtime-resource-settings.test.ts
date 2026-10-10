@@ -39,14 +39,14 @@ async function fixture(t: TestContext) {
   return { app, instance, runtime, name, resources }
 }
 
-it('runtime OOM warnings use the per-instance cap and preserve the captured startup settings', async (t) => {
+it('runtime OOM warnings ignore legacy overrides but preserve captured startup settings', async (t) => {
   const { app, instance, runtime, name, resources } = await fixture(t)
   t.mock.method(runtime, 'inspect', async () => ({ id: name, name, running: true, restarts: 1, uptimeSeconds: 5, exitResult: 'oom-kill', memOomKillCount: 1 }))
   const settings = { masterMemoryMb: 5120, cavesMemoryMb: 3072, shardReadyWaitSec: 600 }
   const startedAt = new Date(Date.now() - 30_000).toISOString()
   await updateGameInstanceRuntime(instance.id, { runtimeStartedAt: startedAt, resourceConfig: settings })
   await reconcileInstanceRuntimeState(app)
-  assert.match((await getGameInstanceById(instance.id))?.runtimeWarning ?? '', /配置上限 5120 MiB，实际未读取/)
+  assert.match((await getGameInstanceById(instance.id))?.runtimeWarning ?? '', /配置上限 1536 MiB，实际未读取/)
   await updateGameInstanceRuntime(instance.id, {
     resourceConfig: { ...settings, masterMemoryMb: 1024 }, runtimeWarning: null,
     lastStartupReport: { taskId: 'captured', status: 'failed', phase: 'failed', startedAt, phaseStartedAt: startedAt, updatedAt: startedAt,
@@ -60,10 +60,15 @@ it('runtime OOM warnings use the per-instance cap and preserve the captured star
   assert.doesNotMatch(warning, /1536|1024/)
 })
 
-it('runtime readiness uses the instance timeout instead of the inherited 300-second timeout', async (t) => {
+it('runtime readiness preserves the captured timeout despite subsequent server or legacy configuration changes', async (t) => {
   const { app, instance, runtime, name, resources } = await fixture(t)
   t.mock.method(runtime, 'inspect', async () => ({ id: name, name, running: true, restarts: 0, uptimeSeconds: 5 }))
-  await updateGameInstanceRuntime(instance.id, { runtimeStartedAt: new Date(Date.now() - 400_000).toISOString(), resourceConfig: { masterMemoryMb: 5120, cavesMemoryMb: 0, shardReadyWaitSec: 600 } })
+  const at = new Date(Date.now() - 400_000).toISOString()
+  await updateGameInstanceRuntime(instance.id, { runtimeStartedAt: at, resourceConfig: { masterMemoryMb: 5120, cavesMemoryMb: 0, shardReadyWaitSec: 1 },
+    lastStartupReport: { taskId: 'captured', status: 'running', phase: 'master_loading', startedAt: at, phaseStartedAt: at, updatedAt: at,
+      phaseDeadlineAt: new Date(Date.parse(at) + 600_000).toISOString(), elapsedSeconds: 400, remainingSeconds: 200,
+      settings: { masterMemoryMb: 5120, cavesMemoryMb: null, shardReadyWaitSec: 600 },
+      master: { state: 'loading', memoryPeakMb: null }, caves: { state: 'disabled', memoryPeakMb: null }, diagnosis: null } })
   await reconcileInstanceRuntimeState(app)
   assert.equal((await getGameInstanceById(instance.id))?.runtimeWarning, null)
   assert.equal(resources.mock.callCount(), 0, 'healthy listing must not collect extra resources')

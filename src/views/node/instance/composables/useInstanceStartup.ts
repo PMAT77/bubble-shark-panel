@@ -1,4 +1,6 @@
 import { ref, watch, type Ref } from 'vue'
+import { useNotification } from 'naive-ui'
+import { showStartupSwapNotification } from '@/utils/hostMemoryPressure'
 import apiInstance, { type InstanceItem, type InstanceStartupSnapshot } from '@/api/modules/instance'
 import { createRuntimeMetricsPoller } from './runtimeMetricsPoller'
 import { createStartupNoticeTracker, shouldPollStartup } from '../startupPresentation'
@@ -16,6 +18,7 @@ export function useInstanceStartup(
   commit: (id: string, snapshot: InstanceStartupSnapshot) => void,
   onTerminal?: () => void,
 ) {
+  const notification = useNotification()
   let enabled = false
   const ids = () => instances.value.filter(item => shouldPollStartup(item) || notices.pending(item.id)).map(item => item.id).sort()
   const poller = createRuntimeMetricsPoller({
@@ -31,9 +34,11 @@ export function useInstanceStartup(
         if (previous && Date.parse(snapshot.startedAt) < Date.parse(previous.startedAt)) continue
         if (previous?.taskId === snapshot.taskId && Date.parse(snapshot.updatedAt) < Date.parse(previous.updatedAt)) continue
         commit(id, snapshot)
+        const swapAdvice = notices.consumeSwap(id, snapshot)
+        if (swapAdvice) showStartupSwapNotification(notification, instance.name, swapAdvice)
         const notice = notices.consume(id, snapshot)
         if (notice === 'success') faToast.success('实例已启动，全部世界已就绪')
-        if (notice === 'failed') faToast.error('启动失败', { description: snapshot.diagnosis?.message ?? '请查看控制台日志和资源设置' })
+        if (notice === 'failed') faToast.error('启动失败', { description: snapshot.diagnosis?.message ?? '请查看控制台日志和服务器配置' })
         if ((snapshot.status === 'success' || snapshot.status === 'failed' || snapshot.status === 'cancelled') && previous?.status !== snapshot.status) terminal = true
       }
       if (terminal) onTerminal?.()

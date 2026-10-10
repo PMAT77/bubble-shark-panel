@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { InstanceStartupSnapshot } from '../../../../shared/contracts/instance-resources'
+import type { HostResourceSnapshot, InstanceStartupSnapshot } from '../../../../shared/contracts/instance-resources'
+import { buildStartupSwapAdvice } from '../../infra/container/host-resource-guard'
 import { updateGameInstanceRuntime } from '../../shared/db'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 
@@ -83,6 +84,15 @@ export async function persistStartupTask(task: StartupTask): Promise<void> {
   writes.set(task.instanceId, write)
   try { await write }
   finally { if (writes.get(task.instanceId) === write) writes.delete(task.instanceId) }
+}
+
+/** 保留本轮首次确认的不足现场，快速失败也能通过启动摘要取到命令。 */
+export async function recordStartupSwapAdvice(task: StartupTask, host: HostResourceSnapshot | null, requiredMb: number): Promise<void> {
+  if (!isCurrentStartupTask(task) || task.snapshot.swapAdvice || !host || host.source === 'unknown') return
+  const advice = buildStartupSwapAdvice(host, requiredMb)
+  if (!advice) return
+  task.snapshot.swapAdvice = advice
+  await persistStartupTask(task)
 }
 
 export function createStartupTask(instanceId: string, previous?: InstanceStartupSnapshot): StartupTask {

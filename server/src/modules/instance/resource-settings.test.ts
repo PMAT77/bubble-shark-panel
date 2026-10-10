@@ -48,7 +48,7 @@ before(async () => {
 })
 after(async () => { await app.close(); mock.restoreAll(); closeDatabase(); fs.rmSync(dir, { recursive: true, force: true }) })
 
-it('resources require read/lifecycle permissions and the instance grant independently', async (t) => {
+it('read-only diagnostics require read permission and an instance grant; resource writes are retired', async (t) => {
   t.mock.method(getContainerRuntime(), 'findByName', async () => undefined)
   await setPermissions(['instance:read'])
   const read = await app.inject({ method: 'GET', url: `/app/instance/resources?id=${id}`, headers: { token } })
@@ -58,20 +58,16 @@ it('resources require read/lifecycle permissions and the instance grant independ
   assert.deepEqual(body.data.config, { masterMemoryMb: null, cavesMemoryMb: null, shardReadyWaitSec: null })
   assert.equal(body.data.recommendation.masterMemoryMb, 2560)
   const config = { masterMemoryMb: 3072, cavesMemoryMb: 0, shardReadyWaitSec: 420 }
-  const denied = await app.inject({ method: 'POST', url: '/app/instance/resources', headers: { token }, payload: { id, config } })
-  assert.equal(JSON.parse(denied.body).code, ErrorCode.FORBIDDEN)
+  await updateGameInstanceRuntime(id, { resourceConfig: config })
   await setPermissions(['instance:read', 'instance:lifecycle'])
   const hidden = await app.inject({ method: 'GET', url: `/app/instance/resources?id=${hiddenId}`, headers: { token } })
   assert.equal(JSON.parse(hidden.body).code, ErrorCode.FORBIDDEN)
-  const hiddenWrite = await app.inject({ method: 'POST', url: '/app/instance/resources', headers: { token }, payload: { id: hiddenId, config } })
-  assert.equal(JSON.parse(hiddenWrite.body).code, ErrorCode.FORBIDDEN)
   const saved = await app.inject({ method: 'POST', url: '/app/instance/resources', headers: { token }, payload: { id, config } })
-  assert.equal(JSON.parse(saved.body).error, '')
-  assert.deepEqual(JSON.parse(saved.body).data.effective, { masterMemoryMb: 3072, cavesMemoryMb: null, shardReadyWaitSec: 420 })
+  assert.equal(saved.statusCode, 404)
   assert.deepEqual((await getGameInstanceById(id))?.resourceConfig, config)
-  const invalid = await app.inject({ method: 'POST', url: '/app/instance/resources', headers: { token }, payload: { id, config: { ...config, masterMemoryMb: -1 } } })
-  assert.notEqual(JSON.parse(invalid.body).error, '')
-  assert.deepEqual((await getGameInstanceById(id))?.resourceConfig, config)
+  const diagnostics = JSON.parse((await app.inject({ method: 'GET', url: `/app/instance/resources?id=${id}`, headers: { token } })).body).data
+  assert.deepEqual(diagnostics.config, { masterMemoryMb: null, cavesMemoryMb: null, shardReadyWaitSec: null })
+  assert.notEqual(diagnostics.effective.shardReadyWaitSec, 420)
 })
 
 it('stores startup reports across reopen and atomically ignores obsolete task writes', async () => {
@@ -81,6 +77,7 @@ it('stores startup reports across reopen and atomically ignores obsolete task wr
     phaseDeadlineAt: null, updatedAt: at, elapsedSeconds: 300, remainingSeconds: null,
     master: { state: 'failed', memoryPeakMb: 2300 }, caves: { state: 'pending', memoryPeakMb: null },
     diagnosis: { code: 'timeout', message: '加载超时' },
+    swapAdvice: { state: 'low', message: '启动余量不足，建议追加 2 GiB swap', command: 'sudo env BSP_SWAP_FILE=/swapfile-bsp-extra-2g BSP_SWAP_SIZE=2G bsp setup-swap' },
   }
   await updateGameInstanceRuntime(id, { lastStartupReport: report })
   closeDatabase()

@@ -32,6 +32,49 @@ describe('完整启动展示', () => {
 })
 
 describe('启动终态通知', () => {
+  it('swap notices remain deduplicated after page reload, with a fallback when storage is unavailable', (t) => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
+    const values = new Map<string, string>()
+    Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    } })
+    t.after(() => {
+      if (original) Object.defineProperty(globalThis, 'sessionStorage', original)
+      else Reflect.deleteProperty(globalThis, 'sessionStorage')
+    })
+    const swapAdvice = { state: 'low' as const, message: '追加 2 GiB swap', command: 'sudo bsp setup-swap' }
+    const active = snapshot({ swapAdvice })
+    assert.deepEqual(createStartupNoticeTracker().consumeSwap('instance', active), swapAdvice)
+    assert.equal(createStartupNoticeTracker().consumeSwap('instance', active), null)
+    assert.deepEqual(createStartupNoticeTracker().consumeSwap('instance', snapshot({ taskId: 'task-2', swapAdvice })), swapAdvice)
+    Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, get: () => { throw new Error('storage denied') } })
+    const tracker = createStartupNoticeTracker()
+    assert.deepEqual(tracker.consumeSwap('instance', active), swapAdvice)
+    assert.equal(tracker.consumeSwap('instance', active), null)
+  })
+  it('swap notices ignore history, cancelled tasks, unknown and adequate readings', () => {
+    const tracker = createStartupNoticeTracker()
+    const swapAdvice = { state: 'low' as const, message: '追加 2 GiB swap', command: 'sudo bsp setup-swap' }
+    assert.equal(tracker.consumeSwap('instance', snapshot({ status: 'failed', swapAdvice })), null)
+    assert.equal(tracker.consumeSwap('instance', snapshot({ status: 'cancelled', swapAdvice })), null)
+    assert.equal(tracker.consumeSwap('instance', snapshot({ swapAdvice: { ...swapAdvice, state: 'unknown' } })), null)
+    assert.equal(tracker.consumeSwap('instance', snapshot({ swapAdvice: { ...swapAdvice, state: 'ready' } })), null)
+    assert.deepEqual(tracker.consumeSwap('instance', snapshot({ swapAdvice })), swapAdvice)
+    assert.equal(tracker.consumeSwap('instance', snapshot({ swapAdvice })), null)
+    assert.equal(tracker.consumeSwap('instance', snapshot({ status: 'failed', swapAdvice })), null)
+  })
+  it('fast failures of accepted tasks notify once, and new starts can notify again', () => {
+    const tracker = createStartupNoticeTracker()
+    const swapAdvice = { state: 'none' as const, message: '创建 2 GiB swap', command: 'sudo bsp setup-swap' }
+    tracker.accept('instance', 0, 'task-2')
+    assert.equal(tracker.consumeSwap('instance', snapshot({ swapAdvice })), null)
+    const failed = snapshot({ taskId: 'task-2', status: 'failed', swapAdvice })
+    assert.deepEqual(tracker.consumeSwap('instance', failed), swapAdvice)
+    assert.equal(tracker.consume('instance', failed), 'failed')
+    assert.equal(tracker.consumeSwap('instance', failed), null)
+    assert.deepEqual(tracker.consumeSwap('instance', snapshot({ taskId: 'task-3', swapAdvice })), swapAdvice)
+  })
   it('按受理taskId匹配，不受客户端与服务器时钟偏差影响', () => {
     const tracker = createStartupNoticeTracker()
     tracker.accept('instance', Date.parse('2026-10-10T11:00:00Z'), 'task-2')

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { after, before, it } from 'node:test'
+import { after, before, it, mock } from 'node:test'
 import { zipSync, strToU8 } from 'fflate'
 import Fastify from 'fastify'
 import { registerAuthModule } from '../auth/index'
@@ -12,6 +12,7 @@ import { registerModImportRoutes } from './mod-import-routes'
 import { commitLocalMod, commitLocalMods, discardLocalMod, inspectLocalMod, resolveModImportRoot } from './mod-import-service'
 import type { ModImportInspection } from '../../../../shared/contracts/mod'
 import { ErrorCode } from '../../../../shared/constants/error-code'
+import { getContainerRuntime } from '../../infra/container'
 import { ContentTransaction } from '../../infra/backup/content-transaction'
 import { recoverInstanceContentOperations } from '../../shared/instance-content/state'
 import { closeDatabase, initDatabase, createGameInstance, listInstanceMods, updateInstanceModByWorkshopId, updateGameInstanceRuntime, addUserInstanceGrants, findUserByAccount, createUserRecord, replaceUserPermissions } from '../../shared/db/index'
@@ -28,13 +29,14 @@ const owner = 'owner'
 const oldFetch = globalThis.fetch
 let fetchCount = 0
 before(async () => {
+  mock.method(getContainerRuntime(), 'findByName', async () => undefined)
   process.env.BSP_MOD_IMPORT_ROOT = path.join(root, 'uploads')
   fs.mkdirSync(path.join(install, 'klei-storage', 'DoNotStarveTogether', 'Cluster_1', 'Master'), { recursive: true })
   await initDatabase(path.join(root, 'db.sqlite'), path.resolve('server/drizzle'), { adminUsername: 'superadmin', adminPassword: '123456', seedDevelopmentUsers: false })
   await createGameInstance({ id, nodeId: 'local-node', name: 'Local import', gameCode: '343050', status: 'stopped', installPath: install })
   globalThis.fetch = (() => { fetchCount++; throw new Error('network forbidden') }) as typeof fetch
 })
-after(() => { globalThis.fetch = oldFetch; closeDatabase(); fs.rmSync(root, { recursive: true, force: true }); delete process.env.BSP_MOD_IMPORT_ROOT })
+after(() => { mock.restoreAll(); globalThis.fetch = oldFetch; closeDatabase(); fs.rmSync(root, { recursive: true, force: true }); delete process.env.BSP_MOD_IMPORT_ROOT })
 function zip(entries: Record<string, string>) { return Buffer.from(zipSync(Object.fromEntries(Object.entries(entries).map(([key, value]) => [key, strToU8(value)])))) }
 const content = (version: string) => ({ 'modinfo.lua': `name = "Offline Mod"\nversion = "${version}"\n`, 'modmain.lua': `-- ${version}` })
 const inspect = (data: Buffer, name = '123.zip') => inspectLocalMod(Readable.from([data]), id, owner, name)

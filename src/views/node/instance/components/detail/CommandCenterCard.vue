@@ -5,12 +5,7 @@ import { NButton, NCard, NEmpty, NInput, NRadioButton, NRadioGroup, NTabPane, NT
 import { computed, ref, watch } from 'vue'
 import { routeToInstanceConsole } from '@/navigation/game-routes'
 import { formatDateTime } from '../../utils'
-import {
-  INSTANCE_QUICK_COMMANDS,
-  RESET_WORLD_COMMAND,
-  RESET_WORLD_CONFIRM_CONTENT,
-  RESET_WORLD_CONFIRM_TITLE,
-} from '../../instanceCommandShortcuts'
+import WorldMaintenancePanel from '@/components/WorldMaintenancePanel.vue'
 
 defineOptions({
   name: 'InstanceDetailCommandCenterCard',
@@ -66,9 +61,10 @@ watch(consoleShards, (shards) => {
 /* ------------------------------ 指令发送 ------------------------------ */
 
 const commandSending = ref(false)
+const maintenanceBusy = ref(false)
 
 async function sendCommand(command: string) {
-  if (!props.instance || !running.value || commandSending.value) {
+  if (!props.instance || !running.value || commandSending.value || maintenanceBusy.value) {
     return
   }
   commandSending.value = true
@@ -84,32 +80,6 @@ async function sendCommand(command: string) {
   finally {
     commandSending.value = false
   }
-}
-
-function confirmDangerousCommand(command: string, title: string, content: string) {
-  dialog.warning({
-    title,
-    content,
-    positiveText: '确认执行',
-    negativeText: '取消',
-    onPositiveClick: () => sendCommand(command),
-  })
-}
-
-function runQuickCommand(key: string) {
-  const item = INSTANCE_QUICK_COMMANDS.find(cmd => cmd.key === key)
-  if (!item) {
-    return
-  }
-  if (item.dangerous) {
-    confirmDangerousCommand(item.command, item.confirmTitle ?? '确认执行', item.confirmContent ?? '确认执行该命令？')
-    return
-  }
-  void sendCommand(item.command)
-}
-
-function confirmResetWorld() {
-  confirmDangerousCommand(RESET_WORLD_COMMAND, RESET_WORLD_CONFIRM_TITLE, RESET_WORLD_CONFIRM_CONTENT)
 }
 
 /* ------------------------------ 自定义指令 ------------------------------ */
@@ -243,51 +213,12 @@ defineExpose({
 
 <template>
   <NCard title="游戏指令" size="small">
-    <p
-      v-if="instance && !running"
-      class="rounded-md bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground mb-3"
-    >
-      实例未运行，启动后可用
-    </p>
-
     <NTabs v-model:value="activeTab" type="line" size="small" @update:value="onTabChange">
-      <NTabPane name="quick" tab="快捷指令">
-        <div class="flex flex-wrap gap-2 items-center mt-3 mb-3">
-          <span class="text-xs text-muted-foreground">发送到：</span>
-          <NRadioGroup v-model:value="commandShard" size="small">
-            <NRadioButton value="master" label="地上" />
-            <NRadioButton value="caves" label="洞穴" :disabled="!cavesCommandAvailable" />
-          </NRadioGroup>
-          <span v-if="cavesCommandDisabledHint" class="text-xs text-muted-foreground">
-            （{{ cavesCommandDisabledHint }}）
-          </span>
-        </div>
-        <NSpace wrap>
-          <NButton
-            v-for="item in INSTANCE_QUICK_COMMANDS"
-            :key="item.key"
-            size="small"
-            :disabled="!running || commandSending"
-            :loading="commandSending"
-            @click="runQuickCommand(item.key)"
-            v-if="hasPermission('console:command')"
-          >
-            {{ item.label }}
-          </NButton>
-          <NButton
-            size="small"
-            type="warning"
-            :disabled="!running || commandSending"
-            :loading="commandSending"
-            @click="confirmResetWorld"
-            v-if="hasPermission('console:command')"
-          >
-            重置世界
-          </NButton>
-        </NSpace>
+      <NTabPane display-directive="show" name="quick" tab="快捷指令">
+        <WorldMaintenancePanel v-if="instance" :instance-id="instance.id" :instance-name="instance.name" :running="running" @refreshed="emit('refreshed')" @busy="maintenanceBusy = $event" />
       </NTabPane>
 
-      <NTabPane name="custom" tab="自定义指令">
+      <NTabPane v-if="hasPermission('console:command')" name="custom" tab="自定义指令">
         <div class="flex flex-wrap gap-2 items-center mt-3 mb-3">
           <span class="text-xs text-muted-foreground">发送到：</span>
           <NRadioGroup v-model:value="commandShard" size="small">
@@ -303,14 +234,14 @@ defineExpose({
             v-model:value="customCommand"
             class="flex-1"
             placeholder="例如 c_listallplayers() 或 TheNet:Announce('hello')"
-            :disabled="!running || commandSending"
+            :disabled="!running || commandSending || maintenanceBusy"
           />
           <NButton
             attr-type="submit"
             size="small"
             type="primary"
             :loading="commandSending"
-            :disabled="!running || commandSending"
+            :disabled="!running || commandSending || maintenanceBusy"
             v-if="hasPermission('console:command')"
           >
             发送
@@ -324,7 +255,7 @@ defineExpose({
         </p>
       </NTabPane>
 
-      <NTabPane name="announce" tab="世界公告">
+      <NTabPane v-if="hasPermission('instance.console:read')" name="announce" tab="世界公告">
         <NInput
           v-model:value="maintenanceMessage"
           type="textarea"

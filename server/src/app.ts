@@ -4,7 +4,6 @@ import type { ServerConfig } from './shared/config'
 import path from 'node:path'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
-import fastifyStatic from '@fastify/static'
 import { registerAuthModule } from './modules/auth'
 import { registerClusterModule } from './modules/cluster'
 import { registerPlayerModule } from './modules/player'
@@ -25,6 +24,7 @@ import { success } from './shared/http/response'
 import { sanitizeRequestUrlForLog } from './shared/http/request-url'
 import { registerOperationAudit } from './shared/audit/operation-audit'
 import { resolveRepoRoot } from './shared/repo-root'
+import { registerFrontendStatic } from './shared/http/frontend-static'
 
 /**
  * 创建 Fastify 服务实例。
@@ -151,33 +151,7 @@ export async function createServerApp(config: Pick<ServerConfig, 'mode' | 'logLe
   if (config.mode === 'production') {
     // 打包后 bundle 位于 dist-server/，改从仓库根定位前端产物
     const distDir = path.resolve(resolveRepoRoot(), 'dist')
-    void app.register(fastifyStatic, {
-      root: distDir,
-      prefix: '/',
-      /**
-       * 缓存策略必须显式声明，不能依赖默认值：index.html 是唯一没有内容哈希的入口文件，
-       * 一旦被浏览器或中间代理按 max-age 缓存住，面板升级后页面仍会去加载旧的前端脚本，
-       * 表现就是「升级了但界面没变」。带 hash 的 assets 反过来可以长期 immutable。
-       */
-      setHeaders: (reply, filePath) => {
-        if (filePath.endsWith('index.html')) {
-          reply.header('Cache-Control', 'no-cache')
-          return
-        }
-        if (filePath.includes(`${path.sep}assets${path.sep}`)) {
-          reply.header('Cache-Control', 'public, max-age=31536000, immutable')
-        }
-      },
-    })
-    app.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith('/app/') || request.url.startsWith('/api/') || request.url === '/health') {
-        reply.status(404).send({ status: 1, error: 'Not Found' })
-        return
-      }
-      // SPA 兜底同样不能缓存：升级后旧 index.html 会把页面重新指回旧脚本
-      reply.header('Cache-Control', 'no-cache')
-      reply.sendFile('index.html')
-    })
+    registerFrontendStatic(app, distDir)
   }
 
   return app

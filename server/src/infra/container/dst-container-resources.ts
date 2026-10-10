@@ -44,14 +44,15 @@ export function resolveDstContainerResourceLimits(overrides?: DstContainerResour
   return limits
 }
 
-export function resolveInstanceResourceSettings(config?: InstanceResourceConfig | null) {
+/** 旧实例覆盖仅保留为历史数据；新任务统一读取服务器环境配置。 */
+export function resolveInstanceResourceSettings(_legacyConfig?: InstanceResourceConfig | null) {
   const globalMemory = resolveDstContainerResourceLimits()?.memory
-  const memory = (value: number | null | undefined) => value == null ? (globalMemory ? globalMemory / MIB : null) : (value === 0 ? null : value)
+  const memory = globalMemory ? globalMemory / MIB : null
   const parsedWait = Number(readBrandEnv('BSP_SHARD_READY_WAIT_SEC'))
   return {
-    masterMemoryMb: memory(config?.masterMemoryMb),
-    cavesMemoryMb: memory(config?.cavesMemoryMb),
-    shardReadyWaitSec: config?.shardReadyWaitSec ?? (Number.isFinite(parsedWait) && parsedWait >= 1 ? Math.floor(parsedWait) : 300),
+    masterMemoryMb: memory,
+    cavesMemoryMb: memory,
+    shardReadyWaitSec: Number.isFinite(parsedWait) && parsedWait >= 1 ? Math.floor(parsedWait) : 300,
   }
 }
 

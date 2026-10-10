@@ -1,4 +1,3 @@
-import { loadingFadeOut } from 'virtual:app-loading'
 import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
 import pinia from '@/store'
 import setupExtensions from './extensions'
@@ -15,8 +14,13 @@ const router = createRouter({
 setupGuards(router)
 setupExtensions(router)
 
-router.isReady().then(() => {
-  loadingFadeOut()
+router.onError(() => {
+  if (window.__BSP_BOOTSTRAP__?.state !== 'ready') {
+    window.__BSP_BOOTSTRAP__?.fail('页面初始化失败，请重新加载后重试。')
+  }
+  else {
+    faToast.error('页面加载失败', { description: '请重新加载后重试。' })
+  }
 })
 
 export default router

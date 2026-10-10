@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { after, before, it } from 'node:test'
+import { after, before, it, mock } from 'node:test'
 import type { MigrationMod } from '../../../../shared/contracts/migration'
 import { inspectMigrationContents, readMigrationBundle, writeMigrationBundle } from '../../infra/game-adapter/dst/migration-bundle'
 import { sha256File, inspectContentTree } from '../../infra/game-adapter/dst/mod-content'
@@ -14,6 +14,7 @@ import { resolveDstSteamWorkshopModDir } from '../../infra/game-adapter/dst/cons
 import { resolveDstLegacyModDir } from '../../infra/game-adapter/dst/ugc-mod-install'
 import { setModDownloadExecutorForTest, resetModDownloadExecutorForTest } from '../mod/mod-download-service'
 import { beginContentTransaction } from '../../shared/instance-content/state'
+import { getContainerRuntime } from '../../infra/container'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-migration-bundle-'))
 const source = path.join(root, 'source', 'Cluster_7')
@@ -23,6 +24,7 @@ let networkCalls = 0
 let seq = 0
 const mod = (id: string, enabled: boolean, dependencies: string[] = []): MigrationMod => ({ workshopId: id, name: `Mod ${id}`, enabled, loadOrder: 0, configurationOptions: { option: 'kept' }, dependencyIds: dependencies, version: 'v1', localUpdatedAt: '2025-01-01T00:00:00.000Z', content: null })
 before(async () => {
+  mock.method(getContainerRuntime(), 'findByName', async () => undefined)
   process.env.BSP_BACKUPS_ROOT = path.join(root, 'backups')
   process.env.BSP_MOD_DOWNLOAD_AUTO_START = '1'
   await initDatabase(path.join(root, 'db.sqlite'), path.resolve('server/drizzle'), { adminUsername: 'superadmin', adminPassword: '123456', seedDevelopmentUsers: false })
@@ -41,6 +43,7 @@ before(async () => {
   setModDownloadExecutorForTest(async () => { networkCalls++; throw new Error('SteamCMD forbidden') })
 })
 after(() => {
+  mock.restoreAll()
   globalThis.fetch = oldFetch
   resetModDownloadExecutorForTest()
   closeDatabase()

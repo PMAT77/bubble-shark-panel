@@ -20,6 +20,10 @@ function setupRoutes(router: Router) {
           replace: true,
         }
       }
+      // 改密页是固定路由，不依赖菜单；待改密账号的菜单请求可能被拒绝。
+      if (appAccountStore.mustChangePassword && to.name === 'forceChangePassword') {
+        return true
+      }
       if (to.name === 'forceChangePassword' && !appAccountStore.mustChangePassword) {
         return {
           path: appSettingsStore.settings.app.home.fullPath,
@@ -63,6 +67,11 @@ function setupRoutes(router: Router) {
            */
           if (appAccountStore.mustChangePassword) {
             return { path: '/force-change-password', replace: true }
+          }
+          // 网络或菜单初始化失败不代表登录失效。仍有会话时交给启动错误提示，
+          // 否则 login 会再次进入这里，反复跳转到自己。
+          if (appAccountStore.isLogin) {
+            throw error
           }
           return {
             name: 'login',
@@ -120,6 +129,9 @@ function setupProgress(router: Router) {
     if (appSettingsStore.settings.page.progress) {
       isLoading.value = false
     }
+  })
+  router.onError(() => {
+    isLoading.value = false
   })
 }
 // 标题

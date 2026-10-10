@@ -12,6 +12,7 @@ import Unocss from 'unocss/vite'
 import autoImport from 'unplugin-auto-import/vite'
 import TurboConsole from 'unplugin-turbo-console/vite'
 import components from 'unplugin-vue-components/vite'
+import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
 import { loadEnv } from 'vite'
 import AppLoading from 'vite-plugin-app-loading'
 import Archiver from 'vite-plugin-archiver'
@@ -22,6 +23,7 @@ import VueDevTools from 'vite-plugin-vue-devtools'
 
 export default function createVitePlugins(mode: string, isBuild = false) {
   const viteEnv = parseLoadedEnv(loadEnv(mode, process.cwd()))
+  const compressAlgorithms = viteEnv.VITE_BUILD_COMPRESS || (isBuild && mode === 'production' ? 'gzip,brotli' : '')
   const vitePlugins: (PluginOption | PluginOption[])[] = [
     vue(),
     vueJsx(),
@@ -66,6 +68,7 @@ export default function createVitePlugins(mode: string, isBuild = false) {
       dts: './src/types/components.d.ts',
       resolvers: [
         FantasticComponentsResolver(),
+        NaiveUiResolver(),
       ],
       types: [
         FantasticComponentsType,
@@ -91,9 +94,9 @@ export default function createVitePlugins(mode: string, isBuild = false) {
       enableProd: isBuild && viteEnv.VITE_BUILD_FAKE,
     }),
     // https://github.com/nonzzz/vite-plugin-compression
-    viteEnv.VITE_BUILD_COMPRESS && compression({
+    compressAlgorithms && compression({
       exclude: [/\.(br)$/, /\.(gz)$/],
-      algorithms: viteEnv.VITE_BUILD_COMPRESS.split(',').map((item: string) => ({
+      algorithms: compressAlgorithms.split(',').map((item: string) => ({
         gzip: 'gzip',
         brotli: 'brotliCompress',
       }[item])),

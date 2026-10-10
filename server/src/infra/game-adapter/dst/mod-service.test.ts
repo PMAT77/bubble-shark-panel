@@ -67,7 +67,8 @@ describe('mod-service', () => {
     const clusterRoot = resolveClusterRoot(installPath)
     const masterOverrides = fs.readFileSync(path.join(clusterRoot, 'Master', 'modoverrides.lua'), 'utf8')
     const cavesOverrides = fs.readFileSync(path.join(clusterRoot, 'Caves', 'modoverrides.lua'), 'utf8')
-    assert.equal(masterOverrides.includes(`["${toWorldSeedModName()}"]={ enabled=true }`), true)
+    assert.match(masterOverrides, /configuration_options=\{ seed="1608382646" \}/)
+    assert.equal(masterOverrides.includes(`["${toWorldSeedModName()}"]={ enabled=true`), true)
     // 洞穴没有种子：既不落位文件，也不在它的 Mod 清单里启用
     assert.equal(cavesOverrides.includes(toWorldSeedModName()), false)
     assert.equal(fs.existsSync(path.join(resolveWorldSeedModDir(installPath, 'Master'), 'modworldgenmain.lua')), true)

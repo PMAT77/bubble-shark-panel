@@ -7,12 +7,14 @@ import { fileURLToPath } from 'node:url'
 import Fastify from 'fastify'
 import { getContainerRuntime, type ContainerRef, type ContainerRuntime } from '../../infra/container'
 import { emptyResourceSnapshot } from '../../infra/container/dst-container-resources'
+import { buildHostResourceSnapshot } from '../../infra/container/memory-budget'
 import { closeDatabase, createGameInstance, deleteGameInstanceById, getGameInstanceById, initDatabase, updateGameInstanceRuntime } from '../../shared/db'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 import { runStartupMonitor } from './startup-monitor'
 import {
   cancelStartupTask, changeStartupPhase, createStartupTask, currentStartupTask,
   enqueueStartupTask, getStartupSnapshot, persistStartupTask, releaseStartupTask,
+  recordStartupSwapAdvice,
 } from './startup-state'
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-startup-monitor-'))
@@ -369,4 +371,39 @@ it('游戏查询挂起仍受本片 deadline 约束', { timeout: 2000 }, async (t
   assert.equal(f.task.snapshot.status, 'failed')
   assert.equal(f.task.snapshot.diagnosis?.code, 'probe_unavailable')
   assert.equal(f.cleanup.mock.callCount(), 1)
+})
+
+it('启动准备失败前持久化 swap 命令，并保留首次不足现场', async (t) => {
+  const f = await fixture(t, 'swap-fast-failure')
+  const host = buildHostResourceSnapshot({ source: 'native-host', meminfo: 'MemTotal: 6291456 kB\nMemAvailable: 524288 kB\nSwapTotal: 2097152 kB\nSwapFree: 524288 kB' })
+  await recordStartupSwapAdvice(f.task, { ...host, source: 'unknown' }, 4096)
+  assert.equal(f.task.snapshot.swapAdvice, undefined)
+  await recordStartupSwapAdvice(f.task, host, 4096)
+  const advice = (await getGameInstanceById(f.instance.id))?.lastStartupReport?.swapAdvice
+  assert.equal(advice?.state, 'low')
+  assert.match(advice?.command ?? '', /extra-3g BSP_SWAP_SIZE=3G/)
+  assert.deepEqual((await getGameInstanceById(f.instance.id))?.lastStartupReport?.swapAdvice, advice)
+  await recordStartupSwapAdvice(f.task, host, 8192)
+  assert.deepEqual(f.task.snapshot.swapAdvice, advice)
+  await f.run({ luaFailure: () => 'Lua 致命错误' })
+  assert.equal(f.task.snapshot.status, 'failed')
+  assert.deepEqual((await getGameInstanceById(f.instance.id))?.lastStartupReport?.swapAdvice, advice)
+})
+
+it('加载采样共享宿主快照，使用当前安全余量而不重复加上主世界占用', async (t) => {
+  const f = await fixture(t, 'swap-during-loading')
+  const host = buildHostResourceSnapshot({ source: 'docker-host', meminfo: 'MemTotal: 6291456 kB\nMemAvailable: 131072 kB\nSwapTotal: 2097152 kB\nSwapFree: 0 kB' })
+  const hostRead = t.mock.fn(async () => host)
+  const runtime = { ...f.runtime, inspect: f.runtime.inspect.bind(f.runtime), resourceSnapshot: f.runtime.resourceSnapshot.bind(f.runtime), hostResources: hostRead }
+  let attempts = 0
+  await f.run({ runtime, probe: async () => ({ worldReady: ++attempts > 1, shardId: '1', remoteConnected: null }) })
+  assert.equal(f.task.snapshot.status, 'success')
+  assert.equal(f.task.snapshot.swapAdvice?.state, 'exhausted')
+  assert.match(f.task.snapshot.swapAdvice?.message ?? '', /还缺约 384 MiB/)
+  assert.equal(hostRead.mock.callCount(), 1, 'startup samples reuse the cached host reading')
+  const stale = createStartupTask(f.instance.id)
+  t.after(() => releaseStartupTask(stale))
+  delete f.task.snapshot.swapAdvice
+  await recordStartupSwapAdvice(f.task, host, 4096)
+  assert.equal(f.task.snapshot.swapAdvice, undefined, 'obsolete tasks cannot save a new warning')
 })

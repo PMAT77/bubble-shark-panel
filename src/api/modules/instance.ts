@@ -1,7 +1,7 @@
 import { resolveApiBaseUrl, withTrailingSlash } from '../base-url'
 import api from '../index'
-import type { InstanceResourceConfig, InstanceResourcesPayload, InstanceStartupSnapshot, ResourceSnapshot } from '../../../shared/contracts/instance-resources'
-export type { InstanceResourceConfig, InstanceResourcesPayload, InstanceStartupSnapshot, ResourceSnapshot }
+import type { InstanceStartupSnapshot } from '../../../shared/contracts/instance-resources'
+export type { InstanceStartupSnapshot }
 import type {
   ConsoleLogHistoryDto,
   InstanceConnectInfoDto,
@@ -75,8 +75,6 @@ export type InstanceMaintenanceAnnounceState = InstanceMaintenanceAnnounceStateD
 export type InstanceMaintenancePushResult = InstanceMaintenancePushResultDto
 
 export default {
-  getInstanceResources: (id: string, options?: { signal?: AbortSignal }) => api.get('app/instance/resources', { params: { id }, ...options }) as Promise<{ data: InstanceResourcesPayload }>,
-  saveInstanceResources: (id: string, config: InstanceResourceConfig) => api.post('app/instance/resources', { id, config }) as Promise<{ data: InstanceResourcesPayload }>,
   getInstanceStartup: (id: string, options?: { signal?: AbortSignal }) => api.get('app/instance/startup', { params: { id }, ...options }) as Promise<{ data: InstanceStartupSnapshot | null }>,
   getInstanceList: (data?: InstanceListQuery) => api.post('app/instance/list', data),
   /**

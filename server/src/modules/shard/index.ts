@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import {
@@ -25,10 +26,12 @@ import {
   initCavesShard,
   saveShardConfig,
 } from '../../infra/game-adapter/dst/shard-service'
-import { listShardSnapshots, readMaxSnapshots } from '../../infra/game-adapter/dst/world-maintenance'
+import { listShardSnapshots, readMaxSnapshots, readShardSessionId, configuredWorldShards } from '../../infra/game-adapter/dst/world-maintenance'
 import { probeWorldSeed, scheduleWorldSeedProbes } from '../console/world-seed-probe'
 import { syncInstanceModFilesFromDb } from '../mod/mod-file-sync-service'
-import { resetShardWorld, resetShardWorldWithSeed, rollbackShard } from './world-maintenance-service'
+import { beginWorldMaintenance } from './world-maintenance-service'
+import { registerWorldMaintenanceRoutes } from './world-maintenance-routes'
+import { withInstanceContentOperation } from '../../shared/instance-content/operation'
 import { injectRestartInstance } from '../instance/inject-restart'
 import { isInstanceContainerRunning } from '../instance/container-lifecycle'
 import { businessError, success } from '../../shared/http/response'
@@ -54,6 +57,7 @@ async function restartInstance(
  * shard 模块：DST 世界（Master/Caves server.ini、worldgen）与分片状态。
  */
 export function registerShardModule(app: FastifyInstance) {
+  registerWorldMaintenanceRoutes(app)
   app.get('/app/instance/shards', async (request): Promise<ApiSuccessResponse<ShardListDto> | ApiErrorResponse> => {
     const query = shardInstanceQuerySchema.safeParse(request.query ?? {})
     if (!query.success) {
@@ -99,7 +103,7 @@ export function registerShardModule(app: FastifyInstance) {
       return resolved.error
     }
     try {
-      const data = initCavesShard(resolved.instance, resolved.instance.gamePort)
+      const data = await withInstanceContentOperation(instanceId, async () => initCavesShard(resolved.instance, resolved.instance.gamePort))
       return success(data, request)
     }
     catch (error) {
@@ -124,18 +128,21 @@ export function registerShardModule(app: FastifyInstance) {
       return resolved.error
     }
     try {
-      const result = saveShardConfig(resolved.instance, payload)
-      // 世界种子由面板内置的 Mod 承载：保存后立刻同步一次 Mod 文件，让内置 Mod 内容与
-      // 服务器 Mod 清单反映最新种子。失败只记日志——种子已落在面板元数据里，
-      // 实例启动前的同步会再来一次，不会丢。
-      if (payload.worldSeed !== undefined) {
-        try {
-          await syncInstanceModFilesFromDb(resolved.instance.id, resolved.instance.installPath)
+      const result = await withInstanceContentOperation(instanceId, async () => {
+        const result = saveShardConfig(resolved.instance, payload)
+        // 世界种子由面板内置的 Mod 承载：保存后立刻同步一次 Mod 文件，让内置 Mod 内容与
+        // 服务器 Mod 清单反映最新种子。失败只记日志——种子已落在面板元数据里，
+        // 实例启动前的同步会再来一次，不会丢。
+        if (payload.worldSeed !== undefined) {
+          try {
+            await syncInstanceModFilesFromDb(resolved.instance.id, resolved.instance.installPath)
+          }
+          catch (error) {
+            app.log.warn({ instanceId, error }, '保存世界种子后同步 Mod 文件失败，将在实例启动时重试')
+          }
         }
-        catch (error) {
-          app.log.warn({ instanceId, error }, '保存世界种子后同步 Mod 文件失败，将在实例启动时重试')
-        }
-      }
+        return result
+      })
       if (payload.restart) {
         const restartError = await restartInstance(app, request, instanceId)
         if (restartError) {
@@ -211,6 +218,9 @@ export function registerShardModule(app: FastifyInstance) {
         shard: query.data.shard,
         running,
         maxSnapshots,
+        maxRollbackSteps: snapshots.filter(item => item.rollbackSteps !== null).length,
+        currentSessionId: readShardSessionId(resolved.instance.installPath, query.data.shard),
+        cavesConfigured: configuredWorldShards(resolved.instance.installPath).includes('caves'),
         snapshots,
         warnings,
       }, request)
@@ -235,28 +245,18 @@ export function registerShardModule(app: FastifyInstance) {
     if (!resolved.ok) {
       return resolved.error
     }
-    const outcome = await rollbackShard({
-      app,
-      instance: resolved.instance,
-      shard: payload.shard,
-      steps: payload.steps,
-      backupBeforeRollback: payload.backupBeforeRollback,
-    })
-    if (!outcome.ok) {
-      return businessError(outcome.message, request)
+    try {
+      const selected = listShardSnapshots(resolved.instance.installPath, 'master').find(item => item.rollbackSteps === payload.steps)
+      if (!selected) return businessError('没有对应的整房间回档目标，请刷新存档点', request)
+      const op = beginWorldMaintenance({ app, instance: resolved.instance, actor: authorized.context!.user,
+        payload: { instanceId: payload.instanceId, requestId: randomUUID(), action: 'rollback', sessionId: selected.sessionId,
+          snapshotId: selected.snapshotId, cavesSessionId: selected.cavesSessionId, backupBefore: payload.backupBeforeRollback !== false } })
+      return success({ accepted: true, command: '', operationId: op.id, backupId: op.backupId, backupWarning: op.backupWarning }, request)
     }
-    for (const warning of outcome.warnings) {
-      app.log.warn({ instanceId: resolved.instance.id, shard: payload.shard, warning }, '世界回档提示')
-    }
-    return success(outcome.result, request)
+    catch (error) { return businessError(error instanceof Error ? error.message : '无法回档', request) }
   })
 
-  /**
-   * 按填写的种子重置世界并重新启动实例。
-   *
-   * 与下面的「重置世界」（发给运行中的游戏）不同：这条路径要求实例已停止，
-   * 由面板清掉该分片存档，再启动实例让游戏按新种子生成地图。
-   */
+  // 兼容旧入口，保持所选分片的含义；所有执行和备份仍走统一维护用例。
   app.post('/app/instance/shards/reset-world-with-seed', async (request): Promise<ApiSuccessResponse<ShardResetWorldWithSeedResult> | ApiErrorResponse> => {
     const body = shardResetWorldWithSeedPayloadSchema.safeParse(request.body ?? {})
     if (!body.success) {
@@ -270,23 +270,13 @@ export function registerShardModule(app: FastifyInstance) {
     if (!resolved.ok) {
       return resolved.error
     }
-    const outcome = await resetShardWorldWithSeed({
-      app,
-      request,
-      instance: resolved.instance,
-      shard: body.data.shard,
-      worldSeed: body.data.worldSeed ?? null,
-    })
-    if (!outcome.ok) {
-      return businessError(outcome.message, request)
+    try {
+      const op = beginWorldMaintenance({ app, instance: resolved.instance, actor: authorized.context!.user,
+        payload: { instanceId: body.data.instanceId, requestId: randomUUID(), action: 'regenerate', confirmName: resolved.instance.name,
+          shard: body.data.shard, worldSeed: body.data.worldSeed ?? null, backupBefore: true } })
+      return success({ accepted: true, operationId: op.id, backupId: op.backupId, backupWarning: op.backupWarning, restarted: false, restartWarning: null }, request)
     }
-    for (const warning of outcome.warnings) {
-      app.log.warn(
-        { instanceId: body.data.instanceId, shard: body.data.shard, warning },
-        '按种子重置世界提示',
-      )
-    }
-    return success(outcome.result, request)
+    catch (error) { return businessError(error instanceof Error ? error.message : '无法重新生成', request) }
   })
 
   app.post('/app/instance/shards/reset-world', async (request): Promise<ApiSuccessResponse<ShardMaintenanceResult> | ApiErrorResponse> => {
@@ -303,18 +293,11 @@ export function registerShardModule(app: FastifyInstance) {
     if (!resolved.ok) {
       return resolved.error
     }
-    const outcome = await resetShardWorld({
-      app,
-      instance: resolved.instance,
-      shard: payload.shard,
-      confirmName: payload.confirmName,
-    })
-    if (!outcome.ok) {
-      return businessError(outcome.message, request)
+    try {
+      const op = beginWorldMaintenance({ app, instance: resolved.instance, actor: authorized.context!.user, legacyShard: payload.shard,
+        payload: { instanceId: payload.instanceId, requestId: randomUUID(), action: 'reset', confirmName: payload.confirmName, backupBefore: true } })
+      return success({ accepted: true, command: '', operationId: op.id, backupId: op.backupId, backupWarning: op.backupWarning }, request)
     }
-    for (const warning of outcome.warnings) {
-      app.log.warn({ instanceId: resolved.instance.id, shard: payload.shard, warning }, '重置世界提示')
-    }
-    return success(outcome.result, request)
+    catch (error) { return businessError(error instanceof Error ? error.message : '无法重置世界', request) }
   })
 }

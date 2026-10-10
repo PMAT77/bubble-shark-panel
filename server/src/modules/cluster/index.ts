@@ -1,3 +1,4 @@
+import { withInstanceContentOperation } from '../../shared/instance-content/operation'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
 import {
@@ -128,7 +129,7 @@ export function registerClusterModule(app: FastifyInstance) {
       return resolved.error
     }
     try {
-      const result = saveClusterConfig(resolved.instance, payload)
+      const result = await withInstanceContentOperation(instanceId, async () => saveClusterConfig(resolved.instance, payload))
       if (payload.restart) {
         /**
          * 「保存并重启」里的重启是**另一项能力**，不能借 `room:write` 顺带拿到。

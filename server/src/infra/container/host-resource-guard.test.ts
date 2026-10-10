@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   assessHostMemoryForHeavyOperation,
   buildHostSwapAdvice,
+  buildStartupSwapAdvice,
   parseMeminfoValueKb,
   resolveMinHostAvailableMbForOperation,
   resolveSwapState,
@@ -24,6 +25,25 @@ SwapFree:              0 kB
 `
 
 describe('swap advice follows the available budget', () => {
+  it('only warns on confirmed shortage and sizes commands for no, low and exhausted swap', () => {
+    const reading = { availableMb: 512, swapFreeMb: 0, swapTotalMb: 0 }
+    assert.equal(buildStartupSwapAdvice(reading, 512), undefined)
+    assert.equal(buildStartupSwapAdvice({ ...reading, swapTotalMb: 2048 }, 512), undefined)
+    assert.equal(buildStartupSwapAdvice({ ...reading, availableMb: null }, 4096), undefined)
+    assert.equal(buildStartupSwapAdvice({ ...reading, swapFreeMb: null }, 4096), undefined)
+    assert.equal(buildStartupSwapAdvice({ ...reading, swapTotalMb: null }, 4096), undefined)
+    assert.equal(buildStartupSwapAdvice(reading, 0), undefined)
+    const none = buildStartupSwapAdvice(reading, 4096)
+    assert.equal(none?.state, 'none')
+    assert.equal(none?.command, 'sudo env BSP_SWAP_SIZE=4G bsp setup-swap')
+    assert.match(none?.message ?? '', /未配置 swap.*创建 4 GiB/)
+    const low = buildStartupSwapAdvice({ ...reading, swapFreeMb: 1024, swapTotalMb: 2048 }, 4096)
+    assert.equal(low?.state, 'low')
+    assert.match(low?.command ?? '', /extra-3g BSP_SWAP_SIZE=3G/)
+    const exhausted = buildStartupSwapAdvice({ ...reading, swapTotalMb: 2048 }, 600)
+    assert.equal(exhausted?.state, 'exhausted')
+    assert.match(exhausted?.command ?? '', /extra-2g BSP_SWAP_SIZE=2G/)
+  })
   it('distinguishes no swap, exhausted, insufficient, sufficient and unknown readings', () => {
     assert.equal(resolveSwapState({ swapFreeMb: 0, swapTotalMb: 0 }), 'none')
     assert.equal(resolveSwapState({ swapFreeMb: 0, swapTotalMb: 2048 }), 'exhausted')

@@ -13,18 +13,16 @@ const props = defineProps<{
   modelValue: MasterWorldgenPreset | CavesWorldgenPreset
   worldgenConfig: Record<string, string>
   /**
-   * 世界种子：实例运行中它是当前世界正在用的种子（只读），停止后可以改，
-   * 改完点「重置世界」就按它重新生成地图。空串 = 留空（由游戏随机）。
+   * 下次生成配置；允许运行中编辑，空串表示随机。
    */
   worldSeed: string
-  /** 面板记录/读到的当前世界种子，用于判断输入框里的值是否还没应用；null = 尚未读到 */
-  currentWorldSeed: string | null
-  /** 实例是否正在运行：运行中种子锁定，也读得到当前种子 */
+  /** 实例是否正在运行：运行中可以读取真实种子 */
   instanceRunning?: boolean
   /** 正在读取当前种子 */
   reading?: boolean
   /** 正在按新种子重置世界 */
   resetting?: boolean
+  busy?: boolean
   worldGenerated?: boolean
 }>()
 
@@ -61,32 +59,9 @@ function updateWorldSeed(value: string) {
   emit('update:worldSeed', value.replace(/\D/g, '').slice(0, 15))
 }
 
-/** 实例运行中不能改种子：要换地图得先停服，再重置世界 */
-const seedLocked = computed(() => Boolean(props.instanceRunning))
-
-/** 能按当前种子重置世界：实例已停止，且这个世界已经生成过 */
-const canResetWorld = computed(() => !props.instanceRunning && Boolean(props.worldGenerated))
-
-/** 输入框里的值还没变成这个世界：提醒它只在重置世界后生效 */
-const seedPending = computed(() =>
-  Boolean(props.worldGenerated)
-  && Boolean(props.currentWorldSeed)
-  && props.worldSeed !== props.currentWorldSeed,
-)
-
-/** 一句话说清现在能做什么 */
-const seedHint = computed(() => {
-  if (props.instanceRunning) {
-    return '实例运行中，种子锁定；停止实例后可修改并重置世界。'
-  }
-  if (!props.worldGenerated) {
-    return '启动实例时按这个种子生成地图；留空则随机。'
-  }
-  if (seedPending.value) {
-    return '改动会在重置世界后生效。'
-  }
-  return '点「重置世界」会按这个种子重新生成地图，并自动启动实例。'
-})
+const seedHint = computed(() => props.worldGenerated
+  ? '修改种子后需点击重置世界才生效；留空表示随机，未修改则沿用当前种子。'
+  : '首次启动按已保存的生成配置创建地图；留空表示随机。')
 </script>
 
 <template>
@@ -126,49 +101,16 @@ const seedHint = computed(() => {
       </div>
     </section>
 
-    <!-- 世界种子：运行中显示当前种子（锁定），停止后可改并重置世界 -->
-    <section class="space-y-3">
-      <div class="flex flex-wrap items-center gap-2">
-        <h3 class="text-sm font-medium text-foreground">
-          世界种子
-        </h3>
-        <NTag v-if="currentWorldSeed && worldSeed === currentWorldSeed" size="small" :bordered="false" type="success">
-          当前世界的种子
-        </NTag>
+    <section class="flex flex-col gap-3">
+      <h3 class="text-sm font-medium">世界种子</h3>
+      <div class="flex flex-wrap items-center gap-3">
+        <NInput :value="worldSeed" class="w-full! sm:w-80!" :disabled="busy || (!hasPermission('world:write') && !hasPermission('world:reset'))" :input-props="{ inputmode: 'numeric', 'aria-label': '世界种子' }" placeholder="留空 = 随机" @update:value="updateWorldSeed" />
+        <div class="flex flex-wrap items-center gap-2">
+          <NButton v-if="instanceRunning && hasPermission('world:read')" :loading="reading" :disabled="reading" @click="emit('read')">读取</NButton>
+          <NButton v-if="hasPermission('world:reset')" type="warning" :loading="resetting" :disabled="busy" @click="emit('reset')">重置世界</NButton>
+        </div>
       </div>
-
-      <div class="flex flex-wrap items-center gap-2">
-        <NInput
-          :value="worldSeed"
-          class="max-w-xs"
-          :disabled="seedLocked"
-          placeholder="留空 = 随机（例如 1608382646）"
-          @update:value="updateWorldSeed"
-        />
-        <NButton
-          v-if="instanceRunning"
-          size="small"
-          :loading="reading"
-          :disabled="reading"
-          @click="emit('read')"
-        >
-          读取
-        </NButton>
-        <NButton
-          size="small"
-          type="warning"
-          :loading="resetting"
-          :disabled="resetting || !canResetWorld"
-          @click="emit('reset')"
-          v-if="hasPermission('world:reset')"
-        >
-          重置世界
-        </NButton>
-      </div>
-
-      <p class="text-xs text-muted-foreground">
-        {{ seedHint }}
-      </p>
+      <p class="text-xs leading-relaxed text-muted-foreground">{{ seedHint }}</p>
     </section>
 
     <ShardWorldRulesSection

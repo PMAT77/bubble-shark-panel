@@ -320,7 +320,7 @@ onBeforeUnmount(() => {
         指令中心、文件、迁移三块各有自己的权限点：无权时给一句说明，而不是挂载一个
         会立刻 403 的组件（它的加载失败会被吞成空数据，看起来像"这里没有内容"）。
       -->
-      <AppAuth value="instance.console:read">
+      <AppAuth :value="['console:command', 'world:read', 'world:rollback', 'world:reset', 'instance.console:read']">
         <CommandCenterCard
           :instance="instance"
           :connect-info="connectInfo"

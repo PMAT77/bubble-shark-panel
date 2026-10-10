@@ -37,7 +37,7 @@ afterEach(() => {
 })
 
 describe('world-seed', () => {
-  it('writes each shard seed into its own modworldgenmain.lua', () => {
+  it('writes a shared script that reads each shard configuration', () => {
     const installPath = createInstallPath()
     const folders = ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], {
       master: '1608382646',
@@ -47,11 +47,11 @@ describe('world-seed', () => {
 
     const masterMainPath = path.join(resolveWorldSeedModDir(installPath, 'Master'), 'modworldgenmain.lua')
     const cavesMainPath = path.join(resolveWorldSeedModDir(installPath, 'Caves'), 'modworldgenmain.lua')
-    // 种子以数字字面量写入：存档里的 meta.seed 才会是数字
-    assert.match(fs.readFileSync(masterMainPath, 'utf8'), /GLOBAL\.SEED = 1608382646/)
-    assert.match(fs.readFileSync(cavesMainPath, 'utf8'), /GLOBAL\.SEED = 42/)
-    // 两个分片各一份内容，因此地上与洞穴可以用不同种子
-    assert.notEqual(fs.readFileSync(masterMainPath, 'utf8'), fs.readFileSync(cavesMainPath, 'utf8'))
+    // 写入共享脚本，生成时才读取本分片种子。
+    assert.match(fs.readFileSync(masterMainPath, 'utf8'), /GetModConfigData\("seed", true\)/)
+    assert.match(fs.readFileSync(cavesMainPath, 'utf8'), /GLOBAL\.SEED = GLOBAL\.tonumber\(seed\)/)
+    // 内容相同，种子来自各自配置。
+    assert.equal(fs.readFileSync(masterMainPath, 'utf8'), fs.readFileSync(cavesMainPath, 'utf8'))
   })
 
   it('writes server-only modinfo with the current api version', () => {
@@ -59,7 +59,7 @@ describe('world-seed', () => {
     assert.match(content, /api_version = 10/)
     assert.match(content, /all_clients_require_mod = false/)
     assert.match(content, /client_only_mod = false/)
-    assert.match(content, /configuration_options = \{\}/)
+    assert.match(content, /name = "seed"/)
     // DST 没有 server_only_mod 这个字段，写上只是噪音
     assert.equal(content.includes('server_only_mod'), false)
   })
@@ -86,7 +86,7 @@ describe('world-seed', () => {
 
     const legacyDir = resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)
     assert.match(fs.readFileSync(path.join(legacyDir, 'modinfo.lua'), 'utf8'), /GSH World Seed/)
-    assert.match(fs.readFileSync(path.join(legacyDir, 'modworldgenmain.lua'), 'utf8'), /GLOBAL\.SEED = 123456/)
+    assert.match(fs.readFileSync(path.join(legacyDir, 'modworldgenmain.lua'), 'utf8'), /GetModConfigData/)
   })
 
   it('清掉种子后同时撤掉接入', () => {
@@ -100,7 +100,7 @@ describe('world-seed', () => {
     assert.equal(fs.existsSync(legacyDir), false)
   })
 
-  it('两个分片种子不同时不接入（mods/ 是两个分片共用的一份）', () => {
+  it('两个分片种子不同时仍共享加载入口', () => {
     const installPath = createInstallPath()
     const cavesDir = path.join(installPath, 'klei-storage', 'DoNotStarveTogether', 'Cluster_1', 'Caves')
     fs.mkdirSync(cavesDir, { recursive: true })
@@ -108,11 +108,10 @@ describe('world-seed', () => {
 
     ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], { master: '123456', caves: '654321' })
 
-    // 接入过去会让洞穴也用上地上世界的种子，比内置 Mod 不生效更糟
-    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)), false)
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)), true)
   })
 
-  it('只给地上设了种子、洞穴却开着时同样不接入', () => {
+  it('只给地上指定种子时也保留共享加载入口', () => {
     const installPath = createInstallPath()
     const cavesDir = path.join(installPath, 'klei-storage', 'DoNotStarveTogether', 'Cluster_1', 'Caves')
     fs.mkdirSync(cavesDir, { recursive: true })
@@ -120,7 +119,7 @@ describe('world-seed', () => {
 
     ensureWorldSeedModLayout(installPath, ['Master', 'Caves'], { master: '123456' })
 
-    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)), false)
+    assert.equal(fs.existsSync(resolveDstLegacyModDir(installPath, BSP_WORLD_SEED_MOD_ID)), true)
   })
 
   it('两个分片用同一个种子时接入', () => {
@@ -163,7 +162,7 @@ describe('world-seed', () => {
     assert.equal(isWorldSeedModId(` ${BSP_WORLD_SEED_MOD_ID} `), true)
     assert.equal(isWorldSeedModId('123456'), false)
     assert.equal(toWorldSeedModName(), `workshop-${BSP_WORLD_SEED_MOD_ID}`)
-    assert.match(buildWorldSeedModWorldgenMainContent('7'), /GLOBAL\.SEED = 7/)
+    assert.match(buildWorldSeedModWorldgenMainContent(), /GLOBAL\.SEED = GLOBAL\.tonumber\(seed\)/)
   })
 
   it('stores seeds per shard in the panel metadata', () => {

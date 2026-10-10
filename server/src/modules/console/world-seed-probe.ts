@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { generationSeedGuard } from '../shard/world-maintenance-store'
 import type { ShardId, ShardWorldSeedProbe } from '../../../../shared/contracts/shard'
 import type { DbGameInstance } from '../../shared/db/index'
 import type { ObservedWorldSeed } from '../../infra/game-adapter/dst/panel-config-meta'
@@ -54,8 +56,9 @@ export async function probeWorldSeed(input: {
     return unavailable(runtimeReady.message ?? '容器运行时未就绪')
   }
 
+  const token = randomUUID()
   const afterId = instanceConsoleLogStore.listLogs(instanceId).at(-1)?.id ?? 0
-  const sendResult = await sendInstanceContainerCommand(instanceId, buildWorldSeedQueryCommand(), shard)
+  const sendResult = await sendInstanceContainerCommand(instanceId, buildWorldSeedQueryCommand(token), shard)
   if (!sendResult.ok) {
     return unavailable(sendResult.message ?? '读取世界种子的指令发送失败')
   }
@@ -68,19 +71,13 @@ export async function probeWorldSeed(input: {
       if (line.stream !== 'stdout') {
         continue
       }
-      if (line.shard != null && line.shard !== shard) {
+      if (line.shard !== shard) {
         continue
       }
-      const parsed = parseWorldSeedLogLine(line.text)
+      const parsed = parseWorldSeedLogLine(line.text, token)
       if (parsed) {
-        const existing = readObservedWorldSeed(installPath, shard)
-        /**
-         * 世界刚被重新生成时，应答的可能还是旧世界：只要会话没变，就说明新世界还没起来，
-         * 保留"已过时"标记继续等，绝不把旧世界的种子当成当前世界的种子。
-         */
-        if (existing?.stale && existing.sessionId && parsed.sessionId === existing.sessionId) {
-          return unavailable('世界正在重新生成，稍后会自动更新当前世界种子')
-        }
+        const guard = generationSeedGuard(installPath, shard, parsed.sessionId)
+        if (guard) return unavailable(guard)
         const at = new Date().toISOString()
         writeObservedWorldSeed(installPath, shard, {
           seed: parsed.seed,

@@ -144,9 +144,16 @@ export type ShardInitCavesResult = z.infer<typeof shardInitCavesResultSchema>
 export const SHARD_ROLLBACK_STEPS_LIMIT = 99
 
 export const shardSnapshotSchema = z.object({
-  /** 存档点目录名（游戏生成的会话 ID），只用于界面区分 */
+  /** 会话与世界快照编号构成的稳定标识 */
   id: z.string(),
-  /** 存档点的最后修改时间（ISO）；读不到时为空串 */
+  sessionId: z.string(),
+  snapshotId: z.number().int().positive(),
+  worldDay: z.number().int().positive().nullable(),
+  cavesAvailable: z.boolean().nullable(),
+  cavesSessionId: z.string().nullable(),
+  rollbackSteps: z.number().int().positive().nullable(),
+  unavailableReason: z.string().nullable(),
+  /** 世界文件的最后修改时间（ISO） */
   savedAt: z.string(),
 })
 export type ShardSnapshotDto = z.infer<typeof shardSnapshotSchema>
@@ -161,8 +168,11 @@ export const shardSnapshotsSchema = z.object({
   instanceId: instanceIdSchema,
   shard: shardIdSchema,
   running: z.boolean(),
-  /** 房间设置里的快照保留数量，决定回档可用的步数上限 */
+  /** 房间设置里的快照保留数量；实际回档范围取决于现存快照 */
   maxSnapshots: z.number().int().min(1),
+  maxRollbackSteps: z.number().int().min(0),
+  currentSessionId: z.string().nullable(),
+  cavesConfigured: z.boolean(),
   snapshots: z.array(shardSnapshotSchema),
   warnings: z.array(z.string()),
 })
@@ -187,11 +197,12 @@ export type ShardResetWorldPayload = z.infer<typeof shardResetWorldPayloadSchema
 
 export const shardMaintenanceResultSchema = z.object({
   accepted: z.literal(true),
-  /** 实际下发的控制台命令，便于排错与展示 */
+  /** 兼容旧字段；命令细节只写诊断日志，新入口不回传 Lua */
   command: z.string(),
+  operationId: z.string().uuid().optional(),
   /** 安全备份 ID；未做备份或备份失败时为 null */
   backupId: z.string().nullable(),
-  /** 备份失败的说明：备份失败不阻断操作，但必须如实告知 */
+  /** 备份失败会暂停操作，等待用户再次确认 */
   backupWarning: z.string().nullable(),
 })
 export type ShardMaintenanceResult = z.infer<typeof shardMaintenanceResultSchema>
@@ -217,12 +228,7 @@ export const shardWorldSeedProbeSchema = z.object({
 })
 export type ShardWorldSeedProbe = z.infer<typeof shardWorldSeedProbeSchema>
 
-/**
- * 按填写的种子重置世界并重新启动实例。
- *
- * 与「重置世界」（把命令发给运行中的游戏）不同：这条路径要求实例**已停止**，
- * 由面板清掉该分片的存档，再启动实例让游戏按新的种子生成地图。
- */
+/** 兼容入口：运行中生成所选分片，全部停止时清理目标存档并启动；结果查询 operationId。 */
 export const shardResetWorldWithSeedPayloadSchema = z.object({
   instanceId: instanceIdSchema,
   shard: shardIdSchema,
@@ -233,13 +239,14 @@ export type ShardResetWorldWithSeedPayload = z.infer<typeof shardResetWorldWithS
 
 export const shardResetWorldWithSeedResultSchema = z.object({
   accepted: z.literal(true),
+  operationId: z.string().uuid().optional(),
   /** 安全备份 ID；未备份或备份失败时为 null */
   backupId: z.string().nullable(),
-  /** 备份失败的说明：备份失败不阻断操作，但必须如实告知 */
+  /** 备份失败会暂停操作，等待用户再次确认 */
   backupWarning: z.string().nullable(),
-  /** 是否已成功拉起实例（世界在启动时按新种子生成） */
+  /** 兼容旧字段；新流程异步执行，以维护操作的最终状态为准 */
   restarted: z.boolean(),
-  /** 存档已重置但启动失败时的说明；此时手动启动即可 */
+  /** 兼容旧字段；生成及启动结果通过 operationId 查询 */
   restartWarning: z.string().nullable(),
 })
 export type ShardResetWorldWithSeedResult = z.infer<typeof shardResetWorldWithSeedResultSchema>

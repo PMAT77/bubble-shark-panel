@@ -2,13 +2,13 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import type { FastifyInstance } from 'fastify'
 import type { ContainerInspect, ContainerRef, ContainerRuntime, RuntimeResourceSnapshot } from '../../infra/container/types'
 import type { DstStartupProbe } from '../../infra/game-adapter/dst/startup-probe'
-import { readHostMemoryReading } from '../../infra/container/host-resource-guard'
+import type { HostResourceSnapshot } from '../../../../shared/contracts/instance-resources'
 import { emptyResourceSnapshot } from '../../infra/container/dst-container-resources'
-import { sampleRuntimeResources } from '../../infra/container/memory-budget'
+import { sampleHostResources, sampleRuntimeResources } from '../../infra/container/memory-budget'
 import { formatMemoryCapHint } from '../../infra/container/exit-reason'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 import { updateGameInstanceRuntime } from '../../shared/db'
-import { changeStartupPhase, isCurrentStartupTask, persistStartupTask, refreshStartupProgress, type StartupTask } from './startup-state'
+import { changeStartupPhase, isCurrentStartupTask, persistStartupTask, recordStartupSwapAdvice, refreshStartupProgress, type StartupTask } from './startup-state'
 import { confirmedOom } from './memory-pressure'
 
 type Shard = 'master' | 'caves'
@@ -117,21 +117,20 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
     refreshStartupProgress(task)
   }
 
-  const diagnose = (resources: RuntimeResourceSnapshot | null, baseline: RuntimeResourceSnapshot | null) => {
+  const diagnose = (resources: RuntimeResourceSnapshot | null, baseline: RuntimeResourceSnapshot | null, host: HostResourceSnapshot | null) => {
     const idle = (Date.now() - Date.parse(task.snapshot.lastProgressAt ?? task.snapshot.phaseStartedAt)) / 1000
     if (idle < 60) { task.snapshot.diagnosis = null; return }
     let diagnosis = { code: 'no_recent_progress', message: '暂未看到新的加载进展，仍在等待；可打开控制台查看' }
     if (idle >= 120) {
-      const host = readHostMemoryReading()
       if ((resources?.memoryPressureFullAvg10 ?? 0) >= 20
         || (resources?.highEvents != null && baseline?.highEvents != null && resources.highEvents > baseline.highEvents)) {
         diagnosis = { code: 'memory_reclaim', message: '内存回收正在拖慢加载，请检查实际软限、硬限及 swap 余量' }
       }
       else if (resources?.maxEvents != null && baseline?.maxEvents != null && resources.maxEvents > baseline.maxEvents) {
-        diagnosis = { code: 'memory_limit_pressure', message: '分片正在触及内存硬限并回收，可在资源设置中调整下次启动上限' }
+        diagnosis = { code: 'memory_limit_pressure', message: '分片正在触及内存硬限并回收，可在服务器 panel.env 调整下次启动上限' }
       }
-      else if ((host.availableMb ?? Infinity) + (host.swapFreeMb ?? 0) < 512) {
-        diagnosis = { code: 'host_memory_pressure', message: '宿主机内存与 swap 余量偏低，可停止其他实例或按资源设置中的命令增加 swap' }
+      else if (host?.source !== 'unknown' && host?.availableMb != null && host.swapFreeMb != null && host.availableMb + host.swapFreeMb < 512) {
+        diagnosis = { code: 'host_memory_pressure', message: '宿主机内存与 swap 余量偏低，请停止其他实例或按通知中的命令追加 swap' }
       }
       else if (resources?.throttledUsec != null && baseline?.throttledUsec != null && resources.throttledUsec > baseline.throttledUsec) {
         diagnosis = { code: 'cpu_throttled', message: '分片 CPU 配额发生节流，请结合控制台进展检查 CPU 配额' }
@@ -162,11 +161,15 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
         bounded(runtime.inspect(ref), deadline), bounded(sampleRuntimeResources(runtime, ref, Math.min(4500, pollInterval * .9)), deadline),
         shard === 'caves' ? bounded(runtime.inspect(input.masterRef), deadline) : Promise.resolve(null),
         shard === 'caves' ? bounded(sampleRuntimeResources(runtime, input.masterRef, Math.min(4500, pollInterval * .9)), deadline) : Promise.resolve(null),
+        bounded(sampleHostResources(runtime), deadline),
       ])
       if (cancelled()) return false
       if (results[0].status === 'fulfilled') inspect = results[0].value
       if (results[1].status === 'fulfilled') resources = results[1].value
       const master = results[2].status === 'fulfilled' ? results[2].value : null
+      const host = results[4].status === 'fulfilled' ? results[4].value : null
+      // 游戏已开始加载，其占用已扣入 MemAvailable；只检查当前 512 MiB 安全余量。
+      await recordStartupSwapAdvice(task, host, 512)
       const masterBaseline = task.snapshot.master.resourceBaseline ?? task.snapshot.master.resources ?? null
       const masterResources = shard === 'caves' ? captureResources('master', results[3].status === 'fulfilled' ? results[3].value : null, master, masterBaseline) : null
       if (inspect && !inspect.probeFailed) {
@@ -199,7 +202,7 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
       // baseline 必须保留本轮首次计数，当前值覆盖它会漏掉累计回收/OOM。
       baseline ??= resources
       progress()
-      diagnose(resources, baseline)
+      diagnose(resources, baseline, host)
       if (inspect?.running && !inspect.probeFailed) {
         const probeDeadline = Math.min(deadline, tick + pollInterval)
         const probe = await bounded(input.probe(ref, shard), probeDeadline)
@@ -232,7 +235,7 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
     const code = !responded ? 'probe_unavailable' : shard === 'caves' && worldSeen ? 'shard_connect_timeout' : `${shard}_loading_timeout`
     await fail(code, !responded ? `${label(shard)}等待就绪超时（${input.waitSec} 秒），未收到有效游戏查询响应，请查看控制台`
       : worldSeen && shard === 'caves' ? `洞穴未能在 ${input.waitSec} 秒内连接主世界，请检查分片配置`
-        : `等待${label(shard)}就绪超时（${input.waitSec} 秒），请检查控制台和资源设置`)
+        : `等待${label(shard)}就绪超时（${input.waitSec} 秒），请检查控制台和服务器配置`)
     return false
   }
 

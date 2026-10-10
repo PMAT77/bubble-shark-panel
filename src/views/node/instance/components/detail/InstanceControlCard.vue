@@ -19,8 +19,6 @@ import {
 } from '../../composables/useInstanceLifecycleActions'
 import { useInstanceRuntimeObservability } from '../../composables/useInstanceRuntimeObservability'
 import InstanceInstallLogModal from '../InstanceInstallLogModal.vue'
-import InstanceResourcesCard from './InstanceResourcesCard.vue'
-import InstanceStartupProgress from '../InstanceStartupProgress.vue'
 import apiInstance from '@/api/modules/instance'
 import { canRetryInstanceInstall, resolveInstanceUpdateState, buildInstanceUpdateCheckNotice } from '../../instanceUpdatePresentation'
 import { waitForInstanceUpdateCheckJob } from '../../composables/instanceUpdateCheckJob'
@@ -218,7 +216,6 @@ function goConsole() {
     router.push(routeToInstanceConsole(props.instance.id))
   }
 }
-function showResources() { document.getElementById('instance-resources')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 </script>
 
 <template>
@@ -346,9 +343,6 @@ function showResources() { document.getElementById('instance-resources')?.scroll
     <p v-else class="text-sm text-muted-foreground">
       未找到实例。
     </p>
-
-    <InstanceStartupProgress v-if="instance?.startup" :startup="instance.startup" show-resources @resources="showResources" />
-    <InstanceResourcesCard v-if="instance" :instance="instance" />
 
     <InstanceInstallLogModal
       v-if="instance && hasPermission('instance.install-log:read')"

@@ -1,5 +1,6 @@
 import { readBrandEnv } from '../../../../shared/brand-env'
 import type { HostMemoryPressureData } from '../../../../shared/contracts/host-memory-pressure'
+import type { SwapAdvice } from '../../../../shared/contracts/instance-resources'
 import {
   kbToMb,
   parseMeminfoValueKb,
@@ -97,6 +98,20 @@ export function buildHostSwapAdvice(memory: HostMemoryReading, requiredMb: numbe
   return state === 'ready'
     ? { state, message: `宿主机可用 swap 约 ${memory.swapFreeMb} MiB，当前余量满足估算预算；频繁换页会增加启动耗时。`, command: null }
     : { state, message: '无法读取宿主机 swap 状态，可先检查已启用的 swap。', command: 'sudo swapon --show' }
+}
+
+/** 只有确认启动余量不足才给操作建议；未知读数或充足 RAM 不制造 swap 告警。 */
+export function buildStartupSwapAdvice(memory: HostMemoryReading, requiredMb: number): SwapAdvice | undefined {
+  const values = [memory.availableMb, memory.swapFreeMb, memory.swapTotalMb]
+  if (!values.every(value => value != null && Number.isFinite(value) && value >= 0)
+    || !Number.isFinite(requiredMb) || requiredMb <= 0
+    || memory.availableMb! + memory.swapFreeMb! >= requiredMb) return undefined
+  const advice = buildHostSwapAdvice(memory, requiredMb)
+  if (!advice.command || !['none', 'low', 'exhausted'].includes(advice.state)) return undefined
+  const missingMb = Math.ceil(requiredMb - memory.availableMb! - memory.swapFreeMb!)
+  const sizeGb = Math.max(2, Math.ceil(missingMb / 1024))
+  const reason = advice.state === 'none' ? '宿主机未配置 swap' : advice.state === 'exhausted' ? '宿主机 swap 已用满' : '内存与 swap 余量不足'
+  return { ...advice, message: `${reason}，启动预计还缺约 ${missingMb} MiB。建议${advice.state === 'none' ? '创建' : '追加'} ${sizeGb} GiB swap。` }
 }
 
 function parsePositiveMbEnv(key: string): number | undefined {

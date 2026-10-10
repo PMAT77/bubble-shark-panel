@@ -3,6 +3,65 @@
 
 <head>
   <meta charset="UTF-8" />
+  <script id="bsp-bootstrap">
+    // 内联执行：入口模块下载或执行失败时，错误出口不能依赖入口模块本身。
+    (function () {
+      let state = 'pending'
+      let message = ''
+      let recoverable = false
+      const timer = window.setTimeout(() => fail('页面加载超时，请检查连接后重新加载。', true), 30000)
+
+      function notify() {
+        window.dispatchEvent(new Event('bsp:bootstrap'))
+      }
+
+      function fail(reason, canRecover = false) {
+        if (state === 'ready') return
+        state = 'failed'
+        message = reason
+        recoverable = canRecover
+        window.clearTimeout(timer)
+        notify()
+      }
+
+      function onError(event) {
+        if (event.target === window) {
+          fail('页面启动失败，请重新加载后重试。')
+        }
+        else if (event.target?.tagName === 'SCRIPT') {
+          fail('页面资源加载失败，请重新加载后重试。')
+        }
+      }
+
+      function onRejection() {
+        fail('页面启动失败，请重新加载后重试。')
+      }
+
+      function onPreloadError() {
+        fail('页面资源加载失败，请重新加载后重试。')
+      }
+
+      window.__BSP_BOOTSTRAP__ = {
+        get state() { return state },
+        get message() { return message },
+        fail,
+        ready() {
+          if (state === 'failed' && !recoverable) return false
+          state = 'ready'
+          message = ''
+          window.clearTimeout(timer)
+          window.removeEventListener('error', onError, true)
+          window.removeEventListener('unhandledrejection', onRejection)
+          window.removeEventListener('vite:preloadError', onPreloadError)
+          notify()
+          return true
+        },
+      }
+      window.addEventListener('error', onError, true)
+      window.addEventListener('unhandledrejection', onRejection)
+      window.addEventListener('vite:preloadError', onPreloadError)
+    })()
+  </script>
   <link rel="icon" href="/favicon.png" />
   <link rel="stylesheet" href="/browser_upgrade/index.css" />
   <meta name="viewport"

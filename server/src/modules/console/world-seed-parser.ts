@@ -27,7 +27,13 @@ export interface ParsedWorldSeed {
 }
 
 /** 从一行控制台输出里解析世界种子；不是标记行或值不合法时返回 null */
-export function parseWorldSeedLogLine(text: string): ParsedWorldSeed | null {
+export function parseWorldSeedLogLine(text: string, token?: string): ParsedWorldSeed | null {
+  if (token) {
+    const line = text.replace(/^\[\d+:\d+:\d+\]:\s*/, '').trim()
+    const prefix = `GSHSEED:${token}|`
+    if (!line.startsWith(prefix)) return null
+    text = `GSHSEED:${line.slice(prefix.length)}`
+  }
   const match = WORLD_SEED_LINE_PATTERN.exec(text)
   if (!match?.[1]) {
     return null
@@ -40,8 +46,9 @@ export function parseWorldSeedLogLine(text: string): ParsedWorldSeed | null {
  * 查询命令：用 and 逐级短路，这样 `TheWorld` / `meta` 还没准备好时只会打印 nil，
  * 不会在游戏控制台里抛错（世界刚启动、尚未加载完是常态）。
  */
-export function buildWorldSeedQueryCommand(): string {
+export function buildWorldSeedQueryCommand(token?: string): string {
+  if (token && !/^[a-f0-9-]{36}$/.test(token)) throw new Error('种子查询标识无效')
   return 'print("' + WORLD_SEED_LOG_PREFIX
-    + '"..tostring(TheWorld and TheWorld.meta and TheWorld.meta.seed)'
+    + (token ? `${token}|` : '') + '"..tostring(TheWorld and TheWorld.meta and TheWorld.meta.seed)'
     + '.."|"..tostring(TheWorld and TheWorld.meta and TheWorld.meta.session_identifier))'
 }

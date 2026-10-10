@@ -184,6 +184,7 @@ async function tryRefreshAuthSession(): Promise<boolean> {
     try {
       const res = await api.post('app/account/token/refresh', { refreshToken }, {
         skipAuthRefresh: true,
+        timeout: 15_000,
       })
       appAccountStore.applySessionTokens({
         token: String(res.data.token ?? ''),
@@ -191,8 +192,11 @@ async function tryRefreshAuthSession(): Promise<boolean> {
       })
       return Boolean(res.data.token && res.data.refreshToken)
     }
-    catch {
-      return false
+    catch (error) {
+      // 只有服务端确认会话失效（拦截器已清除登录态）才登出。
+      // 刷新令牌请求超时或网络失败时保留会话，让调用方显示可重试错误。
+      if (!appAccountStore.isLogin) return false
+      throw error
     }
     finally {
       refreshingAuthPromise = null

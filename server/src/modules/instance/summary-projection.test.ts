@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { after, before, describe, it } from 'node:test'
+import { after, before, describe, it, mock } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { eq } from 'drizzle-orm'
 import Fastify from 'fastify'
@@ -14,6 +14,7 @@ import { registerInstanceModule } from './index'
 import { addUserInstanceGrants, closeDatabase, createGameInstance, findUserByAccount, initDatabase } from '../../shared/db/index'
 import { ensureDb, nowIso } from '../../shared/db/connection'
 import { userPermissions } from '../../shared/db/schema/index'
+import { getContainerRuntime } from '../../infra/container'
 
 /**
  * 「按模块投影」的列表接口 + 实例标识选项接口。
@@ -82,6 +83,7 @@ function isOk<T>(body: ApiEnvelope<T>): boolean {
 
 describe('DST 投影接口与实例标识选项', () => {
   before(async () => {
+    mock.method(getContainerRuntime(), 'findByName', async () => undefined)
     await initDatabase(dbFilePath, migrationsFolder, {
       adminUsername: 'superadmin',
       adminPassword: '123456',
@@ -124,6 +126,7 @@ describe('DST 投影接口与实例标识选项', () => {
 
   after(async () => {
     await app.close()
+    mock.restoreAll()
     closeDatabase()
     fs.rmSync(workDir, { recursive: true, force: true })
   })

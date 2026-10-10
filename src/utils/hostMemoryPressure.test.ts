@@ -14,6 +14,7 @@ import {
   renderMonitorAction,
   resolveSwapState,
   showHostMemoryPressureNotification,
+  showStartupSwapNotification,
 } from './hostMemoryPressure'
 
 /**
@@ -67,6 +68,9 @@ function collectText(node: unknown, out: string[] = []): string[] {
 interface CapturedNotice {
   title: string
   content: () => unknown
+  action?: () => VNodeLike
+  duration?: number
+  closable?: boolean
 }
 
 function captureNotice(data: HostMemoryPressureData): CapturedNotice {
@@ -239,5 +243,44 @@ describe('showHostMemoryPressureNotification', () => {
     assert.equal(buildSwapPressureAdvice(makeData()).command, 'sudo env BSP_SWAP_SIZE=2G bsp setup-swap')
     assert.match(buildSwapPressureAdvice(makeData({ availableMb: 512, requiredMb: 4200, swapTotalMb: 2048 })).command!, /extra-4g BSP_SWAP_SIZE=4G/)
     assert.equal(buildSwapPressureAdvice(makeData({ swapFreeMb: 1024, swapTotalMb: 2048 })).command, null)
+  })
+})
+
+describe('启动 swap 通知', () => {
+  it('通知短文案、可关闭，并可复制；失败保留可选中的完整命令', async (t) => {
+    let options: CapturedNotice | undefined
+    const notification = { warning: (value: CapturedNotice) => { options = value; return { destroy() {} } } }
+    const command = 'sudo env BSP_SWAP_FILE=/swapfile-bsp-extra-2g BSP_SWAP_SIZE=2G bsp setup-swap'
+    showStartupSwapNotification(notification as never, '生产实例', { state: 'low', message: '余量不足，建议追加 2 GiB swap。', command })
+    assert.ok(options)
+    assert.equal(options.title, '生产实例：swap 余量不足')
+    assert.equal(options.duration, 0)
+    assert.equal(options.closable, true)
+    const text = collectText(options.content()).join('\n')
+    assert.match(text, /停止实例后以 root 执行/)
+    assert.ok(text.includes(command))
+    const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    const oldDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    const oldToast = Object.getOwnPropertyDescriptor(globalThis, 'faToast')
+    const copied: string[] = []
+    const success = mock.fn()
+    const warning = mock.fn()
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (value: string) => { copied.push(value) } } } })
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: undefined })
+    Object.defineProperty(globalThis, 'faToast', { configurable: true, value: { success, warning } })
+    t.after(() => {
+      for (const [key, descriptor] of [['navigator', oldNavigator], ['document', oldDocument], ['faToast', oldToast]] as const) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+        else Reflect.deleteProperty(globalThis, key)
+      }
+    })
+    const click = options.action!().props!.onClick as () => Promise<void>
+    await click()
+    assert.deepEqual(copied, [command])
+    assert.equal(success.mock.callCount(), 1)
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async () => { throw new Error('clipboard denied') } } } })
+    await click()
+    assert.equal(warning.mock.callCount(), 1)
+    assert.ok(collectText(options.content()).includes(command))
   })
 })

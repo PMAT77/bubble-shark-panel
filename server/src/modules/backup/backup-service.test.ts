@@ -66,7 +66,6 @@ describe('backup service', () => {
       note: '集成测试备份',
       createdBy: 'tester',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     assert.equal(result.ok, true)
     assert.ok(result.backup)
@@ -89,7 +88,6 @@ describe('backup service', () => {
       kind: 'manual',
       note: '停止状态下备份',
       createdBy: 'tester',
-      hotSaveDelayMs: 0,
     })
     assert.equal(result.ok, true)
     assert.ok(result.backup)
@@ -116,7 +114,6 @@ describe('backup service', () => {
       instanceId: locked.id,
       kind: 'manual',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     assert.equal(refused.ok, false)
     assert.match(refused.message ?? '', /文件操作、启动或下载/)
@@ -130,7 +127,6 @@ describe('backup service', () => {
       instanceId: locked.id,
       kind: 'manual',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     assert.equal(accepted.ok, true)
     assert.ok(accepted.backup)
@@ -147,7 +143,6 @@ describe('backup service', () => {
     const result = await createInstanceBackup({
       instanceId: other.id,
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     assert.equal(result.ok, false)
     assert.match(result.message ?? '', /尚未生成存档目录/)
@@ -158,7 +153,6 @@ describe('backup service', () => {
       instanceId: instance.id,
       kind: 'manual',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     assert.equal(create.ok, true)
     const backupId = create.backup!.id
@@ -188,7 +182,6 @@ describe('backup service', () => {
       instanceId: instance.id,
       kind: 'manual',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     const backupId = create.backup!.id
     fs.rmSync(create.backup!.filePath, { force: true })
@@ -208,7 +201,6 @@ describe('backup service', () => {
       instanceId: instance.id,
       kind: 'manual',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     const restore = await restoreInstanceBackup({
       app: undefined as never,
@@ -228,7 +220,6 @@ describe('backup service', () => {
       instanceId: instance.id,
       kind: 'manual',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     assert.equal(first.ok, true)
     // 拉开创建时间，明确验证旧记录的淘汰顺序
@@ -237,7 +228,6 @@ describe('backup service', () => {
       instanceId: instance.id,
       kind: 'manual',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     assert.equal(second.ok, true)
     await sleep(5)
@@ -245,7 +235,6 @@ describe('backup service', () => {
       instanceId: instance.id,
       kind: 'manual',
       saveBeforeArchive: false,
-      hotSaveDelayMs: 0,
     })
     assert.equal(third.ok, true)
 

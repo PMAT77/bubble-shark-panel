@@ -87,6 +87,7 @@ import {
 } from './install-service'
 import { prepareInstallPathForRuntime } from './install-path'
 import { registerInstanceScheduledOps } from './scheduled-entry'
+import { registerWorldMaintenanceStart } from './world-maintenance-entry'
 import { buildInternalInstanceRequest, registerPluginInstanceOps } from './instance-plugin-ops'
 import { startInstanceExitWatch } from './exit-watch'
 import { businessError, success, unauthorized } from '../../shared/http/response'
@@ -1188,6 +1189,12 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     }
     return { ok: true }
   }
+
+  registerWorldMaintenanceStart(async (_app, instanceId) => {
+    const syntheticRequest = buildInternalInstanceRequest(instanceId, 'world-maintenance')
+    const result = await handleInstanceStart(syntheticRequest, { skipAuth: true })
+    if ('error' in result && result.error) throw new Error(result.error)
+  })
 
   registerInstanceScheduledOps({
     restart: performScheduledRestart,

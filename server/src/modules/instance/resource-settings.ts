@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import type { DbGameInstance } from '../../shared/db'
 import type { InstanceResourcesPayload } from '../../../../shared/contracts/instance-resources'
-import { instanceResourcesBodySchema, instanceResourcesQuerySchema } from '../../../../shared/contracts/instance-resources'
-import { getGameInstanceById, listInstanceMods, updateGameInstanceRuntime } from '../../shared/db'
+import { instanceResourcesQuerySchema } from '../../../../shared/contracts/instance-resources'
+import { getGameInstanceById, listInstanceMods } from '../../shared/db'
 import { buildCavesContainerName, buildMasterContainerName, getContainerRuntime } from '../../infra/container'
 import { resolveInstanceResourceSettings, resolveRecommendedShardMemoryMb } from '../../infra/container/dst-container-resources'
 import { sampleHostResources, sampleRuntimeResources, DST_MEMORY_SLICE } from '../../infra/container/memory-budget'
@@ -42,7 +42,7 @@ export async function getInstanceResourceSettings(instance: DbGameInstance, inje
   const requiredMb = resolveMinHostAvailableMbForOperation('dst-container-start', { shardCount, modCount })
   const measuredAt = master?.measuredAt ?? caves?.measuredAt ?? instance.lastStartupReport?.updatedAt ?? ''
   return {
-    config: instance.resourceConfig ?? { masterMemoryMb: null, cavesMemoryMb: null, shardReadyWaitSec: null },
+    config: { masterMemoryMb: null, cavesMemoryMb: null, shardReadyWaitSec: null },
     effective: resolveInstanceResourceSettings(instance.resourceConfig),
     current: { master, caves },
     recommendation: {
@@ -68,15 +68,5 @@ export function registerInstanceResourceRoutes(app: FastifyInstance): void {
     const instance = await getGameInstanceById(parsed.data.id)
     if (!instance) return businessError('实例不存在', request)
     return success(await getInstanceResourceSettings(instance), request)
-  })
-  app.post('/app/instance/resources', async (request) => {
-    const parsed = instanceResourcesBodySchema.safeParse(request.body)
-    if (!parsed.success) return businessError('资源设置无效：内存上限应为 0、至少 6 MiB 或继承，启动时限应为正整数或继承', request)
-    const auth = await authorizeInstance(request, parsed.data.id, 'instance:lifecycle')
-    if (auth.error) return auth.error
-    const instance = await getGameInstanceById(parsed.data.id)
-    if (!instance) return businessError('实例不存在', request)
-    const saved = await updateGameInstanceRuntime(instance.id, { resourceConfig: parsed.data.config })
-    return success(await getInstanceResourceSettings(saved ?? instance), request)
   })
 }

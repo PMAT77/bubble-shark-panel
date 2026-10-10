@@ -126,7 +126,7 @@ describe('map routes', () => {
 
     app = Fastify({ logger: false })
     registerAuthModule(app)
-    registerMapModule(app)
+    registerMapModule(app, { isShardRunning: async () => false })
     await app.ready()
 
     const login = await app.inject({

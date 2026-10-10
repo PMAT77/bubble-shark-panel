@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-/** null 继承全局设置，0 不设硬限；Docker 最低支持 6 MiB。 */
+/** 仅兼容历史实例配置数据；新任务统一使用服务器设置。 */
 const memoryLimitSchema = z.number().int().nonnegative().refine(value => value === 0 || value >= 6, '内存上限至少为 6 MiB，或设为 0 表示不限').nullable()
 export const instanceResourceConfigSchema = z.object({
   masterMemoryMb: memoryLimitSchema,
@@ -11,6 +11,11 @@ export type InstanceResourceConfig = z.infer<typeof instanceResourceConfigSchema
 
 const nullableNumber = z.number().nullable()
 export const effectiveInstanceResourceSettingsSchema = z.object({ masterMemoryMb: nullableNumber, cavesMemoryMb: nullableNumber, shardReadyWaitSec: z.number().positive() })
+export const swapAdviceSchema = z.object({
+  state: z.enum(['unknown', 'none', 'low', 'exhausted', 'ready']),
+  message: z.string(), command: z.string().nullable(),
+})
+export type SwapAdvice = z.infer<typeof swapAdviceSchema>
 export const resourceSnapshotSchema = z.object({
   memoryCurrentMb: nullableNumber,
   memoryPeakMb: nullableNumber,
@@ -84,6 +89,7 @@ export const instanceStartupSnapshotSchema = z.object({
   master: instanceStartupShardSchema,
   caves: instanceStartupShardSchema,
   diagnosis: z.object({ code: z.string(), message: z.string() }).nullable(),
+  swapAdvice: swapAdviceSchema.optional(),
   protectionStop: memoryProtectionStopSchema.optional(),
   poolOomBaseline: nullableNumber.optional(),
   planningDemand: z.object({ masterMb: nullableNumber, cavesMb: nullableNumber }).optional(),
@@ -106,6 +112,6 @@ export const instanceResourcesPayloadSchema = z.object({
   }),
   host: z.object({ availableMb: nullableNumber, totalMb: nullableNumber, swapFreeMb: nullableNumber, swapTotalMb: nullableNumber }),
   protection: hostResourceSnapshotSchema.optional(),
-  swapAdvice: z.object({ state: z.enum(['unknown', 'none', 'low', 'exhausted', 'ready']), message: z.string(), command: z.string().nullable() }),
+  swapAdvice: swapAdviceSchema,
 })
 export type InstanceResourcesPayload = z.infer<typeof instanceResourcesPayloadSchema>

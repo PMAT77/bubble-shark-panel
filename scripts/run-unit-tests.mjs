@@ -21,6 +21,7 @@ const args = [
   'server/src/**/*.test.ts',
   'scripts/**/*.test.ts',
   'src/api/**/*.test.ts',
+  'src/router/**/*.test.ts',
   'src/composables/**/*.test.ts',
   'src/store/**/*.test.ts',
   'src/utils/**/*.test.ts',

@@ -1,7 +1,10 @@
 import type { HostMemoryPressureData } from '../../shared/contracts/host-memory-pressure'
 import type { NotificationApi } from 'naive-ui'
+import { NButton } from 'naive-ui'
+import type { SwapAdvice } from '../../shared/contracts/instance-resources'
 import { h } from 'vue'
 import { FRONTEND_ROUTE_PATHS } from '../../shared/constants/frontend-routes'
+import { copyTextToClipboard } from './copyToClipboard'
 
 /** 与 shared/constants/error-code.ts 中 HOST_MEMORY_PRESSURE 保持一致 */
 export const HOST_MEMORY_PRESSURE_CODE = 'HOST_MEMORY_PRESSURE'
@@ -187,4 +190,28 @@ export function tryNotifyHostMemoryPressure(
   }
   showHostMemoryPressureNotification(notification, error, navigate)
   return true
+}
+
+/** 服务器给出本轮不足证据；命令只复制，由用户在服务器上执行。 */
+export function showStartupSwapNotification(notification: NotificationApi, instanceName: string, advice: SwapAdvice) {
+  const command = advice.command
+  if (!command || !['none', 'low', 'exhausted'].includes(advice.state)) return
+  return notification.warning({
+    title: `${instanceName}：swap 余量不足`,
+    content: () => h('div', { class: 'space-y-2 text-sm' }, [
+      h('p', advice.message),
+      h('p', '停止实例后以 root 执行；请确认磁盘余量，路径已存在时换一个新路径。'),
+      h('pre', { class: 'whitespace-pre-wrap break-all text-xs select-text' }, command),
+    ]),
+    duration: 0,
+    closable: true,
+    action: () => h(NButton, {
+      size: 'small', secondary: true,
+      onClick: async () => {
+        const copied = await copyTextToClipboard(command)
+        if (copied) faToast.success('命令已复制')
+        else faToast.warning('复制失败，请选中通知中的命令复制')
+      },
+    }, { default: () => '复制命令' }),
+  })
 }

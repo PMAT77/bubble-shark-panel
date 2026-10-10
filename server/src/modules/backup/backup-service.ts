@@ -15,10 +15,12 @@ import {
   updateBackupStatus,
 } from '../../shared/db/index'
 import type { DbBackup, DbBackupKind } from '../../shared/db/index'
-import { sendInstanceContainerCommand, resolveDefaultInstanceInstallPath } from '../instance/container-lifecycle'
+import { resolveDefaultInstanceInstallPath } from '../instance/container-lifecycle'
 import { InstanceArchiveBusyError, withInstanceArchiveOperationLock } from './archive-lock'
 
-const HOT_SAVE_DELAY_MS = 3000
+import { saveRoomConfirmed } from '../console/world-maintenance-probe'
+import { worldSaveFingerprint } from '../../infra/game-adapter/dst/world-maintenance'
+import { resolveInstanceResourceSettings } from '../instance/resource-settings'
 const RETENTION_KINDS: DbBackupKind[] = ['manual', 'scheduled', 'pre_update', 'pre_delete', 'pre_restore', 'pre_import', 'pre_rollback', 'pre_reset']
 
 function normalizeInstallPath(value: string | null | undefined): string {
@@ -66,8 +68,6 @@ export interface CreateInstanceBackupOptions {
    * manual 缺省 true；自动钩子缺省 false（调用方负责保证实例已停止）。
    */
   saveBeforeArchive?: boolean
-  /** 触发后等待游戏落盘的毫秒数，测试可传 0 */
-  hotSaveDelayMs?: number
 }
 
 export interface CreateInstanceBackupResult {
@@ -107,7 +107,6 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
     createdBy = '',
   } = options
   const saveBeforeArchive = options.saveBeforeArchive ?? kind === 'manual'
-  const hotSaveDelayMs = options.hotSaveDelayMs ?? HOT_SAVE_DELAY_MS
 
   const instance = await getGameInstanceById(instanceId)
   if (!instance) {
@@ -118,23 +117,12 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
     return { ok: false, message: '实例尚未生成存档目录，无法备份（首次启动实例后即可备份）' }
   }
 
-  /**
-   * 运行中才谈得上热备份：停止的实例没有可发送命令的进程，直接打包即可。
-   * 此前不看状态、对 manual 一律「c_save 失败就报错」，结果是**已停止的实例反而
-   * 无法手动备份**，提示还自相矛盾（「可停止实例后重试」，而它已经停止了）；
-   * 定时备份与自动钩子本来就是「失败则按最近保存点打包」，这里统一成同一种口径。
-   */
   if (saveBeforeArchive && instance.status === 'running') {
-    const saveResult = await sendInstanceContainerCommand(instanceId, 'c_save()', 'master')
-    if (!saveResult.ok && kind === 'manual') {
-      return { ok: false, message: '实例运行中但让世界保存失败，无法创建一致的备份；请稍后重试' }
+    try {
+      await saveRoomConfirmed(instanceId, path.dirname(storageRoot), resolveInstanceResourceSettings(instance.resourceConfig).shardReadyWaitSec)
     }
-    if (!saveResult.ok) {
-      app?.log.warn({ instanceId, kind }, '自动备份前 c_save 失败，按最近保存点打包')
-    }
-    // 只有真的保存成功才值得等它落盘，失败时白等 3 秒没有意义
-    if (saveResult.ok && hotSaveDelayMs > 0) {
-      await new Promise(resolve => setTimeout(resolve, hotSaveDelayMs))
+    catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : '保存存档失败，已停止备份' }
     }
   }
 
@@ -145,7 +133,7 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
   const targetPath = path.join(backupsRoot, fileName)
 
   try {
-    await createDirectoryArchive(storageRoot, targetPath, options.signal)
+    await archiveStableWorldSave(storageRoot, targetPath, options.signal)
   }
   catch (error) {
     const message = error instanceof Error ? error.message : '打包存档失败'
@@ -177,6 +165,17 @@ export async function createInstanceBackupUnlocked(options: CreateInstanceBackup
 
   await enforceBackupRetention(app, instanceId, settings.perInstanceRetention, [backupId, ...(protectedBackupId ? [protectedBackupId] : [])])
   return { ok: true, backup }
+}
+
+/** 并发自动保存或淘汰改变源文件时，丢弃归档并最多重试一次。 */
+export async function archiveStableWorldSave(storageRoot: string, targetPath: string, signal?: AbortSignal, archive = createDirectoryArchive): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const fingerprint = worldSaveFingerprint(path.dirname(storageRoot))
+    await archive(storageRoot, targetPath, signal)
+    if (fingerprint === worldSaveFingerprint(path.dirname(storageRoot))) return
+    fs.rmSync(targetPath, { force: true })
+    if (attempt === 1) throw new Error('归档期间存档发生变化，两次尝试均无法确认一致性')
+  }
 }
 
 /** 保留策略：按创建时间淘汰超出上限的最旧备份（文件删除失败仅保留记录并告警） */

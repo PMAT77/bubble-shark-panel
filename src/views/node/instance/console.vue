@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import WorldMaintenancePanel from '@/components/WorldMaintenancePanel.vue'
 import { createConsoleLogBuffer } from './consoleLogBuffer'
 import type { InstanceConnectInfo, InstanceConsoleLogFilter, InstanceConsoleLogLine, InstanceItem, InstanceMaintenancePushLog } from '@/api/modules/instance'
 import apiInstance from '@/api/modules/instance'
@@ -8,7 +9,6 @@ import { consoleLogShardLabel, filterConsoleLines, formatConsoleLogLineForCopy, 
 import { formatDateTime } from './utils'
 import { getInstanceState, resolveRuntimeReadinessView } from './instanceDisplay'
 import { useInstanceStartup } from './composables/useInstanceStartup'
-import InstanceStartupProgress from './components/InstanceStartupProgress.vue'
 import type { InstanceConsoleCommandShard } from '@/api/modules/instance'
 import {
   NButton,
@@ -61,6 +61,7 @@ const activeTab = ref<ConsoleTab>('console')
 const commandInput = ref('')
 const commandShard = ref<InstanceConsoleCommandShard>('master')
 const commandSending = ref(false)
+const maintenanceBusy = ref(false)
 const maintenanceMessage = ref('')
 const maintenanceDraftUpdatedAt = ref<string | null>(null)
 const maintenancePushLogs = ref<InstanceMaintenancePushLog[]>([])
@@ -514,23 +515,6 @@ async function sendCommand(command?: string) {
   }
 }
 
-function confirmDangerousCommand(command: string, title: string, content: string) {
-  dialog.warning({
-    title,
-    content,
-    positiveText: '确认执行',
-    negativeText: '取消',
-    onPositiveClick: () => sendCommand(command),
-  })
-}
-
-const quickCommands = [
-  { label: '保存', command: 'c_save()' },
-  { label: '回档 1 天', command: 'c_rollback(1)' },
-  { label: '回档 2 天', command: 'c_rollback(2)' },
-  { label: '回档 3 天', command: 'c_rollback(3)' },
-]
-
 async function clearLogs() {
   await apiInstance.clearInstanceConsoleLogs(instanceId.value)
   logBuffer.clear()
@@ -778,8 +762,6 @@ onBeforeUnmount(() => {
         </FaButton>
       </div>
 
-      <InstanceStartupProgress :startup="consoleInstances[0]?.startup" :show-resources="hasPermission('instance:read')" @resources="router.push({ name: 'nodeInstanceDetail', params: { instanceId }, hash: '#instance-resources' })" />
-
       <NCard title="连接与加入" size="small">
         <NSpin v-if="connectInfoLoading && !connectInfo" class="block mx-auto my-6" />
         <template v-else-if="connectInfo">
@@ -863,7 +845,7 @@ onBeforeUnmount(() => {
       </NCard>
 
       <NTabs v-model:value="activeTab" type="line" animated>
-        <NTabPane name="console" tab="控制台">
+        <NTabPane display-directive="show" name="console" tab="控制台">
           <div class="flex flex-wrap gap-2 items-center mt-3 mb-2">
             <span class="text-xs text-muted-foreground">显示：</span>
             <NRadioGroup v-model:value="logFilter" size="small">
@@ -916,6 +898,7 @@ onBeforeUnmount(() => {
             <p class="text-xs text-muted-foreground mb-3">
               向游戏服务器发送控制台命令。命令回显与执行结果都会出现在上方日志里；把上方「显示」切到「游戏输出」即可只看游戏原始日志。
             </p>
+            <WorldMaintenancePanel :instance-id="instanceId" :instance-name="instanceName" :running="running" class="mb-5" @busy="maintenanceBusy = $event" @refreshed="loadInstanceMeta" />
             <div class="flex flex-wrap gap-2 items-center mb-3">
               <span class="text-xs text-muted-foreground">命令发送到：</span>
               <NRadioGroup v-model:value="commandShard" size="small">
@@ -931,41 +914,20 @@ onBeforeUnmount(() => {
               </span>
             </div>
             <p class="text-xs text-muted-foreground mb-4 leading-relaxed">
-              改玩家属性、刷物品等命令需在玩家当前所在世界执行（人在洞穴时选「洞穴」）；保存、回档等命令通常只需选「地上」。
+              改玩家属性、刷物品等命令需在玩家当前所在世界执行（人在洞穴时选「洞穴」）。
             </p>
-            <NSpace class="mb-4" wrap>
-              <NButton
-                v-for="item in quickCommands"
-                :key="item.command"
-                size="small"
-                :disabled="!running || commandSending"
-                @click="sendCommand(item.command)"
-                v-if="hasPermission('console:command')"
-              >
-                {{ item.label }}
-              </NButton>
-              <NButton
-                size="small"
-                type="warning"
-                :disabled="!running || commandSending"
-                @click="confirmDangerousCommand('c_reset()', '确认重置世界？', '将立即重新生成一个全新世界：当前世界的地形、建筑与玩家物品都会丢失且不可恢复（已保存的回档快照除外）。真的要继续吗？')"
-                v-if="hasPermission('console:command')"
-              >
-                重置世界
-              </NButton>
-            </NSpace>
             <form class="flex gap-2 items-start" @submit.prevent="sendCommand()">
               <FaInput
                 v-model="commandInput"
                 class="flex-1 font-mono"
                 placeholder="例如 c_save() 或 TheNet:Announce('hello')"
-                :disabled="!running || commandSending"
+                :disabled="!running || commandSending || maintenanceBusy"
               />
               <FaButton
                 type="submit"
                 variant="default"
                 :loading="commandSending"
-                :disabled="!running || commandSending"
+                :disabled="!running || commandSending || maintenanceBusy"
                 v-if="hasPermission('console:command')"
               >
                 发送

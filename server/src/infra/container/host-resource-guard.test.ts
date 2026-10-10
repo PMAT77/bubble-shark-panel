@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   assessHostMemoryForHeavyOperation,
+  buildHostSwapAdvice,
   parseMeminfoValueKb,
   resolveMinHostAvailableMbForOperation,
+  resolveSwapState,
 } from './host-resource-guard.ts'
 
 /**
@@ -20,6 +22,32 @@ SwapCached:            0 kB
 SwapTotal:             0 kB
 SwapFree:              0 kB
 `
+
+describe('swap advice follows the available budget', () => {
+  it('distinguishes no swap, exhausted, insufficient, sufficient and unknown readings', () => {
+    assert.equal(resolveSwapState({ swapFreeMb: 0, swapTotalMb: 0 }), 'none')
+    assert.equal(resolveSwapState({ swapFreeMb: 0, swapTotalMb: 2048 }), 'exhausted')
+    assert.equal(resolveSwapState({ availableMb: 500, swapFreeMb: 100, swapTotalMb: 2048 }, 2048), 'low')
+    assert.equal(resolveSwapState({ availableMb: 500, swapFreeMb: 1548, swapTotalMb: 2048 }, 2048), 'ready')
+    assert.equal(resolveSwapState({ availableMb: 500, swapFreeMb: null, swapTotalMb: 2048 }, 2048), 'unknown')
+    assert.equal(resolveSwapState({ swapFreeMb: null, swapTotalMb: null }), 'unknown')
+  })
+
+  it('sizes a new file from the shortfall without disabling existing swap', () => {
+    const exhausted = buildHostSwapAdvice({ availableMb: 900, swapFreeMb: 0, swapTotalMb: 2048 }, 3800)
+    assert.equal(exhausted.state, 'exhausted')
+    assert.match(exhausted.command ?? '', /BSP_SWAP_FILE=\/swapfile-bsp-extra-3g BSP_SWAP_SIZE=3G bsp setup-swap/)
+    assert.match(exhausted.message, /追加 3 GiB/)
+    assert.doesNotMatch(exhausted.message, /停用.*删|swapoff/)
+    const low = buildHostSwapAdvice({ availableMb: 900, swapFreeMb: 1024, swapTotalMb: 2048 }, 3800)
+    assert.equal(low.state, 'low')
+    assert.match(low.command ?? '', /BSP_SWAP_FILE=\/swapfile-bsp-extra-2g BSP_SWAP_SIZE=2G/)
+    const none = buildHostSwapAdvice({ availableMb: 900, swapFreeMb: 0, swapTotalMb: 0 }, 3800)
+    assert.match(none.command ?? '', /sudo env BSP_SWAP_SIZE=3G bsp setup-swap/)
+    const ready = buildHostSwapAdvice({ availableMb: 900, swapFreeMb: 3000, swapTotalMb: 4096 }, 3800)
+    assert.equal(ready.command, null)
+  })
+})
 
 describe('parseMeminfoValueKb', () => {
   it('从真实样本里取出用户机器的内存与 swap', () => {
@@ -53,6 +81,7 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
     }
     // 与线上 panel.env 一致
     process.env.BSP_HOST_DST_PLANNING_MB = '512'
+    process.env.BSP_HOST_MEMORY_HEADROOM_MB = '384'
     try {
       run()
     }
@@ -107,7 +136,8 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
       assert.equal(result.data.swapFreeMb, 0)
       assert.match(result.detail, /缓存区已用满（共 2048 MiB）/)
       assert.match(result.detail, /扩缓存区/)
-      assert.match(result.detail, /BSP_SWAP_SIZE=4G bsp setup-swap/)
+      assert.match(result.detail, /BSP_SWAP_FILE=\/swapfile-bsp-extra-3g BSP_SWAP_SIZE=3G bsp setup-swap/)
+      assert.doesNotMatch(result.detail, /停用.*删|swapoff|rm /)
       assert.doesNotMatch(result.detail, /创建 2 GiB swapfile/)
     })
   })
@@ -134,8 +164,11 @@ describe('用用户机器的真实内存数字判定启动是否放行', () => {
       if (result.ok) {
         return
       }
-      // 还有余量：通知里因此走「已配置缓存区，启动继续」分支，而不是又让人跑一遍命令
+      // 还有 swap 也可能不足预算，应给追加新文件的命令。
       assert.equal(result.data.swapFreeMb, 16)
+      assert.match(result.detail, /余量不足本次启动预算/)
+      assert.match(result.detail, /BSP_SWAP_FILE=\/swapfile-bsp-extra-4g BSP_SWAP_SIZE=4G/)
+      assert.doesNotMatch(result.detail, /近似线性|峰值约为双分片的一半/)
     })
   })
 
@@ -235,32 +268,48 @@ describe('DST 启动守卫按分片数与 Mod 数估算', () => {
   it('单分片无 Mod 时保持原来的下限', () => {
     withCleanEnv(() => {
       process.env.BSP_HOST_DST_PLANNING_MB = '512'
-      // 显式配置只作为下界：0 个 Mod 时就是 512 + 384 余量
+      // 显式配置只作为下界：0 个 Mod 时就是 512 + 默认 512 余量
       assert.equal(
         resolveMinHostAvailableMbForOperation('dst-container-start', { shardCount: 1, modCount: 0 }),
-        512 + 384,
+        512 + 512,
       )
     })
   })
 
-  it('36 个 Mod 的双分片按真实规模要 3712 MiB，不再被放行', () => {
+  it('36 个 Mod 的双分片按真实规模加宿主机余量，不再被放行', () => {
     withCleanEnv(() => {
       process.env.BSP_HOST_DST_PLANNING_MB = '512'
-      // 单分片峰值 512 + 32×36 = 1664；双分片 3328；再加 384 MiB 余量
+      // 单分片峰值 512 + 32×36 = 1664；双分片 3328；再加 512 MiB 余量
       assert.equal(
         resolveMinHostAvailableMbForOperation('dst-container-start', { shardCount: 2, modCount: 36 }),
-        1664 * 2 + 384,
+        1664 * 2 + 512,
       )
     })
   })
 
-  it('分片内存上限会钳住单分片估算', () => {
+  it('低硬限不能压低真实需求估算', () => {
     withCleanEnv(() => {
       process.env.BSP_DST_CONTAINER_MEMORY_MB = '1024'
       assert.equal(
         resolveMinHostAvailableMbForOperation('dst-container-start', { shardCount: 1, modCount: 36 }),
-        1024 + 384,
+        1664 + 512,
       )
+    })
+  })
+
+  it('显式关闭守卫生效，洞穴只计算新增单片并使用实际DST硬限', () => {
+    withCleanEnv(() => {
+      process.env.BSP_HOST_MIN_AVAILABLE_MB = '0'
+      assert.deepEqual(assessHostMemoryForHeavyOperation('dst-container-start', { shardCount: 2, modCount: 40 }, { availableMb: 0, swapFreeMb: 0 }), { ok: true, availableMb: 0, requiredMb: 0 })
+      delete process.env.BSP_HOST_MIN_AVAILABLE_MB
+      process.env.BSP_HOST_MEMORY_HEADROOM_MB = '1024'
+      assert.equal(resolveMinHostAvailableMbForOperation('dst-container-start', { shardCount: 1, modCount: 40 }), 1792 + 1024)
+      const failed = assessHostMemoryForHeavyOperation('dst-container-start', { shardCount: 1, modCount: 40, memoryCapMb: 3072 }, { availableMb: 0, swapFreeMb: 0 })
+      assert.equal(failed.ok, false)
+      if (!failed.ok) {
+        assert.equal(failed.data.capMb, 3072)
+        assert.match(failed.detail, /当前启动分片的内存硬上限为 3072 MiB/)
+      }
     })
   })
 })

@@ -1,6 +1,19 @@
 import { resolveDstContainerResourceLimits } from './dst-container-resources'
 import type { HostMemoryReading } from './host-resource-guard'
-import { readHostMemoryReading, resolveSwapState } from './host-resource-guard'
+import { buildHostSwapAdvice, readHostMemoryReading, resolveSwapState } from './host-resource-guard'
+import type { ContainerRef, ContainerRuntime } from './types'
+
+export function formatMemoryCapHint(actualMb: number | null | undefined, configuredMb?: number | null): string {
+  if (actualMb != null && actualMb > 0) return `（实际内存硬上限 ${actualMb} MiB）`
+  return configuredMb ? `（配置上限 ${configuredMb} MiB，实际未读取）` : '（实际内存硬上限未读取）'
+}
+
+/** 仅在需要故障额度详情时查询；不把旧启动报告当作新进程的证据。 */
+export async function readRuntimeMemoryCapMb(runtime: ContainerRuntime, ref: ContainerRef | null | undefined): Promise<number | null | undefined> {
+  if (!ref) return undefined
+  try { return (await runtime.resourceSnapshot?.(ref))?.memoryMaxMb }
+  catch { return undefined }
+}
 
 /** 读取宿主机内存快照，供退出原因的补充判断使用 */
 export function readHostMemorySnapshot(): HostMemoryReading {
@@ -15,8 +28,8 @@ export function readHostMemorySnapshot(): HostMemoryReading {
  * 于是最可能的原因拿到了最没用的提示（「进程被信号终止」），排查只能重新回到 SSH。
  *
  * 这里不做内核日志读取（面板没有权限，这正是控制台看不见日志的根因），
- * 只用面板读得到的 /proc/meminfo 给出稳定、可执行的判断：
- * 没配 swap 时，多 Mod 加载被 OOM 杀掉几乎是唯一解释。
+ * 只用面板读得到的 /proc/meminfo 补充资源余量提示；是否 OOM 仍需退出前证据，
+ * 没配 swap 本身不能确认退出原因。
  *
  * 「没配 swap」与「配了但被用满」必须分开说：前者执行 `bsp setup-swap` 能建出 swapfile，
  * 后者会被脚本直接跳过（检测到已有 swap 就不动），照着提示跑一遍什么都不会变。
@@ -27,15 +40,16 @@ export function describeMemoryHint(memory: HostMemoryReading | undefined): strin
   }
   const { availableMb, swapFreeMb } = memory
   const swapState = resolveSwapState(memory)
+  const advice = buildHostSwapAdvice(memory, 512)
+  const appendAdvice = `${advice.message}${advice.command ? `执行 ${advice.command}。` : ''}`
   if (swapState === 'none') {
-    return '宿主机未配置缓存区，加载整套 Mod 时很容易被内核 OOM 杀掉（内核日志里是 global_oom）。建议执行 bsp setup-swap 增加缓存区后重试'
+    return `宿主机未配置缓存区，加载峰值的可用余量较少；是否内存不足需结合退出前资源与内核日志确认。${appendAdvice}`
   }
   if (swapState === 'exhausted') {
-    return `宿主机的缓存区已被用满（共 ${memory.swapTotalMb} MiB），加载整套 Mod 时没有落点，疑为被内核 OOM 杀掉。`
-      + '建议把缓存区扩到 4 GiB（先停用并删掉旧的缓存区文件，再执行 BSP_SWAP_SIZE=4G bsp setup-swap）后重试'
+    return `宿主机的缓存区已被用满（共 ${memory.swapTotalMb} MiB），请结合退出前资源与内核日志确认是否内存不足。${appendAdvice}`
   }
   if (availableMb !== null && availableMb + (swapFreeMb ?? 0) < 512) {
-    return `宿主机内存已接近耗尽（可用约 ${availableMb} MiB，缓存区余量约 ${swapFreeMb ?? 0} MiB），疑为被内核 OOM 杀掉。请先释放内存或执行 bsp setup-swap`
+    return `宿主机内存已接近耗尽（可用约 ${availableMb} MiB，缓存区余量约 ${swapFreeMb ?? 0} MiB），可能发生内存不足。${appendAdvice}`
   }
   return null
 }
@@ -50,12 +64,11 @@ export function describeSystemdExitReason(
   result: string | undefined,
   memoryCapMb?: number,
   memory?: HostMemoryReading,
+  actualMemoryCapMb?: number | null,
 ): string | null {
   switch (result) {
     case 'oom-kill':
-      return memoryCapMb
-        ? `内存不足被系统终止（该分片上限 ${memoryCapMb} MiB）`
-        : '内存不足被系统终止'
+      return `内存不足被系统终止${formatMemoryCapHint(actualMemoryCapMb, memoryCapMb)}`
     case 'exit-code':
       return withMemoryHint('进程以非零状态退出', memory)
     case 'signal':
@@ -79,7 +92,7 @@ function withMemoryHint(base: string, memory: HostMemoryReading | undefined): st
   return hint ? `${base}；${hint}` : base
 }
 
-/** 分片当前的 cgroup 内存上限（MiB）；未设置时为 undefined */
+/** 全局配置的分片内存上限（MiB），未验证运行时；未设置时为 undefined */
 export function resolveShardMemoryCapMb(): number | undefined {
   const limits = resolveDstContainerResourceLimits()
   return limits?.memory ? Math.round(limits.memory / (1024 * 1024)) : undefined

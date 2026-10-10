@@ -8,11 +8,16 @@ import { describeMemoryHint, describeSystemdExitReason } from './exit-reason.ts'
  * 于是最可能的原因拿到了最没用的提示，排查只能重新回到 SSH。
  */
 describe('describeSystemdExitReason 的内存补充判断', () => {
-  it('cgroup OOM 直接说明上限', () => {
+  it('仅有配置时明确实际上限未读取', () => {
     assert.equal(
       describeSystemdExitReason('oom-kill', 2048),
-      '内存不足被系统终止（该分片上限 2048 MiB）',
+      '内存不足被系统终止（配置上限 2048 MiB，实际未读取）',
     )
+  })
+
+  it('实际上限优先于配置，未读取时保持未知', () => {
+    assert.equal(describeSystemdExitReason('oom-kill', 1536, undefined, 2560), '内存不足被系统终止（实际内存硬上限 2560 MiB）')
+    assert.equal(describeSystemdExitReason('oom-kill'), '内存不足被系统终止（实际内存硬上限未读取）')
   })
 
   it('被信号终止且宿主机没有缓存区时，直接指出最可能的原因与做法', () => {
@@ -33,7 +38,8 @@ describe('describeSystemdExitReason 的内存补充判断', () => {
     assert.match(reason, /进程被信号终止/)
     // 已有缓存区时 bsp setup-swap 会直接返回：提示再跑一遍只会白折腾一轮
     assert.match(reason, /缓存区已被用满（共 2048 MiB）/)
-    assert.match(reason, /BSP_SWAP_SIZE=4G bsp setup-swap/)
+    assert.match(reason, /BSP_SWAP_FILE=\/swapfile-bsp-extra-2g BSP_SWAP_SIZE=2G bsp setup-swap/)
+    assert.doesNotMatch(reason, /swapoff|停用.*删/)
     assert.doesNotMatch(reason, /未配置缓存区/)
   })
 
@@ -89,7 +95,8 @@ describe('describeMemoryHint', () => {
     const hint = describeMemoryHint({ availableMb: 9999, swapFreeMb: 0, swapTotalMb: 2048 })
     assert.ok(hint)
     assert.match(hint, /已被用满（共 2048 MiB）/)
-    assert.match(hint, /BSP_SWAP_SIZE=4G bsp setup-swap/)
+    assert.match(hint, /BSP_SWAP_FILE=\/swapfile-bsp-extra-2g BSP_SWAP_SIZE=2G bsp setup-swap/)
+    assert.doesNotMatch(hint, /swapoff|停用.*删/)
     assert.doesNotMatch(hint, /未配置/)
   })
 

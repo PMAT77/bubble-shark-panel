@@ -32,4 +32,13 @@ describe('buildHostMemoryGuidance', () => {
     assert.equal(g.tier, 'large')
     assert.equal(g.cavesWarning, null)
   })
+
+  it('bases low-memory guidance on measured peaks and swap rather than a fixed Mod count', () => {
+    for (const totalMb of [3900, 6000]) {
+      const guidance = buildHostMemoryGuidance({ totalMb })
+      assert.match(guidance.scenarios.mods, /实测峰值/)
+      assert.match(guidance.cavesWarning ?? '', /swap/)
+      assert.doesNotMatch(guidance.scenarios.mods, /≤10|10–30/)
+    }
+  })
 })

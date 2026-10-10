@@ -1,4 +1,6 @@
 import { reconcileInstanceRuntimeState } from './runtime-reconciliation'
+import { instanceStartSource } from './start-source'
+import { startMemoryProtectionWatch, stopMemoryProtectionWatch } from './memory-watch'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { withInstanceContentActivity } from '../../shared/instance-content/operation'
 import type { ApiErrorResponse, ApiSuccessResponse } from '../../../../shared/contracts/api'
@@ -64,7 +66,11 @@ import {
   sendInstanceContainerCommand,
   startInstanceContainer,
   stopInstanceContainer,
+  recoverInstanceStartup,
 } from './container-lifecycle'
+import { registerInstanceResourceRoutes } from './resource-settings'
+import { cancelStartupTask, currentStartupTask, getStartupSnapshot, startupIsActive, suspendStartupTasks } from './startup-state'
+import { instanceResourcesQuerySchema } from '../../../../shared/contracts/instance-resources'
 import {
   cancelInstallJob,
   clearInstallJobTracking,
@@ -279,7 +285,9 @@ async function handleListInstances(
   if (resolved.error || !resolved.instances) {
     return resolved.error ?? businessError('无法确定可见实例范围', request)
   }
-  return success(resolved.instances.map(projectInstanceInstallTask), request)
+  return success(resolved.instances.map(instance => ({
+    ...projectInstanceInstallTask(instance), startup: getStartupSnapshot(instance.id, instance.lastStartupReport),
+  })), request)
 }
 
 /** 单次遍历统计各状态实例数（全量口径，供统计卡使用） */
@@ -332,6 +340,17 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     sendInstanceContainerCommand,
   })
   registerInstanceMetricsRoute(app)
+  registerInstanceResourceRoutes(app)
+  app.get('/app/instance/startup', async (request) => {
+    const parsed = instanceResourcesQuerySchema.safeParse(request.query)
+    if (!parsed.success) return businessError('请求参数无效', request)
+    const auth = await authorizeInstance(request, parsed.data.id, 'instance:read')
+    if (auth.error) return auth.error
+    const instance = await getGameInstanceById(parsed.data.id)
+    if (!instance) return businessError('实例不存在', request)
+    await recoverInstanceStartup(app, instance)
+    return success(getStartupSnapshot(instance.id, instance.lastStartupReport), request)
+  })
   // 迁移包导出：把实例存档整理成另一台机器可直接导入的包（报告与打包共用集群迁移模块）
   registerMigrationExportRoutes(app)
   app.post('/app/instance/list', async (request) => {
@@ -786,7 +805,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     return success({ gamePort: applied.gamePort }, request)
   })
 
-  app.post('/app/instance/start', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> => {
+  app.post('/app/instance/start', async (request): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> => {
     try {
       return await handleInstanceStart(request)
     }
@@ -797,14 +816,14 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     }
   })
 
-  async function handleInstanceStart(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> {
+  async function handleInstanceStart(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> {
     const id = (request.body as { id?: string } | undefined)?.id
     if (!id) return handleInstanceStartUnlocked(request, options)
     try { return await withInstanceContentActivity(id, () => handleInstanceStartUnlocked(request, options)) }
     catch (error) { return businessError(error instanceof Error ? error.message : '启动实例失败', request) }
   }
 
-  async function handleInstanceStartUnlocked(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> {
+  async function handleInstanceStartUnlocked(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> {
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -831,6 +850,15 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     }
     if (current.nodeId !== LOCAL_NODE_ID) {
       return businessError('当前仅支持本地节点执行实例命令', request)
+    }
+    if (startupIsActive(getStartupSnapshot(id, current.lastStartupReport))) {
+      return businessError('该实例正在排队或启动中', request)
+    }
+    const pendingCleanup = currentStartupTask(id)
+    if (current.runtimeFailureKind === 'memory_protection' && (options?.skipAuth || instanceStartSource.getStore() === 'automatic')) return businessError('实例已内存保护停止，需要用户手动检查资源后启动', request)
+    if (current.runtimeFailureKind === 'memory_protection' && !current.lastStartupReport?.protectionStop?.cleanupCompleted) return businessError('内存保护清理未完成，请先再次停止实例', request)
+    if (pendingCleanup?.snapshot.status === 'failed' && !pendingCleanup.controller.signal.aborted) {
+      return businessError('上一轮启动正在清理，请稍后再试', request)
     }
     if (current.status === 'pending_install' || current.status === 'installing') {
       return businessError('实例正在安装中，请稍后重试启动', request)
@@ -1016,6 +1044,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         lastError: null,
       })
       const started = await startInstanceContainer(app, {
+        source: options?.skipAuth || instanceStartSource.getStore() === 'automatic' ? 'automatic' : 'manual',
         instanceId: id,
         gameCode: current.gameCode,
         installPath,
@@ -1028,26 +1057,9 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
           lastError: started.message,
           lastErrorPhase: 'runtime',
         })
-        if (started.hostMemoryPressure) {
-          return hostMemoryPressureError(started.hostMemoryPressure, request)
-        }
         return businessError(started.message, request)
       }
-      await updateGameInstanceRuntime(id, {
-        status: 'running',
-        containerId: started.ref.id,
-        runtimePid: null,
-        runtimeStartedAt: new Date().toISOString(),
-        lastCommand: started.displayCommand,
-        lastExitCode: null,
-        lastError: null,
-        runtimeWarning: null,
-        // 就绪与归因都属于「本轮启动」：不清空就会沿用上一轮的就绪状态
-        runtimeReadyAt: null,
-        runtimeFailureKind: null,
-        unexpectedExitAt: null,
-      })
-      return success({ isSuccess: true }, request)
+      return success({ isSuccess: true, taskId: started.taskId }, request)
     }
     finally {
       instanceStartLocks.delete(id)
@@ -1074,17 +1086,13 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (current.nodeId !== LOCAL_NODE_ID) {
       return businessError('当前仅支持本地节点执行实例命令', request)
     }
-    if (current.status === 'stopped') {
-      return success({ isSuccess: true }, request)
-    }
     if (current.status === 'pending_install' || current.status === 'installing' || isInstallJobActive(id)) {
       try { await cancelInstallJob(id) }
       catch (error) { return businessError(error instanceof Error ? error.message : '安装任务尚未停止，请稍后重试', request) }
       app.log.info({ instanceId: id }, '实例安装已取消')
       return success({ isSuccess: true }, request)
     }
-    const runtimeError = await requireContainerRuntime(request)
-    if (runtimeError) return runtimeError
+    cancelStartupTask(id)
     try {
       app.log.info({ instanceId: id }, '实例停止命令已发送')
       await stopInstanceContainer(id)
@@ -1123,6 +1131,23 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
 
   // 崩溃感知轮询：DB=running 但运行时无进程时标记异常退出并发布事件（单元测试环境不启动）
   startInstanceExitWatch(app)
+  startMemoryProtectionWatch(app)
+  app.addHook('onClose', async () => { stopMemoryProtectionWatch() })
+  if (process.env.BSP_UNIT_TEST !== '1') {
+    let recovering = false
+    const recover = async () => {
+      if (recovering) return
+      recovering = true
+      try {
+        for (const instance of await listGameInstances()) await recoverInstanceStartup(app, instance)
+      }
+      finally { recovering = false }
+    }
+    const timer = setInterval(() => { void recover().catch(error => app.log.warn({ err: error }, '恢复启动监控失败')) }, 5000)
+    timer.unref()
+    app.addHook('onReady', recover)
+    app.addHook('onClose', async () => { clearInterval(timer); await suspendStartupTasks() })
+  }
 
   // 计划任务内部通道：schedule 模块经注册表调用重启，无需构造带用户 token 的 HTTP 请求
   async function performScheduledRestart(_app: FastifyInstance, instanceId: string): Promise<{ ok: boolean, message?: string }> {
@@ -1130,6 +1155,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (!current) {
       return { ok: false, message: '实例不存在' }
     }
+    if (current.runtimeFailureKind === 'memory_protection') return { ok: false, message: '内存保护停止后禁止计划任务或插件自动重启' }
     if (current.nodeId !== LOCAL_NODE_ID) {
       return { ok: false, message: '当前仅支持本地节点执行实例命令' }
     }
@@ -1193,9 +1219,6 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
       }
       if (current.nodeId !== LOCAL_NODE_ID) {
         return { ok: false, message: '当前仅支持本地节点执行实例命令' }
-      }
-      if (current.status === 'stopped') {
-        return { ok: true, message: '实例本就处于停止状态' }
       }
       if (current.status === 'pending_install' || current.status === 'installing') {
         return { ok: false, message: '实例正在安装中，请先取消安装再停止' }

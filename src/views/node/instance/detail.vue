@@ -12,6 +12,8 @@ import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, 
 import { routeToNodeInstance } from '@/navigation/game-routes'
 import { statusBadgeClass } from '@/constants/statusDictionary'
 import { getInstanceState } from './instanceDisplay'
+import { isInstanceWorldReady } from './startupPresentation'
+import { useInstanceStartup } from './composables/useInstanceStartup'
 import { planInstanceDetailRequests } from './detailRequestPermissions'
 import CommandCenterCard from './components/detail/CommandCenterCard.vue'
 import InstanceFilesCard from './components/detail/InstanceFilesCard.vue'
@@ -40,6 +42,9 @@ const instanceId = computed(() => String(route.params.instanceId ?? ''))
 
 const loading = ref(false)
 const instance = ref<InstanceItem | null>(null)
+const { syncStartupPolling, stopStartupPolling } = useInstanceStartup(computed(() => instance.value ? [instance.value] : []), (id, startup) => {
+  if (instance.value?.id === id) instance.value = { ...instance.value, startup }
+}, () => { if (ownsCurrentPage()) void loadDetail({ silent: true }) })
 const cluster = ref<ClusterConfigDto | null>(null)
 const shardList = ref<ShardListDto | null>(null)
 const onlinePlayers = ref<ClusterOnlinePlayersDto | null>(null)
@@ -151,7 +156,7 @@ async function loadDetail(options?: { silent?: boolean }) {
      * 刷新时**不清空**旧读数：清空会让「世界进程」那行在每次手动刷新与 30 秒轮询时消失一瞬，
      * 卡片高度塌一下再弹回来。只有实例停止（读数已无意义）或切实例时才真正清掉。
      */
-    if (plan.worldState && target.status === 'running') {
+    if (plan.worldState && isInstanceWorldReady(target)) {
       try {
         const res = await apiInstance.getInstanceWorldState(targetId, 'master')
         if (targetId === instanceId.value) {
@@ -181,6 +186,7 @@ function goBack() {
 }
 
 function stopPolling() {
+  stopStartupPolling()
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = undefined
@@ -192,6 +198,7 @@ function syncPolling() {
   if (!ownsCurrentPage()) {
     return
   }
+  syncStartupPolling()
   if (instance.value?.status === 'running') {
     pollTimer = setInterval(() => {
       void loadDetail({ silent: true })

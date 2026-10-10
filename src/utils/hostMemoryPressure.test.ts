@@ -3,6 +3,7 @@ import { describe, it, mock } from 'node:test'
 import type { HostMemoryPressureData } from '../../shared/contracts/host-memory-pressure'
 import {
   buildHostMemoryPressureSummaryLines,
+  buildSwapPressureAdvice,
   buildMonitorHref,
   HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND,
   HOST_MEMORY_PRESSURE_FOOTER,
@@ -19,9 +20,7 @@ import {
  * 内存不足通知：文案要短到一眼能看完，按钮要真的能跳。
  *
  * 三件事都在这里钉住：
- * 1. swap 的三种状态给三条不同的话——「没配」要建（`bsp setup-swap`），
- *    「配了但用满」要扩（那条命令会被 `bsp setup-swap` 直接跳过，照抄没用），
- *    只有还有余量时才说「启动继续」。判据是 `swapTotalMb` 与 `swapFreeMb` 的组合；
+ * 1. 区分未配置、用满、预算不足与未知；增加独立swap文件保留原有swap。
  * 2. 「查看内存占用」点击后必须先销毁通知再导航，并且带 `<a href>` 兜底——此前是点击时才
  *    动态 import router 的写法，加载失败即静默中止，表现就是「点了没反应」。
  */
@@ -105,9 +104,9 @@ describe('resolveSwapState', () => {
     assert.equal(resolveSwapState({ swapFreeMb: 2048, swapTotalMb: 2048 }), 'ready')
   })
 
-  it('旧载荷没有总量字段时退回按余量判断', () => {
-    assert.equal(resolveSwapState({ swapFreeMb: 0 }), 'none')
-    assert.equal(resolveSwapState({ swapFreeMb: null }), 'none')
+  it('读不到配置时保持未知，不编造未配置结论', () => {
+    assert.equal(resolveSwapState({ swapFreeMb: 0 }), 'unknown')
+    assert.equal(resolveSwapState({ swapFreeMb: null }), 'unknown')
     assert.equal(resolveSwapState({ swapFreeMb: 512 }), 'ready')
   })
 })
@@ -196,16 +195,15 @@ describe('showHostMemoryPressureNotification', () => {
     assert.equal(options.title, HOST_MEMORY_PRESSURE_TITLE)
     // 命令单独成行：拼进段落里会被当成一句话读，照抄时容易带上多余字符
     assert.deepEqual(text.slice(0, 2), ['当前可用内存：3359 MiB', '本次启动预计需要：3456 MiB'])
-    assert.deepEqual(text.slice(2), [
-      HOST_MEMORY_PRESSURE_NO_SWAP_HINT,
-      HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND,
-      HOST_MEMORY_PRESSURE_FOOTER,
-    ])
+    assert.ok(text.includes(HOST_MEMORY_PRESSURE_NO_SWAP_HINT))
+    assert.ok(text.includes('sudo env BSP_SWAP_SIZE=2G bsp setup-swap'))
+    assert.ok(text.includes('停止实例后，在服务器上以 root 执行：'))
+    assert.equal(text.at(-1), HOST_MEMORY_PRESSURE_FOOTER)
     // 长版 detail 不再进通知，但 API 响应里仍然带着它
     assert.ok(!text.some(line => line.includes('本操作建议至少')))
   })
 
-  it('已有 swap 时只说启动继续', () => {
+  it('已有足够swap时提示检查其他错误，不虚报启动继续', () => {
     const text = collectText(captureNotice(makeData({ swapFreeMb: 2048, swapTotalMb: 2048 })).content())
     assert.deepEqual(text, [
       '当前可用内存：3359 MiB',
@@ -224,8 +222,22 @@ describe('showHostMemoryPressureNotification', () => {
     assert.ok(!text.includes(HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND))
   })
 
-  it('读不到 meminfo（null）时按没有缓存区提示', () => {
+  it('读不到 meminfo（null）时先确认配置，不指示直接重建', () => {
     const text = collectText(captureNotice(makeData({ swapFreeMb: null, swapTotalMb: null })).content())
-    assert.ok(text.includes(HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND))
+    assert.ok(text.includes('sudo swapon --show'))
+    assert.ok(!text.some(line => line.includes('setup-swap')))
+  })
+  it('swap仍有余量但不足预算时给按差额计算的新文件命令，保留原swap', () => {
+    const data = makeData({ availableMb: 512, requiredMb: 4096, swapFreeMb: 512, swapTotalMb: 2048 })
+    assert.equal(resolveSwapState(data), 'low')
+    const text = collectText(captureNotice(data).content()).join('\n')
+    assert.match(text, /swap 尚有余量/)
+    assert.match(text, /sudo env BSP_SWAP_FILE=\/swapfile-bsp-extra-3g BSP_SWAP_SIZE=3G bsp setup-swap/)
+    assert.doesNotMatch(text, /swapoff|rm -f|sed -i|启动继续/)
+  })
+  it('差额向上整GiB且至少2G，已满足预算则不给修改命令', () => {
+    assert.equal(buildSwapPressureAdvice(makeData()).command, 'sudo env BSP_SWAP_SIZE=2G bsp setup-swap')
+    assert.match(buildSwapPressureAdvice(makeData({ availableMb: 512, requiredMb: 4200, swapTotalMb: 2048 })).command!, /extra-4g BSP_SWAP_SIZE=4G/)
+    assert.equal(buildSwapPressureAdvice(makeData({ swapFreeMb: 1024, swapTotalMb: 2048 })).command, null)
   })
 })

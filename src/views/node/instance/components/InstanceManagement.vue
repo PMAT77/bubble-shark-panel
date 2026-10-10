@@ -9,7 +9,7 @@ import type { DirectoryItem } from '@/api/modules/system'
 import { NButton, NButtonGroup, NCheckbox, NDropdown, NStatistic, NTag, NTooltip, useNotification } from 'naive-ui'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
 import { statusBadgeClass } from '@/constants/statusDictionary'
-import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRefs, watch } from 'vue'
+import { computed, h, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, toRefs, watch } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiSystem from '@/api/modules/system'
 import {
@@ -43,6 +43,8 @@ import {
   useInstanceLifecycleActions,
 } from '../composables/useInstanceLifecycleActions'
 import { useInstanceRuntimeObservability } from '../composables/useInstanceRuntimeObservability'
+import { useInstanceStartup } from '../composables/useInstanceStartup'
+import { isInstanceWorldReady, isStartupActive, startupPhaseLabel } from '../startupPresentation'
 import { formatDateTime } from '../utils'
 import { buildInstanceUpdateCheckNotice, canRetryInstanceInstall, resolveInstanceUpdateState } from '../instanceUpdatePresentation'
 import { waitForInstanceUpdateCheckJob } from '../composables/instanceUpdateCheckJob'
@@ -73,6 +75,9 @@ const instanceLoading = ref(false)
 const updateCheckLoading = ref(false)
 const createLoading = ref(false)
 const instances = ref<InstanceItem[]>([])
+const { syncStartupPolling, stopStartupPolling } = useInstanceStartup(instances, (id, startup) => {
+  instances.value = instances.value.map(item => item.id === id ? { ...item, startup } : item)
+}, () => { void fetchInstances({ silent: true }) })
 const { surface: progressSurface, rowProps: installRowProps, trackAccepted } = useInstallRowProgress(instances)
 function bindProgressSurface(element: unknown) { progressSurface.value = element as HTMLElement | null }
 const checkedInstanceIds = ref<DataTableRowKey[]>([])
@@ -461,7 +466,7 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
       label: '启动',
       menuOnly: true,
       loading: isActionLoading(row.id, 'start'),
-      disabled: instanceActionRunning || row.installTask?.cleanupPending || row.installLogStatus === 'cancelled' || row.status === 'running' || row.status === 'pending_install' || row.status === 'installing',
+      disabled: instanceActionRunning || isStartupActive(row.startup) || row.installTask?.cleanupPending || row.installLogStatus === 'cancelled' || row.status === 'running' || row.status === 'pending_install' || row.status === 'installing',
       onClick: () => confirmStartInstance(row),
     },
     {
@@ -469,7 +474,7 @@ function buildInstanceRowActions(row: InstanceItem): InstanceRowAction[] {
       label: stopLabel,
       menuOnly: true,
       loading: isActionLoading(row.id, 'stop'),
-      disabled: instanceActionRunning || (!row.installTask?.cleanupPending && (row.status === 'stopped' || row.status === 'error')),
+      disabled: instanceActionRunning || (!isStartupActive(row.startup) && !row.installTask?.cleanupPending && (row.status === 'stopped' || row.status === 'error')),
       onClick: () => confirmDangerousInstanceAction(row, stopAction),
     },
     {
@@ -619,7 +624,7 @@ function renderInstanceStateColumn(row: InstanceItem) {
    * 否则服主会以为「已经在跑」而去查别的地方。
    */
   const readiness = resolveRuntimeReadinessView(row)
-  if (readiness && !row.runtimeReadyAt) {
+  if (readiness && !isInstanceWorldReady(row)) {
     badges.push(
       h(
         NTooltip,
@@ -632,9 +637,9 @@ function renderInstanceStateColumn(row: InstanceItem) {
                 ? 'text-xs px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400'
                 : 'text-xs px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground',
             },
-            readiness.tone === 'warn' ? '未就绪' : '加载中',
+            row.startup ? startupPhaseLabel(row.startup) : readiness.tone === 'warn' ? '未就绪' : '加载中',
           ),
-          default: () => `${readiness.label}：加载完成前，玩家在大厅搜不到这个房间`,
+          default: () => row.startup?.diagnosis?.message ?? readiness.label,
         },
       ),
     )
@@ -652,7 +657,10 @@ function renderInstanceStateColumn(row: InstanceItem) {
       ),
     )
   }
-  const badgeGroup = h('span', { class: 'inline-flex items-center gap-1' }, badges)
+  if (row.runtimeFailureKind === 'memory' || row.startup?.diagnosis?.code.match(/memory|oom|pressure|resource|throttl/i)) {
+    badges.push(h(NButton, { text: true, size: 'tiny', onClick: () => router.push({ name: 'nodeInstanceDetail', params: { instanceId: row.id }, hash: '#instance-resources' }) }, { default: () => '查看资源' }))
+  }
+  const badgeGroup = h('span', { class: 'inline-flex flex-wrap items-center gap-1' }, badges)
   const errorText = row.lastError?.trim()
   if (!errorText || isInstanceInstallingStatus(row.status)) {
     return badgeGroup
@@ -1149,7 +1157,10 @@ onMounted(async () => {
     fetchInstances(),
   ])
   syncRuntimeObservabilityPolling()
+  syncStartupPolling()
 })
+onActivated(syncStartupPolling)
+onDeactivated(stopStartupPolling)
 
 let hadInstallingInstance = false
 const instancePollingTimer = setInterval(() => {
@@ -1170,6 +1181,7 @@ onBeforeUnmount(() => {
   installNotifyPendingIds.clear()
   clearInterval(instancePollingTimer)
   stopRuntimeObservability()
+  stopStartupPolling()
   dismissInstanceUpdateNotification()
 })
 </script>
@@ -1321,6 +1333,8 @@ onBeforeUnmount(() => {
               {{ getInstanceState(instance).label }}
             </NTag>
           </div>
+          <p v-if="resolveRuntimeReadinessView(instance)" class="text-xs text-muted-foreground">{{ resolveRuntimeReadinessView(instance)?.label }}</p>
+          <p v-if="instance.startup?.diagnosis" class="text-xs text-amber-600 dark:text-amber-400">{{ instance.startup.diagnosis.message }}</p>
           <dl class="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
             <div>
               <dt class="text-muted-foreground">CPU（单核基准）</dt>

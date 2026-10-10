@@ -15,6 +15,7 @@ import {
   type InstancePortConflictAction,
 } from '@/utils/instancePortConflict'
 import { canForceUpdateInstance, canRetryInstanceInstall, isInstanceUpToDate } from '../instanceUpdatePresentation'
+import { trackStartupAccepted } from './useInstanceStartup'
 export { canForceUpdateInstance, canUpdateInstance, isInstanceUpToDate } from '../instanceUpdatePresentation'
 import {
   blocksDefaultStart,
@@ -104,7 +105,6 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
     action: InstancePortConflictAction,
     lifecycleOptions?: { autoAllocatePorts?: boolean },
   ) {
-    const labels = getPortConflictDialogLabels(action)
     const apiCall = action === 'restart'
       ? () => apiInstance.restartInstance(instanceId, { autoAllocatePorts: lifecycleOptions?.autoAllocatePorts })
       : () => apiInstance.startInstance(instanceId, { autoAllocatePorts: lifecycleOptions?.autoAllocatePorts })
@@ -112,8 +112,10 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
     try {
       // 弹窗（若有）已经关闭，这里先给一条即时反馈，避免用户面对一段没有任何提示的等待
       faToast.info(action === 'restart' ? '正在重启实例，请稍候…' : '正在启动实例，请稍候…')
-      await apiCall()
-      faToast.success(labels.successToast)
+      const requestStartedAt = Date.now()
+      const response = await apiCall()
+      trackStartupAccepted(instanceId, requestStartedAt, response.data?.taskId)
+      faToast.info('启动请求已受理，正在加载世界')
       await options.refresh()
     }
     catch (error) {

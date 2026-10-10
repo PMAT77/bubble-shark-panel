@@ -703,3 +703,4 @@ export async function listServerNodes(): Promise<DbServerNode[]> {
     diskUsage: Number(row.diskUsage),
   }))
 }
+export type { InstanceResourceConfig, InstanceStartupSnapshot } from '../../../../shared/contracts/instance-resources'

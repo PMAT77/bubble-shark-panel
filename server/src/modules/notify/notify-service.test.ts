@@ -98,6 +98,15 @@ describe('notify service delivery', () => {
     const sent = await deliverToChannel(stubApp, channel, other, 15)
     assert.equal(sent, true)
   })
+  it('distinct protection epochs notify once each while duplicate occurrence stays suppressed', async () => {
+    installFetchStub('ok')
+    resetNotifyStateForTests()
+    const first = { ...event, occurrenceKey: 'memory:round-1' }
+    assert.equal(await deliverToChannel(stubApp, channel, first, 15), true)
+    assert.equal(await deliverToChannel(stubApp, channel, first, 15), false)
+    assert.equal(await deliverToChannel(stubApp, channel, { ...event, occurrenceKey: 'memory:round-2' }, 15), true)
+    assert.equal(fetchCalls.length, 2)
+  })
 
   it('marks channel failing after repeated send failures (熔断)', async () => {
     installFetchStub('fail')

@@ -20,6 +20,8 @@ export interface PanelEvent {
   message: string
   severity: 'info' | 'warning' | 'critical'
   at: string
+  /** 同一实例不同保护轮次各通知一次，重复发布仍受冷却保护。 */
+  occurrenceKey?: string
 }
 
 type PanelEventListener = (event: PanelEvent) => void

@@ -6,7 +6,7 @@ import path from 'node:path'
 import { after, afterEach, describe, it } from 'node:test'
 import type { FastifyInstance } from 'fastify'
 import { resolveDockerStatus } from '../../infra/docker.ts'
-import type { ContainerRef } from '../../infra/container/types.ts'
+import type { ContainerRef, ContainerRuntime, ShardContainerSpec } from '../../infra/container/types.ts'
 import { isSteamcmdImagePresent } from '../../infra/container/steamcmd-runner.ts'
 import { resolveShardRoot } from '../../infra/game-adapter/dst/shard-layout.ts'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store.ts'
@@ -21,11 +21,66 @@ import {
   isShardPortBound,
   readClusterMasterPort,
   resolveShardReadyWaitSec,
+  startSingleShardContainer,
   summarizeLoadedMods,
   waitForMasterShardReady,
 } from './container-lifecycle.ts'
 
 const tempDirs: string[] = []
+
+describe('startSingleShardContainer', () => {
+  const ref = { id: 'start-probe.service', name: 'start-probe' }
+  const spec: ShardContainerSpec = {
+    instanceId: 'start-probe', shard: 'master', image: 'test', name: ref.name,
+    hostInstallPath: '/fixture', workingDir: '/fixture', cmd: ['/fixture/game'],
+  }
+
+  it('keeps a newly started shard when its first runtime probe is unavailable', async (t) => {
+    const remove = t.mock.fn(async () => {})
+    const logs = t.mock.fn(async function* () {})
+    const runtime = {
+      createShardContainer: async () => ref,
+      start: async () => {},
+      inspect: async () => ({ ...ref, running: false, probeFailed: true }),
+      remove,
+      logs,
+    } as unknown as ContainerRuntime
+    const result = await startSingleShardContainer(runtime, spec, 'test', 'native')
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.inspect.probeFailed, true)
+    assert.equal(remove.mock.callCount(), 0)
+    assert.equal(logs.mock.callCount(), 0)
+  })
+
+  it('cleans up a shard only after an actual stopped probe', async (t) => {
+    const remove = t.mock.fn(async () => {})
+    const runtime = {
+      createShardContainer: async () => ref,
+      start: async () => {},
+      inspect: async () => ({ ...ref, running: false }),
+      remove,
+      logs: async function* () { yield { stream: 'stderr' as const, text: 'game failed to start' } },
+    } as unknown as ContainerRuntime
+    const result = await startSingleShardContainer(runtime, spec, 'test', 'native')
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.match(result.message, /game failed to start/)
+    assert.equal(remove.mock.callCount(), 1)
+  })
+
+  it('treats a thrown initial probe as unknown and keeps the started shard', async (t) => {
+    const remove = t.mock.fn(async () => {})
+    const runtime = {
+      createShardContainer: async () => ref,
+      start: async () => {},
+      inspect: async () => { throw new Error('runtime probe unavailable') },
+      remove,
+    } as unknown as ContainerRuntime
+    const result = await startSingleShardContainer(runtime, spec, 'test', 'native')
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.inspect.probeFailed, true)
+    assert.equal(remove.mock.callCount(), 0)
+  })
+})
 
 function createTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-lifecycle-'))
@@ -183,6 +238,12 @@ describe('classifyMasterProbe', () => {
 
   it('问不到运行时只算未知，不能误判成崩溃', () => {
     assert.equal(classifyMasterProbe(null), 'unknown')
+    assert.equal(classifyMasterProbe({
+      id: 'bsp-x-master.service',
+      name: 'bsp-x-master',
+      running: false,
+      probeFailed: true,
+    }), 'unknown')
   })
 })
 
@@ -216,13 +277,9 @@ describe('resolveShardReadyWaitSec', () => {  const original = process.env.BSP_S
     }
   })
 
-  /**
-   * 上限必须给足：36 个 Mod 的分片在 2 核机上冷启动要两分多钟。
-   * 等不够就放洞穴进来，两个加载峰值会重新叠在一起——正是被 OOM 杀掉的那次。
-   */
-  it('默认上限足以覆盖多 Mod 分片的冷启动', () => {
+  it('默认等待 300 秒，可按实例或环境设置延长', () => {
     delete process.env.BSP_SHARD_READY_WAIT_SEC
-    assert.ok(resolveShardReadyWaitSec() >= 600)
+    assert.equal(resolveShardReadyWaitSec(), 300)
   })
 
   it('允许用环境变量覆盖', () => {
@@ -230,11 +287,11 @@ describe('resolveShardReadyWaitSec', () => {  const original = process.env.BSP_S
     assert.equal(resolveShardReadyWaitSec(), 1200)
   })
 
-  it('非法值退回默认上限', () => {
+  it('非法值退回 300 秒', () => {
     process.env.BSP_SHARD_READY_WAIT_SEC = 'abc'
-    assert.ok(resolveShardReadyWaitSec() >= 600)
+    assert.equal(resolveShardReadyWaitSec(), 300)
     process.env.BSP_SHARD_READY_WAIT_SEC = '-5'
-    assert.ok(resolveShardReadyWaitSec() >= 600)
+    assert.equal(resolveShardReadyWaitSec(), 300)
   })
 })
 
@@ -358,6 +415,69 @@ describe('hasMasterReadyMarker', () => {
     instanceConsoleLogStore.appendDockerLine(instanceId, '[00:02:50]: About to start a shard with these settings:', 'caves')
     assert.equal(hasMasterReadyMarker(instanceId), false)
   })
+
+  it('未变化的日志复用解析结果，追加后同时更新就绪与 Lua 错误', (t) => {
+    const instanceId = freshInstanceId()
+    const installPath = createTempDir()
+    writeShardLog(installPath, 'Loading world\n')
+    const logPath = path.join(resolveShardRoot(installPath, 'master'), 'server_log.txt')
+    const read = t.mock.method(fs, 'readSync')
+    assert.equal(hasMasterReadyMarker(instanceId, installPath), false)
+    assert.equal(findShardLuaFailure(instanceId, installPath), null)
+    assert.equal(hasMasterReadyMarker(instanceId, installPath), false)
+    assert.equal(read.mock.callCount(), 1)
+    fs.appendFileSync(logPath, REAL_MASTER_READY_LOG)
+    assert.equal(hasMasterReadyMarker(instanceId, installPath), true)
+    assert.equal(findShardLuaFailure(instanceId, installPath), null)
+    assert.equal(read.mock.callCount(), 2)
+    fs.appendFileSync(logPath, '[string "scripts/prefabs/test.lua"]:12: failed\nLUA ERROR stack traceback:\n')
+    assert.match(findShardLuaFailure(instanceId, installPath) ?? '', /test.lua/)
+    assert.equal(hasMasterReadyMarker(instanceId, installPath), true)
+    assert.equal(read.mock.callCount(), 3)
+  })
+
+  it('截断与同大小替换日志时丢弃旧的就绪和错误结果', () => {
+    const instanceId = freshInstanceId()
+    const installPath = createTempDir()
+    const original = `${REAL_MASTER_READY_LOG}LUA ERROR stack traceback:\n`
+    writeShardLog(installPath, original)
+    const logPath = path.join(resolveShardRoot(installPath, 'master'), 'server_log.txt')
+    assert.equal(hasMasterReadyMarker(instanceId, installPath), true)
+    assert.ok(findShardLuaFailure(instanceId, installPath))
+    fs.writeFileSync(logPath, 'Loading\n')
+    assert.equal(hasMasterReadyMarker(instanceId, installPath), false)
+    assert.equal(findShardLuaFailure(instanceId, installPath), null)
+    fs.writeFileSync(logPath, original)
+    assert.equal(hasMasterReadyMarker(instanceId, installPath), true)
+    const stat = fs.statSync(logPath)
+    const replacement = `${logPath}.next`
+    fs.writeFileSync(replacement, 'x'.repeat(Buffer.byteLength(original)))
+    fs.utimesSync(replacement, stat.atime, stat.mtime)
+    fs.renameSync(replacement, logPath)
+    assert.equal(hasMasterReadyMarker(instanceId, installPath), false)
+    assert.equal(findShardLuaFailure(instanceId, installPath), null)
+  })
+
+  it('启动代号或启动时刻变化后重新读取日志，读取失败不会缓存空结果', (t) => {
+    const instanceId = freshInstanceId()
+    const installPath = createTempDir()
+    writeShardLog(installPath, REAL_MASTER_READY_LOG)
+    const read = t.mock.method(fs, 'readSync')
+    const firstStart = new Date(Date.now() - 2000).toISOString()
+    const nextStart = new Date(Date.now() - 1000).toISOString()
+    assert.equal(hasMasterReadyMarker(instanceId, installPath, firstStart), true)
+    assert.equal(hasMasterReadyMarker(instanceId, installPath, nextStart), true)
+    assert.equal(read.mock.callCount(), 2)
+    bumpCavesStartGeneration(instanceId)
+    assert.equal(hasMasterReadyMarker(instanceId, installPath, nextStart), true)
+    assert.equal(read.mock.callCount(), 3)
+    read.mock.restore()
+    bumpCavesStartGeneration(instanceId)
+    const failedRead = t.mock.method(fs, 'readSync', () => { throw new Error('unavailable') })
+    assert.equal(hasMasterReadyMarker(instanceId, installPath, nextStart), false)
+    failedRead.mock.restore()
+    assert.equal(hasMasterReadyMarker(instanceId, installPath, nextStart), true)
+  })
 })
 
 /**
@@ -454,6 +574,46 @@ describe('waitForMasterShardReady', () => {
     finally {
       held.close()
     }
+  })
+
+  it('预先取消的等待不探测运行时，也不追加启动消息', async (t) => {
+    const { getContainerRuntime } = await import('../../infra/container/index.ts')
+    const inspect = t.mock.method(getContainerRuntime(), 'inspect')
+    const instanceId = freshInstanceId()
+    const controller = new AbortController()
+    controller.abort()
+    const outcome = await waitForMasterShardReady(fakeApp, instanceId, masterRef, 10888, createTempDir(), 900, 0, undefined, controller.signal)
+    assert.deepEqual(outcome, { kind: 'cancelled' })
+    assert.equal(inspect.mock.callCount(), 0)
+    assert.deepEqual(instanceConsoleLogStore.listLogs(instanceId), [])
+  })
+
+  it('探测失败后继续等待，并可立即中断轮询休眠', async (t) => {
+    const { getContainerRuntime } = await import('../../infra/container/index.ts')
+    const controller = new AbortController()
+    const inspect = t.mock.method(getContainerRuntime(), 'inspect', async () => {
+      setTimeout(() => controller.abort(), 30)
+      return { ...masterRef, running: false, probeFailed: true }
+    })
+    const instanceId = freshInstanceId()
+    const started = Date.now()
+    const outcome = await waitForMasterShardReady(fakeApp, instanceId, masterRef, await freeUdpPort(), createTempDir(), 900, 0, undefined, controller.signal)
+    assert.deepEqual(outcome, { kind: 'cancelled' })
+    assert.equal(inspect.mock.callCount(), 1)
+    assert.ok(Date.now() - started < 1000, '取消应中断两秒休眠')
+    assert.deepEqual(instanceConsoleLogStore.listLogs(instanceId), [])
+  })
+
+  it('运行时探测恢复后仍能看到主世界就绪', async (t) => {
+    const { getContainerRuntime } = await import('../../infra/container/index.ts')
+    const installPath = createTempDir()
+    const inspect = t.mock.method(getContainerRuntime(), 'inspect', async () => {
+      writeMasterLog(installPath, REAL_MASTER_READY_LOG)
+      return { ...masterRef, running: false, probeFailed: true }
+    })
+    const outcome = await waitForMasterShardReady(fakeApp, freshInstanceId(), masterRef, await freeUdpPort(), installPath, 10)
+    assert.deepEqual(outcome, { kind: 'ready' })
+    assert.equal(inspect.mock.callCount(), 1)
   })
 })
 

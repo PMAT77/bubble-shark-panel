@@ -344,6 +344,23 @@ jobs:
           set -euo pipefail
           cp scripts/install.linux.sh "install-${GITHUB_REF_NAME}.sh"
           sha256sum "install-${GITHUB_REF_NAME}.sh" > "install-${GITHUB_REF_NAME}.sh.sha256"
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk -v version="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" version "\\]" { inside=1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          cat >> release-notes.md <<'NOTES'
+
+          本 Release 的统一镜像（面板 + DST 运行环境 + SteamCMD）与 Native systemd 部署包、离线 Docker 镜像包一同发布。
+
+          统一镜像的不可变 digest 见附件 `release-images.json`；Native 包与离线镜像包使用同名 `.sha256` 校验。安装与升级请使用版本 tag 或附件中的 digest，不要依赖 `latest`。
+          NOTES
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -358,10 +375,7 @@ jobs:
             bubblesharkpanel-*-docker-image.tar.gz.sha256
             install-*.sh
             install-*.sh.sha256
-          body: |
-            本 Release 的统一镜像（面板 + DST 运行环境 + SteamCMD）与 Native systemd 部署包、离线 Docker 镜像包一同发布。
-
-            统一镜像的不可变 digest 见附件 `release-images.json`；Native 包与离线镜像包使用同名 `.sha256` 校验。安装与升级请使用版本 tag 或附件中的 digest，不要依赖 `latest`。
+          body_path: release-notes.md
 
   notify-nexus:
     name: Notify Nexus of published release

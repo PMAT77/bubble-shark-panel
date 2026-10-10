@@ -1,6 +1,6 @@
 services:
   panel:
-    image: ${PANEL_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}
+    image: ${PANEL_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.18.0}
     build:
       context: .
       dockerfile: docker/unified/Dockerfile
@@ -37,12 +37,12 @@ services:
       BSP_INSTANCES_ROOT: /var/lib/bubblesharkpanel/instances
       BSP_BACKUPS_ROOT: /var/lib/bubblesharkpanel/backups
       DOCKER_HOST: unix:///var/run/docker.sock
-      PANEL_IMAGE: ${PANEL_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}
+      PANEL_IMAGE: ${PANEL_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.18.0}
       # 面板内一键更新的 updater 容器镜像（留空自动挑选：目标镜像 → 当前面板镜像 → 官方 CLI 镜像）
       BSP_PANEL_UPDATER_IMAGE: ${BSP_PANEL_UPDATER_IMAGE:-${GSH_PANEL_UPDATER_IMAGE:-}}
       # v0.2.2 起面板/DST/SteamCMD 合并为同一统一镜像；三个变量值一致，保留以便旧配置平滑迁移
-      BSP_GAME_DST_IMAGE: ${BSP_GAME_DST_IMAGE:-${GSH_GAME_DST_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}}
-      BSP_STEAMCMD_IMAGE: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}}
+      BSP_GAME_DST_IMAGE: ${BSP_GAME_DST_IMAGE:-${GSH_GAME_DST_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.18.0}}
+      BSP_STEAMCMD_IMAGE: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.18.0}}
       # 备选镜像 registry 候选（逗号分隔）：按顺序优先尝试，全部失败后回退主引用
       BSP_IMAGE_MIRRORS: ${BSP_IMAGE_MIRRORS:-${GSH_IMAGE_MIRRORS:-}}
       BSP_STEAMCMD_CONTAINER_MEMORY_MB: ${BSP_STEAMCMD_CONTAINER_MEMORY_MB:-${GSH_STEAMCMD_CONTAINER_MEMORY_MB:-}}
@@ -63,6 +63,7 @@ services:
       BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS: ${BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS:-${GSH_STEAMCMD_APP_UPDATE_TIMEOUT_MS:-}}
       BSP_DST_CONTAINER_MEMORY_MB: ${BSP_DST_CONTAINER_MEMORY_MB:-${GSH_DST_CONTAINER_MEMORY_MB:-}}
       BSP_DST_CONTAINER_CPU_QUOTA: ${BSP_DST_CONTAINER_CPU_QUOTA:-${GSH_DST_CONTAINER_CPU_QUOTA:-}}
+      BSP_SHARD_READY_WAIT_SEC: ${BSP_SHARD_READY_WAIT_SEC:-}
       # 进服地址逃生口：home/NAT/多网卡环境用；缺这两行时 panel.env 里设了也进不了容器
       BSP_DST_CONNECT_HOST: ${BSP_DST_CONNECT_HOST:-${GSH_DST_CONNECT_HOST:-}}
       BSP_DST_AUTO_PUBLIC_IP: ${BSP_DST_AUTO_PUBLIC_IP:-${GSH_DST_AUTO_PUBLIC_IP:-}}
@@ -133,6 +134,10 @@ services:
       - bsp-instances:/var/lib/bubblesharkpanel/instances
       - bsp-backups:/var/lib/bubblesharkpanel/backups
       - /var/run/docker.sock:/var/run/docker.sock
+      # 只读宿主指标；面板核验 Docker 节点及 PID 后才使用。
+      - /sys/fs/cgroup:/run/bsp-host/cgroup:ro
+      - /proc/meminfo:/run/bsp-host/meminfo:ro
+      - /proc/pressure/memory:/run/bsp-host/memory-pressure:ro
     # 让面板容器能用 host.docker.internal 指向宿主机：容器里的 127.0.0.1 是它自己，
     # 代理跑在宿主机时（BSP_STEAM_HTTPS_PROXY=http://host.docker.internal:7890）
     # 少这一行就连不上代理。
@@ -148,7 +153,7 @@ services:
       retries: 3
 
   steamcmd:
-    image: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}}
+    image: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.18.0}}
     profiles:
       - tools
     entrypoint: ["/bin/true"]

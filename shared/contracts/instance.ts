@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { instanceStartupSnapshotSchema } from './instance-resources'
 
 export const instanceIdSchema = z.string().trim().min(1).max(128)
 
@@ -189,6 +190,7 @@ export const instanceItemSchema = z.object({
   name: z.string(),
   gameCode: z.string(),
   status: instanceStatusSchema,
+  startup: instanceStartupSnapshotSchema.nullable().optional(),
   containerId: z.string().nullable(),
   installPath: z.string().nullable(),
   configPath: z.string().nullable(),
@@ -212,7 +214,7 @@ export const instanceItemSchema = z.object({
    * 未就绪/启动失败的归因：memory = 有内存不足的证据（据此给出增加缓存区的引导），
    * not_ready = 其它情形；无结论为 null。
    */
-  runtimeFailureKind: z.enum(['memory', 'not_ready']).nullable(),
+  runtimeFailureKind: z.enum(['memory', 'not_ready', 'memory_protection']).nullable(),
   /** 最近一次异常退出检测时间（ISO）；成功启动后清除 */
   unexpectedExitAt: z.string().nullable(),
   installLogStatus: z.enum(['running', 'success', 'failed', 'cancelled']).nullable(),

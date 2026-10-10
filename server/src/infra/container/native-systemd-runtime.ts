@@ -4,7 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { resolveDstContainerResourceLimits } from './dst-container-resources'
+import { emptyResourceSnapshot, resolveDstContainerResourceLimits } from './dst-container-resources'
+import { buildHostResourceSnapshot, DST_MEMORY_SLICE, readCgroupMemory, readText } from './memory-budget'
+import { readBrandEnv } from '../../../../shared/brand-env'
 import { resolveUptimeSecondsFromMonotonic } from './uptime'
 import { sampleProcessMetrics } from '../../shared/instance-runtime/process-metrics'
 import type {
@@ -16,6 +18,7 @@ import type {
   LogLine,
   LogOpts,
   ShardContainerSpec,
+  RuntimeResourceSnapshot,
 } from './types'
 
 const execFileAsync = promisify(execFile)
@@ -36,8 +39,6 @@ const NATIVE_SHARD_CPU_RESERVE_PERCENT = 20
 const NATIVE_UNIT_CPU_QUOTA_MIN_PERCENT = 25
 /** MemoryMax 低于 1 MiB 是非法值，钳到 1 MiB 而不是写出一个起不来的 unit */
 const NATIVE_UNIT_MEMORY_MIN_BYTES = 1024 * 1024
-/** 软限比例：超过它就触发回收/换页，而不是直接杀进程 */
-const NATIVE_UNIT_MEMORY_HIGH_RATIO = 0.8
 /** 崩溃重启风暴的上限：10 分钟内最多拉起 3 次，之后停手并如实报错 */
 const NATIVE_UNIT_START_LIMIT_INTERVAL_SEC = 600
 const NATIVE_UNIT_START_LIMIT_BURST = 3
@@ -287,6 +288,47 @@ export function readCgroupOomKillCount(controlGroup: string | undefined): number
   }
 }
 
+/** cgroup v2 不可用的字段保持 null；可注入根目录供临时夹具验证。 */
+export function readNativeResourceSnapshot(properties: Record<string, string>, cgroupRoot = CGROUP_ROOT): RuntimeResourceSnapshot {
+  const snapshot = emptyResourceSnapshot()
+  // 未加载的 unit 也会返回 Result=success / ExecMainStatus=0，这些不是运行证据。
+  if (properties.LoadState !== 'loaded') return snapshot
+  const group = properties.ControlGroup?.trim()
+  const read = (name: string): string | undefined => {
+    if (!group?.startsWith('/') || group.includes('..')) return undefined
+    try { return fs.readFileSync(path.join(cgroupRoot, group, name), 'utf8').trim() }
+    catch { return undefined }
+  }
+  const number = (raw: string | undefined): number | null => {
+    if (!raw || raw === 'max' || raw === 'infinity') return null
+    const value = Number(raw)
+    return Number.isFinite(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER ? value : null
+  }
+  const mib = (raw: string | undefined): number | null => {
+    const value = number(raw)
+    return value === null ? null : Math.round(value / (1024 * 1024))
+  }
+  const counter = (text: string | undefined, key: string) => number(new RegExp(`^${key}\\s+(\\d+)\\s*$`, 'm').exec(text ?? '')?.[1])
+  const events = read('memory.events')
+  snapshot.memoryCurrentMb = mib(read('memory.current') ?? properties.MemoryCurrent)
+  snapshot.memoryPeakMb = mib(read('memory.peak') ?? properties.MemoryPeak)
+  snapshot.memoryMaxMb = mib(read('memory.max') ?? properties.MemoryMax)
+  snapshot.swapCurrentMb = mib(read('memory.swap.current') ?? properties.MemorySwapCurrent)
+  snapshot.swapMaxMb = mib(read('memory.swap.max') ?? properties.MemorySwapMax)
+  snapshot.memoryHighMb = mib(read('memory.high') ?? properties.MemoryHigh)
+  snapshot.highEvents = counter(events, 'high')
+  snapshot.maxEvents = counter(events, 'max')
+  snapshot.oomKillCount = counter(events, 'oom_kill')
+  snapshot.throttledUsec = counter(read('cpu.stat'), 'throttled_usec')
+  snapshot.memoryPressureFullAvg10 = number(/^full\s+avg10=([\d.]+)/m.exec(read('memory.pressure') ?? '')?.[1])
+  snapshot.exitCode = number(properties.ExecMainStatus)
+  snapshot.restarts = number(properties.NRestarts)
+  snapshot.oomKilled = properties.Result ? properties.Result === 'oom-kill' : null
+  const direct = readCgroupMemory(cgroupRoot, group)
+  for (const key of ['memoryCurrentMb', 'memoryPeakMb', 'memoryMaxMb', 'memoryHighMb', 'swapCurrentMb', 'swapMaxMb'] as const) direct[key] ??= snapshot[key]
+  return { ...snapshot, ...direct, runtimeIdentity: properties.InvocationID || null, memoryParent: group?.split('/').slice(0, -1).pop() ?? null, exitCode: snapshot.exitCode, restarts: snapshot.restarts, oomKilled: snapshot.oomKilled, throttledUsec: snapshot.throttledUsec }
+}
+
 export interface UnitLoadDiagnosticInput {
   unitPath: string
   unitContent?: string
@@ -338,18 +380,18 @@ export function buildNativeSystemdUnit(
   launcherPath: string,
   consoleLogPath: string,
 ): string {
-  const limits = resolveDstContainerResourceLimits()
+  const limits = resolveDstContainerResourceLimits(spec.resourceLimits)
   const environment = Object.entries(spec.env ?? {})
     .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
   const resourceLines: string[] = []
   if (limits?.memory) {
     const maxBytes = Math.max(limits.memory, NATIVE_UNIT_MEMORY_MIN_BYTES)
-    resourceLines.push(`MemoryHigh=${Math.floor(maxBytes * NATIVE_UNIT_MEMORY_HIGH_RATIO)}`)
     resourceLines.push(`MemoryMax=${maxBytes}`)
-    // 允许分片使用 swap：没有它时 MemoryHigh 触发的回收无处可去，内核只能直接 OOM 杀进程。
+    // 允许分片使用宿主机已有 swap，保留用户配置的内存硬限。
     resourceLines.push('MemorySwapMax=infinity')
   }
-  const cpuQuotaPercent = limits?.nanoCpus
+  const cpuDisabled = spec.resourceLimits?.nanoCpus === 0 || readBrandEnv('BSP_DST_CONTAINER_CPU_QUOTA')?.trim() === '0'
+  const cpuQuotaPercent = cpuDisabled ? undefined : limits?.nanoCpus
     ? limits.nanoCpus / 1e7
     : resolveShardCpuQuotaPercent()
   if (cpuQuotaPercent) {
@@ -371,6 +413,7 @@ StartLimitBurst=${NATIVE_UNIT_START_LIMIT_BURST}
 
 [Service]
 Type=simple
+${spec.memoryParent === DST_MEMORY_SLICE ? `Slice=${DST_MEMORY_SLICE}\n` : ''}MemoryAccounting=yes
 WorkingDirectory=${systemdPath(spec.workingDir)}
 ExecStart=${systemdQuote(launcherPath)}
 Restart=on-failure
@@ -392,6 +435,8 @@ export class NativeSystemdRuntime implements ContainerRuntime {
   private readonly options: NativeSystemdRuntimeOptions
   /** unit 路径 → systemd-analyze verify 的输出，仅用于启动失败时的诊断 */
   private readonly unitVerifyOutput = new Map<string, string>()
+  private readonly unitOperations = new Map<string, Promise<void>>()
+  private readonly unitRefIdentities = new WeakMap<ContainerRef, string | null>()
 
   constructor(options: NativeSystemdRuntimeOptions) {
     this.options = options
@@ -417,6 +462,48 @@ export class NativeSystemdRuntime implements ContainerRuntime {
       unitPath: path.join(this.options.unitDir, `${name}.service`),
       consoleLogPath: path.join(this.options.runtimeDir, 'console-logs', `${name}.log`),
     }
+  }
+
+  private readUnitIdentity(name: string): string | null {
+    try {
+      const stat = fs.statSync(this.servicePaths(name).unitPath, { bigint: true })
+      return `${stat.dev}:${stat.ino}:${stat.ctimeNs}`
+    }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+  }
+
+  private unitRef(name: string): ContainerRef {
+    const ref = { id: this.unitName(name), name }
+    this.unitRefIdentities.set(ref, this.readUnitIdentity(name))
+    return ref
+  }
+
+  /** 在入队前捕获身份；旧引用不能在排队后认领同名的新单元。 */
+  private currentUnit(ref: ContainerRef): () => boolean {
+    if (!this.unitRefIdentities.has(ref)) {
+      if (this.readUnitIdentity(ref.name) !== null) {
+        throw new Error('Native 服务引用已失效，请重新查询当前分片')
+      }
+      this.unitRefIdentities.set(ref, null)
+    }
+    const identity = this.unitRefIdentities.get(ref)
+    return () => identity === this.readUnitIdentity(ref.name)
+  }
+
+  private withUnitOperation<T>(name: string, run: () => Promise<T>): Promise<T> {
+    assertSafeServiceName(name)
+    // 品牌更名后的两个名称仍代表同一分片。
+    const key = name.replace(/^gsh-/, 'bsp-')
+    const operation = (this.unitOperations.get(key) ?? Promise.resolve()).then(run)
+    const completed = operation.then(() => {}, () => {})
+    this.unitOperations.set(key, completed)
+    void completed.then(() => {
+      if (this.unitOperations.get(key) === completed) this.unitOperations.delete(key)
+    })
+    return operation
   }
 
   /** 跑命令并尽量取回输出：systemd-analyze/systemctl 判失败时原因都在 stdout/stderr 里 */
@@ -486,7 +573,12 @@ export class NativeSystemdRuntime implements ContainerRuntime {
   }
 
   async createShardContainer(spec: ShardContainerSpec): Promise<ContainerRef> {
+    return this.withUnitOperation(spec.name, () => this.createUnit(spec))
+  }
+
+  private async createUnit(spec: ShardContainerSpec): Promise<ContainerRef> {
     assertSafeServiceName(spec.name)
+    if (spec.memoryParent && (spec.memoryParent !== DST_MEMORY_SLICE || (await this.hostResources()).budget.state !== 'protected')) throw new Error('共享内存预算无法核验，请重新检查宿主配置')
     const existing = await this.findByName(spec.name)
     if (existing) spec = { ...spec, name: existing.name }
     if (!path.isAbsolute(spec.cmd[0] ?? '')) {
@@ -501,13 +593,18 @@ export class NativeSystemdRuntime implements ContainerRuntime {
     writeFileAtomic(paths.unitPath, buildNativeSystemdUnit(spec, paths.launcherPath, paths.consoleLogPath), 0o600)
     await this.recordUnitVerify(paths.unitPath)
     await this.systemctl(['daemon-reload'])
-    return {
-      id: this.unitName(spec.name),
-      name: spec.name,
-    }
+    return this.unitRef(spec.name)
   }
 
   async start(ref: ContainerRef): Promise<void> {
+    const current = this.currentUnit(ref)
+    return this.withUnitOperation(ref.name, async () => {
+      if (!current()) throw new Error('Native 服务已被新的启动任务替换')
+      await this.startUnit(ref)
+    })
+  }
+
+  private async startUnit(ref: ContainerRef): Promise<void> {
     // 手动启动前先清掉 StartLimit 计数：崩溃循环触发的「不再拉起」不应该连累用户
     // 主动点击的启动，否则重启几次之后实例会拒绝启动，看起来像面板坏了。
     try {
@@ -526,6 +623,13 @@ export class NativeSystemdRuntime implements ContainerRuntime {
   }
 
   async stop(ref: ContainerRef, timeoutSec = 10): Promise<void> {
+    const current = this.currentUnit(ref)
+    return this.withUnitOperation(ref.name, async () => {
+      if (current()) await this.stopUnit(ref, timeoutSec)
+    })
+  }
+
+  private async stopUnit(ref: ContainerRef, timeoutSec = 10): Promise<void> {
     // 等待上限取「调用方预算 + 5 秒」与「unit 停机预算 + 15 秒」的较大者：
     // 后者保证 systemd 有完整时间收尾，不会在存档落盘途中被判成失败。
     const clientTimeoutMs = Math.max(((timeoutSec ?? 10) + 5) * 1000, NATIVE_STOP_CLIENT_TIMEOUT_MS)
@@ -544,21 +648,30 @@ export class NativeSystemdRuntime implements ContainerRuntime {
   }
 
   async remove(ref: ContainerRef): Promise<void> {
+    const current = this.currentUnit(ref)
+    return this.withUnitOperation(ref.name, async () => {
+      if (current()) await this.removeUnit(ref, current)
+    })
+  }
+
+  private async removeUnit(ref: ContainerRef, current: () => boolean, alreadyStopped = false): Promise<void> {
     // 停止失败不能中断清理：单元若仍处于 enabled，宿主重启时该分片会被 systemd 自动拉起，
     // 与「实例已停止/已删除」的状态完全相反。这里先记下错误，做完清理再抛出。
     let stopError: unknown
     try {
-      await this.stop(ref)
+      if (!alreadyStopped) await this.stopUnit(ref)
     }
     catch (error) {
       stopError = error
     }
+    if (!current()) return
     try {
       await this.systemctl(['disable', this.unitName(ref)])
     }
     catch {
       // Unit 可能尚未启用或已被手工清理。
     }
+    if (!current()) return
     const paths = this.servicePaths(ref.name)
     for (const filePath of [paths.unitPath, paths.fifoPath, paths.launcherPath]) {
       try {
@@ -585,6 +698,55 @@ export class NativeSystemdRuntime implements ContainerRuntime {
     if (stopError) {
       throw stopError
     }
+  }
+
+  async emergencyRemove(ref: ContainerRef): Promise<void> {
+    const current = this.currentUnit(ref)
+    return this.withUnitOperation(ref.name, async () => {
+      if (!current()) return
+      const before = await this.resourceSnapshot(ref)
+      if (ref.runtimeIdentity && before.runtimeIdentity !== ref.runtimeIdentity) throw new Error('分片运行身份已变化，保护清理已取消')
+      await this.systemctl(['stop', '--no-block', this.unitName(ref)])
+      const deadline = Date.now() + 5000
+      while (current() && Date.now() < deadline) {
+        const state = await this.inspect(ref)
+        if (state.probeFailed) throw new Error('保护停机无法确认分片状态，保留引用')
+        if (!state.running) break
+        await new Promise(resolve => setTimeout(resolve, 200))
+      }
+      if (!current()) return
+      const state = await this.inspect(ref)
+      if (state.probeFailed) throw new Error('保护停机探测失败，保留引用')
+      if (state.running) {
+        const now = await this.resourceSnapshot(ref)
+        if (ref.runtimeIdentity && now.runtimeIdentity !== ref.runtimeIdentity) throw new Error('分片运行身份已变化，保留引用')
+        await this.systemctl(['kill', '--kill-whom=all', '--signal=SIGKILL', this.unitName(ref)])
+      }
+      const killDeadline = Date.now() + 3000
+      while (current()) {
+        const remaining = await this.inspect(ref)
+        if (remaining.probeFailed) throw new Error('无法确认残留进程已退出，保留引用')
+        if (!remaining.running) break
+        if (Date.now() >= killDeadline) throw new Error('保护停机清理超时，保留引用')
+        await new Promise(resolve => setTimeout(resolve, 200))
+      }
+      if (current()) await this.removeUnit(ref, current, true)
+    })
+  }
+
+  async hostResources() {
+    let group: string | undefined
+    try {
+      const { stdout } = await this.systemctl(['show', DST_MEMORY_SLICE, '--property=LoadState,ControlGroup'])
+      if (/^LoadState=loaded$/m.test(stdout)) group = /^ControlGroup=(.*)$/m.exec(stdout)?.[1]
+    }
+    catch { /* 旧部署保持原限制。 */ }
+    const ownGroup = /^0::(.*)$/m.exec(readText('/proc/self/cgroup') ?? '')?.[1]
+    return buildHostResourceSnapshot({
+      meminfo: readText('/proc/meminfo'), psi: readText('/proc/pressure/memory'), source: 'native-host',
+      panel: readCgroupMemory(CGROUP_ROOT, ownGroup), pool: readCgroupMemory(CGROUP_ROOT, group),
+      verified: !!group && group.endsWith(`/${DST_MEMORY_SLICE}`) && (readText(`${CGROUP_ROOT}${group}/cgroup.controllers`) ?? '').split(/\s+/).includes('memory'),
+    })
   }
 
   /**
@@ -678,11 +840,13 @@ export class NativeSystemdRuntime implements ContainerRuntime {
       const { stdout } = await this.systemctl([
         'show',
         this.unitName(ref),
-        '--property=LoadState,ActiveState,SubState,MainPID,ExecMainStartTimestamp,ExecMainStartTimestampMonotonic,ControlGroup,MemoryPeak,Result,NRestarts',
+        '--property=LoadState,ActiveState,SubState,MainPID,ExecMainStartTimestamp,ExecMainStartTimestampMonotonic,ExecMainStatus,ControlGroup,MemoryPeak,Result,NRestarts',
       ])
       const properties = parseSystemctlProperties(stdout)
+      if (!properties.LoadState || properties.LoadState === 'error') throw new Error('无法读取单元状态')
       const state = resolveNativeUnitState(properties)
       const pid = Number(properties.MainPID)
+      const exitCode = properties.LoadState === 'loaded' && properties.ExecMainStatus ? Number(properties.ExecMainStatus) : undefined
       const memOomKillCount = readCgroupOomKillCount(properties.ControlGroup)
       return {
         id: this.unitName(ref),
@@ -695,6 +859,7 @@ export class NativeSystemdRuntime implements ContainerRuntime {
         ...(state.memPeakMb !== undefined ? { memPeakMb: state.memPeakMb } : {}),
         ...(memOomKillCount !== undefined ? { memOomKillCount } : {}),
         ...(state.exitResult ? { exitResult: state.exitResult } : {}),
+        ...(Number.isInteger(exitCode) && exitCode! >= 0 ? { exitCode } : {}),
         ...(state.restarts ? { restarts: state.restarts } : {}),
       }
     }
@@ -732,6 +897,14 @@ export class NativeSystemdRuntime implements ContainerRuntime {
     }
   }
 
+  async resourceSnapshot(ref: ContainerRef): Promise<RuntimeResourceSnapshot> {
+    try {
+      const { stdout } = await this.systemctl(['show', this.unitName(ref), '--property=LoadState,ControlGroup,InvocationID,MemoryCurrent,MemoryPeak,MemoryMax,MemoryHigh,MemorySwapCurrent,MemorySwapMax,ExecMainStatus,NRestarts,Result'])
+      return readNativeResourceSnapshot(parseSystemctlProperties(stdout))
+    }
+    catch { return emptyResourceSnapshot() }
+  }
+
   async findByName(name: string): Promise<ContainerRef | undefined> {
     assertSafeServiceName(name)
     name = shardNameCandidates(name).find(candidate => fs.existsSync(this.servicePaths(candidate).unitPath)) ?? name
@@ -739,9 +912,6 @@ export class NativeSystemdRuntime implements ContainerRuntime {
     if (!fs.existsSync(paths.unitPath)) {
       return undefined
     }
-    return {
-      id: this.unitName(name),
-      name,
-    }
+    return this.unitRef(name)
   }
 }

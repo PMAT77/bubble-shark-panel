@@ -31,10 +31,14 @@ export type HeavyHostOperation = 'steamcmd-install' | 'dst-container-start' | 'i
 
 /** DST 启动守卫的上下文：只有知道要起几个分片、挂多少 Mod，估算才有意义 */
 export interface DstStartMemoryContext {
+  /** 本次新增分片的有效硬限，仅用于说明；0/null 表示不限。 */
+  memoryCapMb?: number | null
   /** 本次启动会拉起的分片数（仅主世界 1，开启洞穴 2） */
   shardCount?: number
   /** 启用中的 Mod 数量 */
   modCount?: number
+  /** 同一采样的 RAM + swap 峰值；不受分片硬限截断。 */
+  measuredDemandMb?: number | null
 }
 
 /** 一次读取的宿主机内存快照，作为守卫判定的输入（可注入以便测试） */
@@ -45,6 +49,7 @@ export interface HostMemoryReading {
   swapFreeMb: number | null
   /** swap 总量；省略或为 null 表示没读到（无 /proc 的环境），此时说不了「未配置」也分不清「用满」 */
   swapTotalMb?: number | null
+  poolAvailableMb?: number | null
 }
 
 /** 读取真实 /proc/meminfo；无 /proc 的环境（Windows 原生）返回 null 字段 */
@@ -57,8 +62,8 @@ export function readHostMemoryReading(): HostMemoryReading {
   }
 }
 
-/** swap 落点的状态。`unknown` 只在读不到 /proc/meminfo 时出现 */
-export type SwapState = 'unknown' | 'none' | 'exhausted' | 'ready'
+/** low 表示已有 swap 余量仍不足本次操作预算。 */
+export type SwapState = 'unknown' | 'none' | 'low' | 'exhausted' | 'ready'
 
 /**
  * 只按 `SwapFree` 判「有没有 swap」是错的：它为 0 既可能是没配，也可能是配了但被用满。
@@ -66,16 +71,32 @@ export type SwapState = 'unknown' | 'none' | 'exhausted' | 'ready'
  * （脚本检测到已有 swap 就不动），照做一遍什么都不会变，排查方向被带偏。
  */
 export function resolveSwapState(
-  memory: Pick<HostMemoryReading, 'swapFreeMb' | 'swapTotalMb'>,
+  memory: Pick<HostMemoryReading, 'swapFreeMb' | 'swapTotalMb'> & Partial<Pick<HostMemoryReading, 'availableMb'>>,
+  requiredMb = 0,
 ): SwapState {
   const { swapFreeMb, swapTotalMb } = memory
-  if (swapTotalMb === null || swapTotalMb === undefined) {
-    return swapFreeMb !== null && swapFreeMb > 0 ? 'ready' : 'unknown'
+  if (swapTotalMb === 0) return 'none'
+  if (swapFreeMb === null || ((swapTotalMb == null) && swapFreeMb === 0)) return 'unknown'
+  if (swapFreeMb === 0) return 'exhausted'
+  return memory.availableMb != null && memory.availableMb + swapFreeMb < requiredMb ? 'low' : 'ready'
+}
+
+export function buildHostSwapAdvice(memory: HostMemoryReading, requiredMb: number): { state: SwapState, message: string, command: string | null } {
+  const state = resolveSwapState(memory, requiredMb)
+  const missingMb = Math.max(0, Math.ceil(requiredMb - (memory.availableMb ?? 0) - (memory.swapFreeMb ?? 0)))
+  const sizeGb = Math.max(2, Math.ceil(missingMb / 1024))
+  const shortage = missingMb ? `按本次启动估算还差约 ${missingMb} MiB。` : ''
+  if (state === 'none') return {
+    state, message: `宿主机未配置 swap。${shortage}可创建 ${sizeGb} GiB swap 吸收加载峰值；频繁换页会增加启动耗时。`,
+    command: `sudo env BSP_SWAP_SIZE=${sizeGb}G bsp setup-swap`,
   }
-  if (swapTotalMb === 0) {
-    return 'none'
+  if (state === 'low' || state === 'exhausted') return {
+    state, message: `${state === 'exhausted' ? '宿主机 swap 已用满' : `宿主机可用 swap 约 ${memory.swapFreeMb} MiB，余量不足本次启动预算`}。${shortage}先停止其他实例释放内存；需要扩缓存区时可追加 ${sizeGb} GiB swap 文件。请确认磁盘余量，若示例路径已存在则换一个新路径；频繁换页会增加启动耗时。`,
+    command: `sudo env BSP_SWAP_FILE=/swapfile-bsp-extra-${sizeGb}g BSP_SWAP_SIZE=${sizeGb}G bsp setup-swap`,
   }
-  return (swapFreeMb ?? 0) > 0 ? 'ready' : 'exhausted'
+  return state === 'ready'
+    ? { state, message: `宿主机可用 swap 约 ${memory.swapFreeMb} MiB，当前余量满足估算预算；频繁换页会增加启动耗时。`, command: null }
+    : { state, message: '无法读取宿主机 swap 状态，可先检查已启用的 swap。', command: 'sudo swapon --show' }
 }
 
 function parsePositiveMbEnv(key: string): number | undefined {
@@ -116,14 +137,12 @@ export function resolveSteamcmdPlanningMb(): number {
  * 确实要强制启动请用 BSP_HOST_MIN_AVAILABLE_MB=0 关掉守卫。
  */
 export function resolveDstShardPlanningMb(modCount?: number): number {
-  const limits = resolveDstContainerResourceLimits()
-  const capMb = limits?.memory ? Math.round(limits.memory / MIB) : undefined
   const base = parsePositiveMbEnv('BSP_HOST_DST_PLANNING_MB') ?? DEFAULT_DST_PLANNING_MB
   const estimated = typeof modCount === 'number' && Number.isFinite(modCount)
     ? DST_PLANNING_BASE_MB + DST_PLANNING_MB_PER_MOD * Math.max(0, Math.floor(modCount))
     : 0
   const planned = Math.max(base, estimated)
-  return capMb ? Math.min(capMb, planned) : planned
+  return planned
 }
 
 function resolveSeedPlanningMb(): number {
@@ -139,6 +158,7 @@ export function resolveMinHostAvailableMbForOperation(
   operation: HeavyHostOperation,
   context: DstStartMemoryContext = {},
 ): number {
+  if (readBrandEnv('BSP_HOST_MIN_AVAILABLE_MB')?.trim() === '0') return 0
   const override = parsePositiveMbEnv('BSP_HOST_MIN_AVAILABLE_MB')
   if (override !== undefined) {
     return override
@@ -151,7 +171,7 @@ export function resolveMinHostAvailableMbForOperation(
       // 按分片数累加：主世界与洞穴会各自把整套 Mod 读进内存，同时加载时峰值叠加。
       // （面板现在会等主世界就绪再拉起洞穴，但这是上界估算，宁可保守。）
       const shardCount = Math.max(1, Math.floor(context.shardCount ?? 1))
-      return resolveDstShardPlanningMb(context.modCount) * shardCount + Math.min(headroomMb, 384)
+      return Math.max(resolveDstShardPlanningMb(context.modCount) * shardCount, context.measuredDemandMb ?? 0) + headroomMb
     }
     case 'install-seed-copy':
       return resolveSeedPlanningMb() + headroomMb
@@ -194,7 +214,8 @@ function buildHostMemoryPressureFailure(
   context: DstStartMemoryContext,
 ): HostMemoryPressureFailure {
   const totalHint = totalMb ? `（总内存约 ${totalMb} MiB）` : ''
-  const swapState = resolveSwapState({ swapFreeMb, swapTotalMb })
+  const advice = buildHostSwapAdvice({ availableMb, totalMb, swapFreeMb, swapTotalMb }, requiredMb)
+  const swapState = advice.state
   const swapHint = swapState === 'unknown'
     ? ''
     : swapState === 'none'
@@ -202,12 +223,9 @@ function buildHostMemoryPressureFailure(
       : swapState === 'exhausted'
         ? `，缓存区已用满（共 ${swapTotalMb} MiB）`
         : `，可用缓存区约 ${swapFreeMb} MiB`
-  const swapAdvice = swapState === 'exhausted'
-    ? '1. 扩缓存区（最有效）：缓存区已被用满，加载尖峰没有落点；先停用并删掉旧的缓存区文件，再执行 BSP_SWAP_SIZE=4G bsp setup-swap 重建'
-    : '1. 加缓存区（最有效）：执行 bsp setup-swap 创建 2 GiB 缓存区文件，让加载尖峰有地方落'
   const explanationLines = [
     '说明：安装/启动按典型峰值估算，并非按容器上限占满内存。',
-    ...(capMb ? [`DST 分片内存硬上限为 ${capMb} MiB（每个分片，非预留占用）。`] : []),
+    ...(capMb ? [`当前启动分片的内存硬上限为 ${capMb} MiB（非预留占用）。`] : []),
     ...(context.modCount !== undefined
       ? [`本次启动按 ${context.shardCount ?? 1} 个分片、${context.modCount} 个启用中的 Mod 估算单分片峰值。`]
       : []),
@@ -218,9 +236,9 @@ function buildHostMemoryPressureFailure(
     ...explanationLines,
     '',
     '建议：',
-    swapAdvice,
-    '2. 关闭洞穴分片：单分片启动峰值约为双分片的一半',
-    '3. 在「世界设置 → 模组」减少订阅的 Mod：内存占用与 Mod 数量近似线性',
+    `1. ${advice.message}${advice.command ? `\n   ${advice.command}` : ''}`,
+    '2. 关闭洞穴分片，减少同机运行的游戏进程与总占用',
+    '3. 在「世界设置 → 模组」减少订阅的 Mod，优先检查大型 Mod 的实际占用',
     '4. 停止其他正在运行的实例，释放内存',
     '',
     '若确需强制执行：在 panel.env 设置 BSP_HOST_MIN_AVAILABLE_MB=0 可关闭内存守卫（小内存机慎用，可能触发 OOM）。',
@@ -250,15 +268,19 @@ export function assessHostMemoryForHeavyOperation(
 ): HostMemoryPressureResult {
   const { availableMb, totalMb, swapFreeMb, swapTotalMb } = reading
   const requiredMb = resolveMinHostAvailableMbForOperation(operation, context)
+  if (requiredMb === 0) return { ok: true, availableMb, requiredMb }
   if (availableMb === null) {
     return { ok: true, availableMb: null, requiredMb }
   }
   const usableMb = availableMb + (swapFreeMb ?? 0)
-  if (usableMb >= requiredMb) {
+  const poolRequiredMb = operation === 'dst-container-start' ? Math.max(0, requiredMb - resolveHostMemoryHeadroomMb()) : 0
+  if (usableMb >= requiredMb && (reading.poolAvailableMb == null || reading.poolAvailableMb + (swapFreeMb ?? 0) >= poolRequiredMb)) {
     return { ok: true, availableMb, requiredMb }
   }
-  const capMb = resolveSteamcmdContainerMemoryCapMb('app-update')
-  return buildHostMemoryPressureFailure(
+  const capMb = operation === 'dst-container-start'
+    ? (context.memoryCapMb === undefined ? (resolveDstContainerResourceLimits()?.memory ?? 0) / MIB || undefined : context.memoryCapMb || undefined)
+    : resolveSteamcmdContainerMemoryCapMb('app-update')
+  const failure = buildHostMemoryPressureFailure(
     availableMb,
     requiredMb,
     totalMb ?? null,
@@ -267,4 +289,10 @@ export function assessHostMemoryForHeavyOperation(
     swapTotalMb ?? null,
     context,
   )
+  if (usableMb >= requiredMb) {
+    failure.summary = '游戏共享内存池与 swap 余量不足'
+    failure.detail = `游戏共享池可用约 ${Math.round(reading.poolAvailableMb ?? 0)} MiB，本次新增分片需求约 ${Math.round(poolRequiredMb)} MiB；请停止其他实例或手动追加 swap。\n${failure.detail}`
+    failure.data.detail = failure.detail
+  }
+  return failure
 }

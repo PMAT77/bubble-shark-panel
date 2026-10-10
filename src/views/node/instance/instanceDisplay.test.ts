@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { InstanceItem } from '@/api/modules/instance'
-import { resolveRuntimeReadinessView } from './instanceDisplay.ts'
+import { getInstanceState, resolveRuntimeReadinessView } from './instanceDisplay.ts'
+import type { InstanceStartupSnapshot } from '@/api/modules/instance'
 
 const NOW = Date.parse('2026-10-02T12:00:00.000Z')
 
@@ -20,6 +21,17 @@ function makeInstance(overrides: Partial<InstanceItem> = {}): InstanceItem {
  * 语气（tone）交给后端的 `runtimeFailureKind`，前端不复刻阈值判断卡没卡住。
  */
 describe('resolveRuntimeReadinessView', () => {
+  it('主世界已就绪但洞穴还在加载时保留启动中状态', () => {
+    const startup = { status: 'running', phase: 'caves_loading', elapsedSeconds: 150, remainingSeconds: 250, diagnosis: null } as InstanceStartupSnapshot
+    const instance = makeInstance({ runtimeReadyAt: '2026-10-02T11:58:00.000Z', startup })
+    assert.equal(getInstanceState(instance).label, '启动中')
+    assert.equal(resolveRuntimeReadinessView(instance, NOW)?.label, '洞穴加载中（已等待 150 秒，本阶段剩余 250 秒）')
+  })
+  it('历史启动失败不会覆盖停止状态或后来的安装失败', () => {
+    const startup = { status: 'failed' } as InstanceStartupSnapshot
+    assert.equal(getInstanceState(makeInstance({ status: 'stopped', startup })).label, '已停止')
+    assert.equal(getInstanceState(makeInstance({ status: 'error', lastErrorPhase: 'install', startup })).label, '安装失败')
+  })
   it('没在运行的实例不显示就绪信息', () => {
     assert.equal(resolveRuntimeReadinessView(makeInstance({ status: 'stopped' })), null)
   })

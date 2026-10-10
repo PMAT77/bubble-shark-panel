@@ -10,11 +10,92 @@ import {
   NativeSystemdRuntime,
   parseCgroupOomKillCount,
   readFileTailLines,
+  readNativeResourceSnapshot,
   resolveNativeUnitState,
   resolveShardCpuQuotaPercent,
   rotateConsoleLogFile,
 } from './native-systemd-runtime'
 import type { ContainerRef, LogLine, ShardContainerSpec } from './types'
+import type { TestContext } from 'node:test'
+
+it('native leaf joins only the explicitly verified shared slice, including unlimited leaf memory', () => {
+  const spec: ShardContainerSpec = { instanceId: 'budget', shard: 'master', image: '', name: 'bsp-budget-master', hostInstallPath: '/game', cmd: ['/game/server'], workingDir: '/game', memoryParent: 'bspdst.slice', resourceLimits: { memory: 0 } }
+  const unit = buildNativeSystemdUnit(spec, '/launcher', '/console')
+  assert.match(unit, /Slice=bspdst\.slice/)
+  assert.match(unit, /MemoryAccounting=yes/)
+  assert.doesNotMatch(unit, /MemoryMax=/)
+  assert.doesNotMatch(buildNativeSystemdUnit({ ...spec, memoryParent: undefined }, '/launcher', '/console'), /Slice=/)
+})
+
+it('historical Native OOM counters do not masquerade as the current invocation result', () => {
+  const result = readNativeResourceSnapshot({ LoadState: 'loaded', Result: 'success', NRestarts: '0' })
+  assert.equal(result.oomKilled, false)
+})
+
+it('reads actual cgroup limits, peaks and pressure, preserving unsupported values as null', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-cgroup-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const group = path.join(root, 'slice', 'shard')
+  fs.mkdirSync(group, { recursive: true })
+  for (const [name, content] of Object.entries({
+    'memory.current': String(1500 * 1024 * 1024), 'memory.peak': String(2000 * 1024 * 1024),
+    'memory.max': String(2560 * 1024 * 1024), 'memory.swap.current': String(300 * 1024 * 1024),
+    'memory.swap.max': 'max', 'memory.high': 'max', 'memory.events': 'high 7\nmax 2\noom_kill 0\noom_group_kill 9\n',
+    'memory.pressure': 'some avg10=1.10 avg60=0.01\nfull avg10=0.25 avg60=0.00\n', 'cpu.stat': 'throttled_usec 123456\n',
+  })) fs.writeFileSync(path.join(group, name), content)
+  const snapshot = readNativeResourceSnapshot({ LoadState: 'loaded', ControlGroup: '/slice/shard', ExecMainStatus: '0', NRestarts: '2', Result: 'success' }, root)
+  assert.equal(snapshot.memoryCurrentMb, 1500)
+  assert.equal(snapshot.memoryPeakMb, 2000)
+  assert.equal(snapshot.memoryMaxMb, 2560)
+  assert.equal(snapshot.swapCurrentMb, 300)
+  assert.equal(snapshot.swapMaxMb, null)
+  assert.equal(snapshot.memoryHighMb, null)
+  assert.equal(snapshot.highEvents, 7)
+  assert.equal(snapshot.maxEvents, 2)
+  assert.equal(snapshot.oomKillCount, 0)
+  assert.equal(snapshot.oomKilled, false)
+  assert.equal(snapshot.memoryPressureFullAvg10, 0.25)
+  assert.equal(snapshot.throttledUsec, 123456)
+  assert.equal(snapshot.restarts, 2)
+  const unavailable = readNativeResourceSnapshot({ LoadState: 'loaded', ControlGroup: '/../../outside', MemoryMax: '18446744073709551615' }, root)
+  assert.equal(unavailable.memoryCurrentMb, null)
+  assert.equal(unavailable.memoryMaxMb, null)
+  assert.equal(unavailable.highEvents, null)
+  assert.equal(unavailable.oomKilled, null)
+})
+
+it('ignores systemd defaults from missing or unknown units instead of reporting a clean exit', () => {
+  for (const LoadState of ['not-found', 'error', undefined]) {
+    const snapshot = readNativeResourceSnapshot({ ...(LoadState ? { LoadState } : {}), MemoryCurrent: '0', MemoryMax: 'infinity', MemoryHigh: 'infinity', ExecMainStatus: '0', NRestarts: '0', Result: 'success' })
+    for (const [key, value] of Object.entries(snapshot)) {
+      if (key !== 'measuredAt') assert.equal(value, null, `${LoadState ?? 'unknown'}: ${key}`)
+    }
+  }
+})
+
+it('queries loaded state and preserves OOM exit evidence without treating a deleted unit as healthy', async (t) => {
+  const runtime = new NativeSystemdRuntime({ runtimeDir: '/unused', unitDir: '/unused' })
+  const ref = { id: 'bsp-test-master.service', name: 'bsp-test-master' }
+  let output = 'LoadState=loaded\nActiveState=activating\nSubState=auto-restart\nExecMainStatus=9\nResult=oom-kill\nNRestarts=0\n'
+  const control = runtime as unknown as { systemctl(args: string[]): Promise<{ stdout: string, stderr: string }> }
+  t.mock.method(control, 'systemctl', async (args: string[]) => {
+    assert.match(args.join(' '), /LoadState/)
+    assert.match(args.join(' '), /ExecMainStatus/)
+    return { stdout: output, stderr: '' }
+  })
+  const oom = await runtime.inspect(ref)
+  assert.equal(oom.exitResult, 'oom-kill')
+  assert.equal(oom.exitCode, 9)
+  assert.equal((await runtime.resourceSnapshot(ref)).oomKilled, true)
+  output = 'LoadState=not-found\nActiveState=inactive\nExecMainStatus=0\nResult=success\nNRestarts=0\nMemoryMax=infinity\nMemoryHigh=infinity\n'
+  const missing = await runtime.inspect(ref)
+  assert.equal(missing.running, false)
+  assert.equal(missing.exitCode, undefined)
+  assert.equal(missing.exitResult, undefined)
+  assert.equal((await runtime.resourceSnapshot(ref)).oomKilled, null)
+  output = 'Result=success\nExecMainStatus=0\n'
+  assert.equal((await runtime.inspect(ref)).probeFailed, true)
+})
 
 function buildSpec(): ShardContainerSpec {
   return {
@@ -34,6 +115,131 @@ function buildSpec(): ShardContainerSpec {
     },
   }
 }
+
+function gate() {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => { release = resolve })
+  return { promise, release }
+}
+
+function nativeOperationFixture(t: TestContext) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-native-operations-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const runtimeDir = path.join(root, 'runtime')
+  const unitDir = path.join(root, 'units')
+  const runtime = new NativeSystemdRuntime({ runtimeDir, unitDir })
+  const control = runtime as unknown as {
+    recordUnitVerify(unitPath: string): Promise<void>
+    stopUnit(ref: ContainerRef): Promise<void>
+    systemctl(args: string[]): Promise<{ stdout: string, stderr: string }>
+  }
+  const commands: string[][] = []
+  t.mock.method(control, 'recordUnitVerify', async () => {})
+  t.mock.method(control, 'stopUnit', async (ref: ContainerRef) => { commands.push(['stop', ref.name]) })
+  t.mock.method(control, 'systemctl', async (args: string[]) => {
+    commands.push(args)
+    return { stdout: '', stderr: '' }
+  })
+  const spec = { ...buildSpec(), cmd: [path.join(root, 'game'), 'old-generation'] }
+  const paths = (name: string) => ({
+    unit: path.join(unitDir, `${name}.service`),
+    launcher: path.join(runtimeDir, 'services', name, 'launch.sh'),
+    fifo: path.join(runtimeDir, 'services', name, 'stdin.fifo'),
+  })
+  return { runtime, control, commands, spec, paths }
+}
+
+for (const waitingAt of ['stop', 'disable'] as const) {
+  it(`serializes a new create after remove has entered its internal ${waitingAt}`, async (t) => {
+    const { runtime, control, commands, spec, paths } = nativeOperationFixture(t)
+    const oldSpec = waitingAt === 'disable' ? { ...spec, name: spec.name.replace(/^bsp-/, 'gsh-') } : spec
+    const oldRef = await runtime.createShardContainer(oldSpec)
+    const oldPaths = paths(oldRef.name)
+    fs.writeFileSync(oldPaths.fifo, 'old-fifo')
+    const entered = gate()
+    const proceed = gate()
+    t.after(proceed.release)
+    if (waitingAt === 'stop') {
+      t.mock.method(control, 'stopUnit', async () => {
+        entered.release()
+        await proceed.promise
+      })
+    }
+    else {
+      t.mock.method(control, 'systemctl', async (args: string[]) => {
+        commands.push(args)
+        if (args[0] === 'disable') {
+          entered.release()
+          await proceed.promise
+        }
+        return { stdout: '', stderr: '' }
+      })
+    }
+    const removing = runtime.remove(oldRef)
+    await entered.promise
+    const creating = runtime.createShardContainer({ ...spec, cmd: [spec.cmd[0]!, 'new-generation'] })
+    await Promise.resolve()
+    assert.match(fs.readFileSync(oldPaths.launcher, 'utf8'), /old-generation/)
+    assert.equal(fs.readFileSync(oldPaths.fifo, 'utf8'), 'old-fifo')
+    proceed.release()
+    await removing
+    const newRef = await creating
+    const newPaths = paths(newRef.name)
+    fs.writeFileSync(newPaths.fifo, 'new-fifo')
+    assert.match(fs.readFileSync(newPaths.launcher, 'utf8'), /new-generation/)
+    assert.ok(fs.existsSync(newPaths.unit))
+    await runtime.remove(oldRef)
+    assert.equal(fs.readFileSync(newPaths.fifo, 'utf8'), 'new-fifo')
+  })
+}
+
+it('rejects stale lifecycle operations queued behind a new create, including legacy names', async (t) => {
+  const { runtime, control, commands, spec, paths } = nativeOperationFixture(t)
+  const oldRef = await runtime.createShardContainer({ ...spec, name: spec.name.replace(/^bsp-/, 'gsh-') })
+  const entered = gate()
+  const proceed = gate()
+  t.after(proceed.release)
+  t.mock.method(control, 'recordUnitVerify', async () => {
+    entered.release()
+    await proceed.promise
+  })
+  commands.length = 0
+  const creating = runtime.createShardContainer({ ...spec, cmd: [spec.cmd[0]!, 'new-generation'] })
+  await entered.promise
+  const removing = runtime.remove(oldRef)
+  const stopping = runtime.stop(oldRef)
+  const starting = assert.rejects(runtime.start(oldRef), /新的启动任务替换/)
+  proceed.release()
+  const newRef = await creating
+  await Promise.all([removing, stopping, starting])
+  assert.equal(newRef.name, oldRef.name)
+  assert.deepEqual(commands, [['daemon-reload']])
+  assert.match(fs.readFileSync(paths(newRef.name).launcher, 'utf8'), /new-generation/)
+  await runtime.remove(oldRef)
+  assert.ok(fs.existsSync(paths(newRef.name).unit))
+  await runtime.remove(newRef)
+  assert.equal(fs.existsSync(paths(newRef.name).unit), false)
+  const commandCount = commands.length
+  await runtime.remove(newRef)
+  assert.equal(commands.length, commandCount)
+})
+
+it('refuses an unregistered reference to an existing unit while allowing missing-unit cleanup', async (t) => {
+  const { runtime, commands, spec, paths } = nativeOperationFixture(t)
+  const ref = await runtime.createShardContainer(spec)
+  const clone = { ...ref }
+  commands.length = 0
+  await assert.rejects(runtime.remove(clone), /重新查询当前分片/)
+  await assert.rejects(runtime.stop(clone), /重新查询当前分片/)
+  await assert.rejects(runtime.start(clone), /重新查询当前分片/)
+  assert.deepEqual(commands, [])
+  assert.ok(fs.existsSync(paths(ref.name).unit))
+  const resolved = await runtime.findByName(ref.name)
+  assert.ok(resolved)
+  await runtime.remove(resolved)
+  await runtime.remove({ ...ref })
+  assert.equal(fs.existsSync(paths(ref.name).unit), false)
+})
 
 const RESOURCE_ENV_KEYS = ['BSP_DST_CONTAINER_MEMORY_MB', 'BSP_DST_CONTAINER_CPU_QUOTA'] as const
 const savedEnv = new Map<string, string | undefined>()
@@ -95,15 +301,15 @@ describe('NativeSystemdRuntime serialization', () => {
 
   /**
    * 回归：进程一崩 systemd 就 5 秒后重来，每次都重新吃满 CPU 与磁盘加载整套 Mod，
-   * 永远到不了「世界加载完成」。必须给崩溃循环踩刹车，并把内存软限与 swap 打开，
-   * 让加载尖峰走回收/换页而不是被内核直接杀掉。
+   * 永远到不了「世界加载完成」。必须给崩溃循环踩刹车，并保留内存硬限与 swap 支持。
+   * 不自动设置更低的 MemoryHigh，避免多 Mod 世界在宿主机仍有空闲内存时被强制回收拖住。
    */
-  it('bounds the restart storm and softens the memory limit', () => {
+  it('bounds the restart storm and preserves the memory cap without an implicit throttle', () => {
     setResourceEnv('BSP_DST_CONTAINER_MEMORY_MB', '2048')
     const unit = buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG)
     assert.match(unit, /StartLimitBurst=3/)
     assert.match(unit, /StartLimitIntervalSec=600/)
-    assert.match(unit, /MemoryHigh=1717986918/)
+    assert.doesNotMatch(unit, /^MemoryHigh=/m)
     assert.match(unit, /MemoryMax=2147483648/)
     assert.match(unit, /MemorySwapMax=infinity/)
   })
@@ -121,7 +327,23 @@ describe('NativeSystemdRuntime serialization', () => {
     setResourceEnv('BSP_DST_CONTAINER_CPU_QUOTA', '1.5')
     const unit = buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG)
     assert.match(unit, /MemoryMax=1610612736/)
+    assert.match(unit, /MemorySwapMax=infinity/)
+    assert.doesNotMatch(unit, /^MemoryHigh=/m)
     assert.match(unit, /CPUQuota=150\.00%/)
+  })
+
+  it('applies per-shard memory overrides while preserving CPU, including explicit unlimited settings', () => {
+    setResourceEnv('BSP_DST_CONTAINER_MEMORY_MB', '4096')
+    setResourceEnv('BSP_DST_CONTAINER_CPU_QUOTA', '1.5')
+    const limited = buildNativeSystemdUnit({ ...buildSpec(), resourceLimits: { memory: 2048 * 1024 * 1024 } }, LAUNCHER, CONSOLE_LOG)
+    assert.match(limited, /MemoryMax=2147483648/)
+    assert.match(limited, /CPUQuota=150\.00%/)
+    assert.match(limited, /MemorySwapMax=infinity/)
+    assert.doesNotMatch(limited, /MemoryHigh=/)
+    const unlimited = buildNativeSystemdUnit({ ...buildSpec(), resourceLimits: { memory: 0 } }, LAUNCHER, CONSOLE_LOG)
+    assert.doesNotMatch(unlimited, /MemoryMax=/)
+    setResourceEnv('BSP_DST_CONTAINER_CPU_QUOTA', '0')
+    assert.doesNotMatch(buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG), /CPUQuota=/)
   })
 
   it('omits the memory cap when the variable is unset but still reserves CPU for the panel', () => {
@@ -449,13 +671,13 @@ describe('生成的 unit 指令落在正确分区', () => {
       'StandardOutput',
       'StandardError',
       'Environment',
-      'MemoryHigh',
       'MemoryMax',
       'MemorySwapMax',
       'CPUQuota',
     ]) {
       assert.ok(key in (sections.Service ?? {}), `${key} 应写在 [Service]`)
     }
+    assert.equal(sections.Service?.MemoryHigh, undefined)
     assert.ok('WantedBy' in (sections.Install ?? {}), 'WantedBy 应写在 [Install]')
   })
 

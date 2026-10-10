@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify'
-import type { DbInstanceRuntimeFailureKind } from '../../shared/db/types'
+import type { DbGameInstance, DbInstanceRuntimeFailureKind } from '../../shared/db/types'
 import type { ContainerInspect } from '../../infra/container/types'
 import { listGameInstances, updateGameInstanceRuntime, getInstanceRuntimeRevision } from '../../shared/db/index'
-import { describeSystemdExitReason, readHostMemorySnapshot, resolveShardMemoryCapMb } from '../../infra/container/exit-reason'
-import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveShardReadyWaitSec, resolveInstanceContainerRef, stopInstanceContainer } from './container-lifecycle'
+import { describeSystemdExitReason, readHostMemorySnapshot, readRuntimeMemoryCapMb } from '../../infra/container/exit-reason'
+import { getContainerRuntime } from '../../infra/container'
+import { resolveInstanceResourceSettings } from '../../infra/container/dst-container-resources'
+import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveInstanceContainerRef, stopInstanceContainer, recoverInstanceStartup } from './container-lifecycle'
+import { currentStartupTask, getStartupSnapshot, isCurrentStartupTask, startupIsActive } from './startup-state'
 import { reconcileStaleInstallingInstances } from './install-service'
 import { buildRestartLoopWarning, shouldClearRuntimeWarning } from './runtime-warning'
 import { resolveRuntimeReadiness, type InstanceRuntimeReadiness } from './runtime-readiness'
@@ -11,10 +14,10 @@ import { buildRuntimeFailureWarning, classifyRuntimeFailure } from './runtime-fa
 import { createReconciliationCache } from './reconciliation-cache'
 const LOCAL_NODE_ID = 'local-node'
 /** 运行期告警要落库的实例字段：文案 + 归因（归因供前端决定是否给出扩容引导） */
-type RuntimeWarningTarget = {
-  id: string
-  runtimeWarning: string | null
-  runtimeFailureKind: DbInstanceRuntimeFailureKind | null
+type RuntimeWarningTarget = Pick<DbGameInstance, 'id' | 'runtimeWarning' | 'runtimeFailureKind' | 'resourceConfig' | 'lastStartupReport'>
+
+function resolveRunningResourceSettings(instance: RuntimeWarningTarget) {
+  return instance.lastStartupReport?.settings ?? resolveInstanceResourceSettings(instance.resourceConfig)
 }
 
 /**
@@ -55,7 +58,8 @@ async function warnInstanceRestartLoop(
   instance: RuntimeWarningTarget,
   snapshot: ContainerInspect,
 ): Promise<void> {
-  const reason = describeSystemdExitReason(snapshot.exitResult, resolveShardMemoryCapMb(), readHostMemorySnapshot())
+  const actualCap = snapshot.exitResult === 'oom-kill' ? await readRuntimeMemoryCapMb(getContainerRuntime(), await resolveInstanceContainerRef(instance.id).catch(() => undefined)) : undefined
+  const reason = describeSystemdExitReason(snapshot.exitResult, resolveRunningResourceSettings(instance).masterMemoryMb ?? undefined, readHostMemorySnapshot(), actualCap)
   const message = buildRestartLoopWarning({
     restarts: snapshot.restarts ?? 0,
     restarting: snapshot.restarting === true,
@@ -86,8 +90,9 @@ async function reportRuntimeIssue(
   snapshot: ContainerInspect,
   readiness: InstanceRuntimeReadiness,
 ): Promise<void> {
-  const shardCapMb = resolveShardMemoryCapMb()
-  const failure = classifyRuntimeFailure({
+  const settings = resolveRunningResourceSettings(instance)
+  const shardCapMb = settings.masterMemoryMb ?? undefined
+  const criteria = {
     readySeen: readiness.state === 'ready',
     restarts: snapshot.restarts ?? 0,
     restarting: snapshot.restarting === true,
@@ -97,8 +102,13 @@ async function reportRuntimeIssue(
     ...(shardCapMb !== undefined ? { shardCapMb } : {}),
     bufferMb: readHostBufferMb(),
     loadingSeconds: readiness.loadingSeconds,
-    notReadyAfterSec: resolveShardReadyWaitSec(),
-  })
+    notReadyAfterSec: settings.shardReadyWaitSec,
+  }
+  let failure = classifyRuntimeFailure(criteria)
+  if (failure?.kind === 'memory' && (snapshot.exitResult === 'oom-kill' || (snapshot.memOomKillCount ?? 0) > 0)) {
+    const actualShardCapMb = await readRuntimeMemoryCapMb(getContainerRuntime(), await resolveInstanceContainerRef(instance.id).catch(() => undefined))
+    failure = classifyRuntimeFailure({ ...criteria, actualShardCapMb })
+  }
   if (failure) {
     await applyRuntimeWarning(app, instance, buildRuntimeFailureWarning(failure), failure.kind)
     return
@@ -125,6 +135,12 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
   const instances = await listGameInstances({ status: 'running' })
   let reconciled = 0
   for (const instance of instances) {
+    if (instance.runtimeFailureKind === 'memory_protection') continue
+    const task = currentStartupTask(instance.id)
+    if ((task && isCurrentStartupTask(task)) || startupIsActive(getStartupSnapshot(instance.id, instance.lastStartupReport))) {
+      await recoverInstanceStartup(app, instance)
+      continue
+    }
     if (instance.nodeId !== LOCAL_NODE_ID) {
       continue
     }
@@ -169,7 +185,7 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
         status: instance.status,
         runtimeReadyAt,
         runtimeStartedAt: instance.runtimeStartedAt,
-        notReadyAfterSec: resolveShardReadyWaitSec(),
+        notReadyAfterSec: resolveRunningResourceSettings(instance).shardReadyWaitSec,
       })
       // 崩溃循环后自己站稳、且已连续干净运行足够久的实例：旧警告自己消失，也不再写新的
       if (shouldClearRuntimeWarning(snapshot.uptimeSeconds)) {
@@ -212,12 +228,19 @@ async function reconcileStoppedButContainerRunning(app: FastifyInstance, health:
   const instances = await listGameInstances()
   let reconciled = 0
   for (const instance of instances) {
+    if (instance.runtimeFailureKind === 'memory_protection') continue
+    const task = currentStartupTask(instance.id)
+    if ((task && isCurrentStartupTask(task)) || startupIsActive(getStartupSnapshot(instance.id, instance.lastStartupReport))) {
+      await recoverInstanceStartup(app, instance)
+      continue
+    }
     if (instance.nodeId !== LOCAL_NODE_ID) {
       continue
     }
     if (instance.status !== 'stopped' && instance.status !== 'error') {
       continue
     }
+    if (instance.lastStartupReport?.status === 'failed' || instance.lastStartupReport?.status === 'cancelled') continue
     const probe = await inspectInstanceShardRuntime(instance.id)
     if (probe.unitExists && !probe.snapshot) health.complete = false
     const snapshot = probe.snapshot

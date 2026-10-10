@@ -27,12 +27,14 @@ describe('classifyRuntimeFailure', () => {
       restarts: 3,
       memOomKillCount: 3,
       memPeakMb: 1520,
-      shardCapMb: 1536,
+      shardCapMb: 1024,
+      actualShardCapMb: 1536,
     }))
     assert.ok(failure)
     assert.equal(failure.kind, 'memory')
     assert.match(failure.detail, /终止过 3 次/)
     assert.match(failure.detail, /上限 1536 MiB/)
+    assert.doesNotMatch(failure.detail, /1024/)
     assert.match(failure.detail, /峰值约 1520 MiB/)
   })
 
@@ -40,7 +42,7 @@ describe('classifyRuntimeFailure', () => {
     const failure = classifyRuntimeFailure(makeInput({ exitResult: 'oom-kill', shardCapMb: 1024 }))
     assert.ok(failure)
     assert.equal(failure.kind, 'memory')
-    assert.match(failure.detail, /内存不足被系统终止（该分片上限 1024 MiB）/)
+    assert.match(failure.detail, /内存不足被系统终止（配置上限 1024 MiB，实际未读取）/)
   })
 
   it('反复重启且可用缓冲见底：没有直接证据时按内存推断', () => {

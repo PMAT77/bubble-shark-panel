@@ -5,6 +5,7 @@ import { getGameInstanceById, listGameInstances, updateGameInstanceRuntime } fro
 import { emitPanelEvent } from '../notify/events'
 import { isInstallJobActive } from './install-service'
 import { isInstanceContainerRunning } from './container-lifecycle'
+import { getStartupSnapshot, startupIsActive } from './startup-state'
 
 const WATCH_INTERVAL_MS = 60_000
 /** 刚启动的实例不参与异常退出判定（容器注册/DB 同步存在短暂窗口） */
@@ -29,6 +30,8 @@ export async function reconcileUnexpectedExits(app: FastifyInstance): Promise<nu
   const now = new Date()
   let detected = 0
   for (const instance of running) {
+    if (instance.runtimeFailureKind === 'memory_protection') continue
+    if (startupIsActive(getStartupSnapshot(instance.id, instance.lastStartupReport))) continue
     if (instance.nodeId !== LOCAL_NODE_ID) {
       continue
     }

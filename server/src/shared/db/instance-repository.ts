@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import type { ZodType } from 'zod'
+import { instanceResourceConfigSchema, instanceStartupSnapshotSchema } from '../../../../shared/contracts/instance-resources'
 import { resolveInstanceUpdateState } from '../../../../shared/instance-update-state'
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import {
   gameInstances,
   instanceMods,
@@ -32,7 +34,7 @@ function normalizeInstanceErrorPhase(phase: string | null | undefined): DbInstan
 function normalizeInstanceRuntimeFailureKind(
   kind: string | null | undefined,
 ): DbInstanceRuntimeFailureKind | null {
-  return kind === 'memory' || kind === 'not_ready' ? kind : null
+  return kind === 'memory' || kind === 'not_ready' || kind === 'memory_protection' ? kind : null
 }
 
 function normalizeInstanceStatus(status: string | undefined): DbGameInstanceStatus {
@@ -52,6 +54,15 @@ function normalizeOptionalPort(value: number | null | undefined): number | null 
   return value
 }
 
+function parseStoredJson<T>(value: string | null, schema: ZodType<T>): T | null {
+  if (!value) return null
+  try {
+    const result = schema.safeParse(JSON.parse(value))
+    return result.success ? result.data : null
+  }
+  catch { return null }
+}
+
 function mapDbGameInstance(row: {
   id: string
   nodeId: string
@@ -61,6 +72,8 @@ function mapDbGameInstance(row: {
   containerId: string | null
   runtimePid: number | null
   runtimeStartedAt: string | null
+  resourceConfig: string | null
+  lastStartupReport: string | null
   installPath: string | null
   configPath: string | null
   queryPort: number | null
@@ -92,6 +105,8 @@ function mapDbGameInstance(row: {
     status: normalizeInstanceStatus(row.status),
     runtimePid: row.runtimePid === null ? null : Number(row.runtimePid),
     runtimeStartedAt: row.runtimeStartedAt?.trim() || null,
+    resourceConfig: parseStoredJson(row.resourceConfig, instanceResourceConfigSchema),
+    lastStartupReport: parseStoredJson(row.lastStartupReport, instanceStartupSnapshotSchema),
     queryPort: row.queryPort === null ? null : Number(row.queryPort),
     gamePort: row.gamePort === null ? null : Number(row.gamePort),
     rconPort: row.rconPort === null ? null : Number(row.rconPort),
@@ -123,6 +138,8 @@ function gameInstanceSelectFields() {
     containerId: gameInstances.containerId,
     runtimePid: gameInstances.runtimePid,
     runtimeStartedAt: gameInstances.runtimeStartedAt,
+    resourceConfig: gameInstances.resourceConfig,
+    lastStartupReport: gameInstances.lastStartupReport,
     installPath: gameInstances.installPath,
     configPath: gameInstances.configPath,
     queryPort: gameInstances.queryPort,
@@ -596,6 +613,8 @@ export async function updateGameInstanceRuntime(
 ): Promise<DbGameInstance | undefined> {
   const { drizzleDb } = ensureDb()
   const setPayload: {
+    resourceConfig?: string | null
+    lastStartupReport?: string | null
     status?: DbGameInstanceStatus
     containerId?: string | null
     runtimePid?: number | null
@@ -622,6 +641,8 @@ export async function updateGameInstanceRuntime(
   } = {
     updatedAt: nowIso(),
   }
+  if (input.resourceConfig !== undefined) setPayload.resourceConfig = input.resourceConfig === null ? null : JSON.stringify(instanceResourceConfigSchema.parse(input.resourceConfig))
+  if (input.lastStartupReport !== undefined) setPayload.lastStartupReport = input.lastStartupReport === null ? null : JSON.stringify(instanceStartupSnapshotSchema.parse(input.lastStartupReport))
   if (typeof input.status !== 'undefined') {
     setPayload.status = input.status
   }
@@ -707,10 +728,12 @@ export async function updateGameInstanceRuntime(
     : eq(gameInstances.id, id)
   const condition = typeof input.whereInstallTaskId === 'undefined' ? statusCondition
     : and(statusCondition, input.whereInstallTaskId === null ? isNull(gameInstances.installTaskId) : eq(gameInstances.installTaskId, input.whereInstallTaskId))
+  const guardedCondition = input.whereStartupTaskId === undefined ? condition
+    : and(condition, sql`json_extract(${gameInstances.lastStartupReport}, '$.taskId') = ${input.whereStartupTaskId}`)
   await drizzleDb
     .update(gameInstances)
     .set(setPayload)
-    .where(condition)
+    .where(guardedCondition)
   runtimeRevision++
   return getGameInstanceById(id)
 }

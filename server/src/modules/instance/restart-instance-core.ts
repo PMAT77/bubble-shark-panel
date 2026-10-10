@@ -12,11 +12,14 @@ import {
 import {
   isInstallJobActive,
 } from './install-service'
+import { getStartupSnapshot, startupIsActive } from './startup-state'
+import { instanceStartSource } from './start-source'
 
 export interface RestartInstanceCoreOptions {
   autoAllocatePorts?: boolean
   /** 为 false 时跳过鉴权（调用方已校验） */
   skipAuth?: boolean
+  source?: 'manual' | 'automatic'
 }
 
 async function requireContainerRuntime(request: FastifyRequest): Promise<ApiErrorResponse | undefined> {
@@ -35,7 +38,7 @@ export async function restartInstanceCore(
   request: FastifyRequest,
   instanceId: string,
   options?: RestartInstanceCoreOptions,
-): Promise<ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse> {
+): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> {
   const id = instanceId.trim()
   if (!id) {
     return businessError('实例 ID 不能为空', request)
@@ -44,6 +47,7 @@ export async function restartInstanceCore(
   if (!current) {
     return businessError('实例不存在', request)
   }
+  if (current.runtimeFailureKind === 'memory_protection' && options?.source === 'automatic') return businessError('实例已内存保护停止，只能手动启动或重启', request)
   if (current.nodeId !== LOCAL_NODE_ID) {
     return businessError('当前仅支持本地节点执行实例命令', request)
   }
@@ -54,7 +58,7 @@ export async function restartInstanceCore(
   if (current.status === 'pending_install' || current.status === 'installing' || isInstallJobActive(id)) {
     return businessError('实例正在安装中，请稍后再试', request)
   }
-  if (current.status === 'running' || current.containerId) {
+  if (current.status === 'running' || current.containerId || startupIsActive(getStartupSnapshot(id, current.lastStartupReport))) {
     try {
       await stopInstanceContainer(id)
     }
@@ -69,7 +73,7 @@ export async function restartInstanceCore(
       return businessError(message, request)
     }
   }
-  const response = await app.inject({
+  const response = await instanceStartSource.run(options?.source ?? 'manual', () => app.inject({
     method: 'POST',
     url: '/app/instance/start',
     headers: {
@@ -79,11 +83,11 @@ export async function restartInstanceCore(
       id,
       autoAllocatePorts: options?.autoAllocatePorts === true,
     },
-  })
+  }))
   if (response.statusCode >= 400) {
     return businessError('实例重启失败', request)
   }
-  const payload = JSON.parse(response.body) as ApiSuccessResponse<{ isSuccess: boolean }> | ApiErrorResponse
+  const payload = JSON.parse(response.body) as ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse
   if ('error' in payload && payload.error) {
     return businessError(
       payload.error,
@@ -92,5 +96,6 @@ export async function restartInstanceCore(
       payload.data ?? {},
     )
   }
-  return success({ isSuccess: true }, request)
+  const taskId = payload.data?.taskId
+  return success({ isSuccess: true, ...(typeof taskId === 'string' ? { taskId } : {}) }, request)
 }

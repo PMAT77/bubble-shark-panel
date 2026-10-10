@@ -3,6 +3,7 @@ export type ShardRole = 'master' | 'caves'
 export interface ContainerRef {
   id: string
   name: string
+  runtimeIdentity?: string
 }
 
 export interface PortMapping {
@@ -25,6 +26,9 @@ export interface ShardContainerSpec {
   workingDir: string
   env?: Record<string, string>
   ports?: PortMapping[]
+  resourceLimits?: DstContainerResourceLimits
+  /** 经宿主能力核验的父组；兼容部署留空。 */
+  memoryParent?: string
 }
 
 export interface LogOpts {
@@ -83,6 +87,8 @@ export interface ContainerInspect {
    * 不代表实例真的停了。调用方据此保持现状，而不是把运行中的实例标成已停止。
    */
   probeFailed?: boolean
+  exitCode?: number
+  oomKilled?: boolean
 }
 
 export interface ContainerStats {
@@ -93,6 +99,9 @@ export interface ContainerStats {
 }
 
 export interface ContainerRuntime {
+  hostResources?(): Promise<HostResourceSnapshot>
+  emergencyRemove?(ref: ContainerRef): Promise<void>
+  resourceSnapshot?(ref: ContainerRef): Promise<RuntimeResourceSnapshot>
   createShardContainer(spec: ShardContainerSpec): Promise<ContainerRef>
   ensureShardNetwork(instanceId: string): Promise<string>
   removeShardNetwork(instanceId: string): Promise<void>
@@ -106,3 +115,7 @@ export interface ContainerRuntime {
   stats(ref: ContainerRef): Promise<ContainerStats>
   findByName(name: string): Promise<ContainerRef | undefined>
 }
+import type { HostResourceSnapshot, ResourceSnapshot } from '../../../../shared/contracts/instance-resources'
+import type { DstContainerResourceLimits } from './dst-container-resources'
+
+export type RuntimeResourceSnapshot = ResourceSnapshot

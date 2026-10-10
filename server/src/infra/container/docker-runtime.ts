@@ -1,5 +1,6 @@
 import { shardNameCandidates } from './naming'
-import { resolveDstContainerResourceLimits } from './dst-container-resources'
+import { emptyResourceSnapshot, resolveDstContainerResourceLimits } from './dst-container-resources'
+import { buildHostResourceSnapshot, DST_MEMORY_SLICE, readCgroupMemory, readText, sampleHostResources } from './memory-budget'
 import type { ContainerCreateOptions } from 'dockerode'
 import Docker from 'dockerode'
 import { decodeDockerMultiplexLogChunk } from './docker-log'
@@ -15,6 +16,7 @@ import type {
   LogLine,
   LogOpts,
   ShardContainerSpec,
+  RuntimeResourceSnapshot,
 } from './types'
 
 function mapPortBindings(ports: ShardContainerSpec['ports']) {
@@ -31,9 +33,12 @@ function mapPortBindings(ports: ShardContainerSpec['ports']) {
 
 export class DockerContainerRuntime implements ContainerRuntime {
   private readonly docker: Docker
+  private readonly localDaemon: boolean
 
   constructor(dockerHost?: string) {
-    this.docker = new Docker(resolveDockerConnectOptions(dockerHost))
+    const options = resolveDockerConnectOptions(dockerHost)
+    this.docker = new Docker(options)
+    this.localDaemon = typeof options.socketPath === 'string' && options.socketPath.startsWith('/')
   }
 
   async ensureShardNetwork(instanceId: string): Promise<string> {
@@ -75,6 +80,8 @@ export class DockerContainerRuntime implements ContainerRuntime {
   }
 
   async createShardContainer(spec: ShardContainerSpec): Promise<ContainerRef> {
+    if (spec.memoryParent && spec.memoryParent !== DST_MEMORY_SLICE) throw new Error('共享内存父组无效')
+    if (spec.memoryParent && (await this.hostResources()).budget.state !== 'protected') throw new Error('共享内存预算无法核验，请重新检查宿主配置')
     const existing = await this.findByName(spec.name)
     if (existing) {
       spec = { ...spec, name: existing.name }
@@ -84,7 +91,7 @@ export class DockerContainerRuntime implements ContainerRuntime {
     const binds = spec.hostBinds?.length
       ? spec.hostBinds
       : [`${spec.hostInstallPath}:${containerGameRoot}`]
-    const resourceLimits = resolveDstContainerResourceLimits()
+    const resourceLimits = resolveDstContainerResourceLimits(spec.resourceLimits)
     const container = await this.docker.createContainer({
       name: spec.name,
       Image: spec.image,
@@ -97,8 +104,9 @@ export class DockerContainerRuntime implements ContainerRuntime {
         Binds: binds,
         PortBindings: mapPortBindings(spec.ports),
         RestartPolicy: { Name: 'on-failure', MaximumRetryCount: 5 },
+        ...(spec.memoryParent ? { CgroupParent: spec.memoryParent } : {}),
         ...(spec.networkName ? { NetworkMode: spec.networkName } : {}),
-        ...(resourceLimits?.memory ? { Memory: resourceLimits.memory } : {}),
+        ...(resourceLimits?.memory ? { Memory: resourceLimits.memory, MemorySwap: -1 } : {}),
         ...(resourceLimits?.nanoCpus ? { NanoCpus: resourceLimits.nanoCpus } : {}),
       },
       Tty: false,
@@ -143,6 +151,35 @@ export class DockerContainerRuntime implements ContainerRuntime {
         throw error
       }
     }
+  }
+
+  async emergencyRemove(ref: ContainerRef): Promise<void> {
+    // 使用不可复用的容器 ID，清理旧轮次不会删除同名的新容器。
+    const container = this.docker.getContainer(ref.id)
+    if (ref.runtimeIdentity && (await container.inspect()).State.StartedAt !== ref.runtimeIdentity) throw new Error('容器运行身份已变化，保护清理已取消')
+    await container.update({ RestartPolicy: { Name: 'no' } }).catch(() => undefined)
+    await this.remove(ref)
+  }
+
+  async hostResources() {
+    const unknown = (reason: string) => buildHostResourceSnapshot({ source: 'unknown', reason })
+    if (!this.localDaemon) return unknown('远程 Docker 无法核验宿主机内存，共享保护不可用')
+    try {
+      const info = await this.docker.info()
+      if (info.CgroupDriver !== 'systemd' || info.CgroupVersion !== '2' || info.SecurityOptions?.some((value: string) => value.includes('rootless'))) {
+        return unknown('共享保护需要宿主 rootful Docker、systemd 驱动和 cgroup v2')
+      }
+      const panel = await this.docker.getContainer(process.env.HOSTNAME ?? '').inspect()
+      const root = '/run/bsp-host/cgroup'
+      const group = `/system.slice/docker-${panel.Id}.scope`
+      const pids = readText(`${root}${group}/cgroup.procs`)?.split(/\s+/)
+      if (!panel.State.Pid || !pids?.includes(String(panel.State.Pid))) return unknown('宿主指标挂载与 Docker 节点身份未核验，按现有配置启动')
+      return buildHostResourceSnapshot({
+        source: 'docker-host', meminfo: readText('/run/bsp-host/meminfo'), psi: readText('/run/bsp-host/memory-pressure'),
+        panel: readCgroupMemory(root, group), pool: readCgroupMemory(root, `/${DST_MEMORY_SLICE}`), verified: true,
+      })
+    }
+    catch { return unknown('无法核验 Docker 宿主指标；请在宿主执行 sudo bsp setup-memory-budget 并检查只读指标挂载') }
   }
 
   async *logs(ref: ContainerRef, opts: LogOpts = {}): AsyncIterable<LogLine> {
@@ -272,12 +309,17 @@ export class DockerContainerRuntime implements ContainerRuntime {
     try {
       const container = this.docker.getContainer(ref.id)
       const data = await container.inspect()
-      const running = Boolean(data.State?.Running)
+      const running = Boolean(data.State?.Running || data.State?.Restarting)
       const uptimeSeconds = resolveUptimeSecondsFromIso(data.State?.StartedAt)
       return {
         id: data.Id,
         name: data.Name?.replace(/^\//, '') ?? ref.name,
         running,
+        restarting: Boolean(data.State?.Restarting),
+        restarts: data.RestartCount ?? 0,
+        exitCode: data.State?.ExitCode,
+        oomKilled: Boolean(data.State?.OOMKilled),
+        ...(data.State?.OOMKilled ? { exitResult: 'oom-kill' } : {}),
         startedAt: data.State?.StartedAt,
         ...(uptimeSeconds !== undefined ? { uptimeSeconds } : {}),
       }
@@ -289,6 +331,7 @@ export class DockerContainerRuntime implements ContainerRuntime {
           id: ref.id,
           name: ref.name,
           running: false,
+          ...(isDockerUnavailableError(error) ? { probeFailed: true } : {}),
         }
       }
       throw error
@@ -325,22 +368,56 @@ export class DockerContainerRuntime implements ContainerRuntime {
     return { cpuUsageRate, memoryMb, uptimeSeconds }
   }
 
-  async findByName(name: string): Promise<ContainerRef | undefined> {
+  async resourceSnapshot(ref: ContainerRef): Promise<RuntimeResourceSnapshot> {
+    const snapshot = emptyResourceSnapshot()
     try {
-      const containers = await this.docker.listContainers({ all: true, filters: { name: shardNameCandidates(name) } })
-      const names = shardNameCandidates(name)
-      const match = names.map(candidate => containers.find(item => item.Names?.includes(`/${candidate}`))).find(Boolean)
-      if (!match?.Id) {
-        return undefined
+      const container = this.docker.getContainer(ref.id)
+      const data = await container.inspect()
+      const mb = (value: number | undefined): number | null => value === undefined || value < 0 ? null : Math.round(value / (1024 * 1024))
+      snapshot.memoryMaxMb = data.HostConfig?.Memory ? mb(data.HostConfig.Memory) : null
+      snapshot.memoryMaxState = data.HostConfig?.Memory == null ? 'unknown' : data.HostConfig.Memory > 0 ? 'finite' : 'unlimited'
+      const totalSwap = data.HostConfig?.MemorySwap
+      snapshot.swapMaxMb = totalSwap && totalSwap > 0 && data.HostConfig?.Memory
+        ? mb(Math.max(0, totalSwap - data.HostConfig.Memory)) : null
+      snapshot.exitCode = data.State?.ExitCode ?? null
+      snapshot.restarts = data.RestartCount ?? null
+      snapshot.oomKilled = data.State?.OOMKilled ?? null
+      snapshot.memoryParent = data.HostConfig?.CgroupParent ?? null
+      snapshot.runtimeIdentity = data.State?.StartedAt || null
+      if (data.State?.Running) {
+        const stats = await container.stats({ stream: false }) as {
+          memory_stats?: { usage?: number, max_usage?: number, stats?: { swap?: number, total_swap?: number } }
+          cpu_stats?: { throttling_data?: { throttled_time?: number } }
+        }
+        snapshot.memoryCurrentMb = mb(stats.memory_stats?.usage)
+        snapshot.memoryPeakMb = mb(stats.memory_stats?.max_usage)
+        snapshot.swapCurrentMb = mb(stats.memory_stats?.stats?.total_swap ?? stats.memory_stats?.stats?.swap)
+        snapshot.throttledUsec = stats.cpu_stats?.throttling_data?.throttled_time === undefined
+          ? null : stats.cpu_stats.throttling_data.throttled_time / 1000
+        const host = await sampleHostResources(this)
+        if (host?.source === 'docker-host') {
+          const parent = data.HostConfig?.CgroupParent === DST_MEMORY_SLICE ? `/${DST_MEMORY_SLICE}` : '/system.slice'
+          const group = `${parent}/docker-${data.Id}.scope`
+          if (readText(`/run/bsp-host/cgroup${group}/cgroup.procs`)?.split(/\s+/).includes(String(data.State.Pid))) {
+            const direct = readCgroupMemory('/run/bsp-host/cgroup', group)
+            Object.assign(snapshot, direct, { exitCode: snapshot.exitCode, restarts: snapshot.restarts, oomKilled: snapshot.oomKilled, memoryParent: snapshot.memoryParent })
+          }
+        }
+        if (snapshot.memoryCurrentMb != null && snapshot.swapCurrentMb != null) snapshot.memoryAndSwapPeakMb = snapshot.memoryCurrentMb + snapshot.swapCurrentMb
       }
-      return { id: match.Id, name: match.Names?.map(value => value.slice(1)).find(value => names.includes(value)) ?? name }
     }
-    catch (error) {
-      if (isDockerUnavailableError(error)) {
-        return undefined
-      }
-      throw error
+    catch { /* 运行时不支持或探测失败的字段保持 null。 */ }
+    return snapshot
+  }
+
+  async findByName(name: string): Promise<ContainerRef | undefined> {
+    const containers = await this.docker.listContainers({ all: true, filters: { name: shardNameCandidates(name) } })
+    const names = shardNameCandidates(name)
+    const match = names.map(candidate => containers.find(item => item.Names?.includes(`/${candidate}`))).find(Boolean)
+    if (!match?.Id) {
+      return undefined
     }
+    return { id: match.Id, name: match.Names?.map(value => value.slice(1)).find(value => names.includes(value)) ?? name }
   }
 }
 

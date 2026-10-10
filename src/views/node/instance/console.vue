@@ -6,6 +6,9 @@ import { routeToNodeInstance } from '@/navigation/game-routes'
 import { copyTextToClipboard } from '@/utils/copyToClipboard'
 import { consoleLogShardLabel, filterConsoleLines, formatConsoleLogLineForCopy, isCommandEcho } from './consoleLogDisplay'
 import { formatDateTime } from './utils'
+import { getInstanceState, resolveRuntimeReadinessView } from './instanceDisplay'
+import { useInstanceStartup } from './composables/useInstanceStartup'
+import InstanceStartupProgress from './components/InstanceStartupProgress.vue'
 import type { InstanceConsoleCommandShard } from '@/api/modules/instance'
 import {
   NButton,
@@ -44,6 +47,12 @@ const appAccountStore = useAppAccountStore()
 const instanceId = computed(() => String(route.params.instanceId ?? ''))
 const instanceName = ref('')
 const instanceStatus = ref<InstanceItem['status'] | null>(null)
+const consoleInstances = ref<InstanceItem[]>([])
+const { syncStartupPolling, stopStartupPolling } = useInstanceStartup(consoleInstances, (id, startup) => {
+  consoleInstances.value = consoleInstances.value.map(item => item.id === id ? { ...item, startup } : item)
+}, () => { if (ownsCurrentPage()) void loadInstanceMeta() })
+const consoleState = computed(() => consoleInstances.value[0] ? getInstanceState(consoleInstances.value[0]) : null)
+const startupReadiness = computed(() => consoleInstances.value[0] ? resolveRuntimeReadinessView(consoleInstances.value[0]) : null)
 const logs = ref<InstanceConsoleLogLine[]>([])
 const connectInfo = ref<InstanceConnectInfo | null>(null)
 const connectInfoLoading = ref(false)
@@ -163,6 +172,7 @@ async function loadInstanceMeta() {
   }
   instanceName.value = target.name
   instanceStatus.value = target.status
+  consoleInstances.value = [target]
 }
 
 async function loadConnectInfo(options?: { silent?: boolean }) {
@@ -405,6 +415,7 @@ function scheduleStreamReconnect() {
 
 function startRealtimeJobs() {
   realtimeActive = true
+  if (hasPermission('instance:read')) syncStartupPolling()
   if (!pollTimer) {
     pollTimer = setInterval(() => {
       void refreshLogs().catch(() => undefined)
@@ -418,6 +429,7 @@ function startRealtimeJobs() {
 }
 
 function stopRealtimeJobs() {
+  stopStartupPolling()
   logBuffer.flush()
   realtimeActive = false
   clearStreamReconnect()
@@ -435,6 +447,7 @@ function stopRealtimeJobs() {
 }
 
 function resetInstanceRuntimeState() {
+  consoleInstances.value = []
   instanceName.value = ''
   instanceStatus.value = null
   logBuffer.clear()
@@ -755,14 +768,17 @@ onBeforeUnmount(() => {
     <div class="space-y-4">
       <div class="flex flex-wrap gap-2 items-center justify-between">
         <NSpace size="small">
-          <NTag :type="running ? 'success' : 'default'" size="small">
-            {{ running ? '运行中' : '未运行' }}
+          <NTag :type="consoleState?.tone === 'warning' ? 'warning' : consoleState?.tone === 'error' ? 'error' : running ? 'success' : 'default'" size="small">
+            {{ consoleState?.label ?? (running ? '进程运行中' : '未运行') }}
           </NTag>
+          <span v-if="startupReadiness" class="text-xs text-muted-foreground">{{ startupReadiness.label }}</span>
         </NSpace>
         <FaButton variant="outline" size="sm" @click="goBack">
           返回实例列表
         </FaButton>
       </div>
+
+      <InstanceStartupProgress :startup="consoleInstances[0]?.startup" :show-resources="hasPermission('instance:read')" @resources="router.push({ name: 'nodeInstanceDetail', params: { instanceId }, hash: '#instance-resources' })" />
 
       <NCard title="连接与加入" size="small">
         <NSpin v-if="connectInfoLoading && !connectInfo" class="block mx-auto my-6" />

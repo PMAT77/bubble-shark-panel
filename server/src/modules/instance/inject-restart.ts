@@ -9,7 +9,7 @@ export async function injectRestartInstance(
   instanceId: string,
   options?: { autoAllocatePorts?: boolean },
 ): Promise<ApiErrorResponse | undefined> {
-  const result = await restartInstanceCore(app, request, instanceId, options)
+  const result = await restartInstanceCore(app, request, instanceId, { ...options, source: 'automatic' })
   if ('error' in result && result.error) {
     return result
   }

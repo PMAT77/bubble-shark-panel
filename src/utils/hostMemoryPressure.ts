@@ -9,10 +9,10 @@ export const HOST_MEMORY_PRESSURE_CODE = 'HOST_MEMORY_PRESSURE'
 export const HOST_MEMORY_PRESSURE_TITLE = '⚠ 主机可用内存不足'
 export const HOST_MEMORY_PRESSURE_NO_SWAP_HINT = '系统未配置缓存区，建议先执行：'
 export const HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND = 'sudo bsp setup-swap'
-/** swap 已配置但被用满：此时 setup-swap 会直接返回，必须换一条能真正生效的命令 */
+/** 保留旧引用；增加独立swap文件，原有swap继续使用。 */
 export const HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND
-  = 'sudo swapoff /swapfile-bsp && sudo rm -f /swapfile-bsp && sudo sed -i \'\\#^/swapfile-bsp #d\' /etc/fstab && sudo BSP_SWAP_SIZE=4G bsp setup-swap'
-export const HOST_MEMORY_PRESSURE_SWAP_READY_HINT = '系统已配置缓存区，启动继续。'
+  = 'sudo env BSP_SWAP_FILE=/swapfile-bsp-extra-2g BSP_SWAP_SIZE=2G bsp setup-swap'
+export const HOST_MEMORY_PRESSURE_SWAP_READY_HINT = '当前内存与 swap 余量满足预估，请检查分片内存上限及其他启动错误。'
 export const HOST_MEMORY_PRESSURE_FOOTER = '如启动后仍出现内存不足，请关闭其他服务或增加内存。'
 
 export interface HostMemoryPressureErrorPayload {
@@ -39,26 +39,37 @@ export function isHostMemoryPressureError(payload: unknown): payload is HostMemo
     && typeof item.data?.detail === 'string'
 }
 
-export type SwapPressureState = 'none' | 'exhausted' | 'ready'
+export type SwapPressureState = 'unknown' | 'none' | 'low' | 'exhausted' | 'ready'
 
 /**
- * swap 落点状态；与 server 侧 `resolveSwapState` 同一口径。
- *
- * 只看 `swapFreeMb` 会把「配了但被用满」当成「没配」：前者执行 `bsp setup-swap` 会被直接跳过
- * （脚本检测到已有 swap 就不动），照着提示跑一遍什么都不会变。
- * 缺 `swapTotalMb`（旧载荷）时退回按余量判断，方向与从前一致。
+ * 读取失败保持未知；即使swap还有余量，也要与本次启动预算比较。
  */
 export function resolveSwapState(
-  data: Pick<HostMemoryPressureData, 'swapFreeMb'> & { swapTotalMb?: number | null },
+  data: Pick<HostMemoryPressureData, 'swapFreeMb'> & Partial<Pick<HostMemoryPressureData, 'swapTotalMb' | 'availableMb' | 'requiredMb'>>,
 ): SwapPressureState {
   const total = data.swapTotalMb ?? null
-  if (total === null) {
-    return (data.swapFreeMb ?? 0) > 0 ? 'ready' : 'none'
+  if (total === 0) return 'none'
+  if (data.swapFreeMb == null) return 'unknown'
+  if (data.swapFreeMb === 0) return total === null ? 'unknown' : 'exhausted'
+  if (data.requiredMb !== undefined) {
+    if (data.availableMb == null) return 'unknown'
+    if (data.availableMb + data.swapFreeMb < data.requiredMb) return 'low'
   }
-  if (total === 0) {
-    return 'none'
+  return 'ready'
+}
+
+export function buildSwapPressureAdvice(data: HostMemoryPressureData) {
+  const state = resolveSwapState(data)
+  const sizeGiB = Math.max(2, Math.ceil(Math.max(0, data.requiredMb - ((data.availableMb ?? 0) + (data.swapFreeMb ?? 0))) / 1024))
+  if (state === 'unknown') return { state, message: '无法读取 swap 状态，请先在服务器确认当前配置。', command: 'sudo swapon --show' }
+  if (state === 'ready') return { state, message: HOST_MEMORY_PRESSURE_SWAP_READY_HINT, command: null }
+  if (state === 'none') return { state, message: HOST_MEMORY_PRESSURE_NO_SWAP_HINT, command: `sudo env BSP_SWAP_SIZE=${sizeGiB}G bsp setup-swap` }
+  return {
+    state,
+    message: state === 'low' ? `swap 尚有余量，但内存与 swap 合计不足本次启动预估，建议新增 ${sizeGiB} GiB swap。`
+      : `缓存区已用满（共 ${data.swapTotalMb} MiB），建议新增 ${sizeGiB} GiB swap。`,
+    command: `sudo env BSP_SWAP_FILE=/swapfile-bsp-extra-${sizeGiB}g BSP_SWAP_SIZE=${sizeGiB}G bsp setup-swap`,
   }
-  return (data.swapFreeMb ?? 0) > 0 ? 'ready' : 'exhausted'
 }
 
 /**
@@ -139,22 +150,13 @@ export function renderMonitorAction(
   )
 }
 
-/** swap 提示：命令单独成行，方便直接照着敲；「没配」与「配了但用满」给的是两条不同的命令 */
+/** 命令只展示，原有swap文件不被停用或删除。 */
 function renderSwapSections(data: HostMemoryPressureData) {
-  const state = resolveSwapState(data)
-  if (state === 'ready') {
-    return [h('div', null, HOST_MEMORY_PRESSURE_SWAP_READY_HINT)]
-  }
-  if (state === 'exhausted') {
-    return [
-      h('div', null, `缓存区已用满（共 ${data.swapTotalMb} MiB），加载尖峰没有落点，建议扩到 4 GiB：`),
-      h('div', { class: 'font-medium break-all' }, HOST_MEMORY_PRESSURE_EXPAND_SWAP_COMMAND),
-    ]
-  }
-  return [
-    h('div', null, HOST_MEMORY_PRESSURE_NO_SWAP_HINT),
-    h('div', { class: 'font-medium' }, HOST_MEMORY_PRESSURE_SETUP_SWAP_COMMAND),
-  ]
+  const advice = buildSwapPressureAdvice(data)
+  return [h('div', null, advice.message), ...(advice.command ? [
+    h('div', null, advice.state === 'unknown' ? '在服务器上以 root 执行：' : '停止实例后，在服务器上以 root 执行：'),
+    h('div', { class: 'font-medium break-all' }, advice.command),
+  ] : [])]
 }
 
 export function showHostMemoryPressureNotification(

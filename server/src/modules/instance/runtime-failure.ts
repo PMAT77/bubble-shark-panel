@@ -1,4 +1,5 @@
 import type { DbInstanceRuntimeFailureKind } from '../../shared/db/types'
+import { formatMemoryCapHint } from '../../infra/container/exit-reason'
 
 /**
  * 「实例没起来」到底是不是内存问题。
@@ -29,8 +30,10 @@ export interface RuntimeFailureInput {
   memOomKillCount?: number
   /** 该单元的内存峰值（MiB）；读不到为 undefined */
   memPeakMb?: number
-  /** 每个分片的内存上限（MiB）；未设置上限为 undefined */
+  /** 分片的配置上限（MiB），不能当作已验证的运行时上限 */
   shardCapMb?: number
+  /** 本次故障检查读到的实际有限硬限；不可读或不限时为 null / undefined */
+  actualShardCapMb?: number | null
   /** 宿主机可用缓冲（可用内存 + swap 余量，MiB）；读不到为 null */
   bufferMb: number | null
   /** 已加载秒数；读不到为 null */
@@ -45,10 +48,6 @@ export interface RuntimeFailure {
   detail: string
 }
 
-function formatCapHint(shardCapMb: number | undefined): string {
-  return shardCapMb ? `（该分片上限 ${shardCapMb} MiB）` : ''
-}
-
 /**
  * 归因结论；没有结论时返回 null（此时由「重启告警」那套措辞负责说明，两者不重复写）。
  *
@@ -59,13 +58,13 @@ export function classifyRuntimeFailure(input: RuntimeFailureInput): RuntimeFailu
   if (input.readySeen) {
     return null
   }
-  const capHint = formatCapHint(input.shardCapMb)
+  const capHint = formatMemoryCapHint(input.actualShardCapMb, input.shardCapMb)
   const peakHint = input.memPeakMb ? `，实际峰值约 ${input.memPeakMb} MiB` : ''
 
   if (typeof input.memOomKillCount === 'number' && input.memOomKillCount > 0) {
     return {
       kind: 'memory',
-      detail: `该分片被系统按内存上限终止过 ${input.memOomKillCount} 次${capHint}${peakHint}`,
+      detail: `该分片因内存不足终止过 ${input.memOomKillCount} 次${capHint}${peakHint}`,
     }
   }
   if (input.exitResult === 'oom-kill') {

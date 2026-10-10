@@ -1,4 +1,5 @@
 import type { NotifyChannelType } from '../../../../shared/contracts/notify'
+import type { InstanceResourceConfig, InstanceStartupSnapshot } from '../../../../shared/contracts/instance-resources'
 
 export interface SessionTokenBundle {
   accessToken: string
@@ -90,7 +91,7 @@ export type DbInstanceErrorPhase = 'install' | 'runtime'
  * not_ready = 其余未就绪情形（例如某个 Mod 报错）。前端据此决定要不要给出「增加缓存区」引导，
  * 所以必须是枚举而不是从告警文案里认。
  */
-export type DbInstanceRuntimeFailureKind = 'memory' | 'not_ready'
+export type DbInstanceRuntimeFailureKind = 'memory' | 'not_ready' | 'memory_protection'
 
 export interface DbGameInstance {
   id: string
@@ -101,6 +102,8 @@ export interface DbGameInstance {
   containerId: string | null
   runtimePid: number | null
   runtimeStartedAt: string | null
+  resourceConfig?: InstanceResourceConfig | null
+  lastStartupReport?: InstanceStartupSnapshot | null
   installPath: string | null
   configPath: string | null
   queryPort: number | null
@@ -154,6 +157,8 @@ export interface CreateGameInstanceInput {
 }
 
 export interface UpdateGameInstanceRuntimeInput {
+  resourceConfig?: InstanceResourceConfig | null
+  lastStartupReport?: InstanceStartupSnapshot | null
   status?: DbGameInstanceStatus
   /**
    * 前置状态守卫：仅当当前行 status 命中给定值时才执行更新（状态机竞态保护）。
@@ -161,6 +166,7 @@ export interface UpdateGameInstanceRuntimeInput {
    */
   whereStatus?: DbGameInstanceStatus | DbGameInstanceStatus[]
   whereInstallTaskId?: string | null
+  whereStartupTaskId?: string
   containerId?: string | null
   runtimePid?: number | null
   runtimeStartedAt?: string | null

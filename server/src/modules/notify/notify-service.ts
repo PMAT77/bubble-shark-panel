@@ -40,7 +40,7 @@ export async function deliverToChannel(
   event: PanelEvent,
   cooldownMinutes: number,
 ): Promise<boolean> {
-  const cooldownKey = `${channel.id}:${event.type}:${event.subjectId}`
+  const cooldownKey = `${channel.id}:${event.type}:${event.subjectId}:${event.occurrenceKey ?? ''}`
   const lastSentAt = cooldownMap.get(cooldownKey) ?? 0
   const now = Date.now()
   if (now - lastSentAt < cooldownMinutes * 60_000) {

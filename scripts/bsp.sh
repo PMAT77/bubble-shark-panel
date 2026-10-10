@@ -266,31 +266,125 @@ cmd_doctor() {
   return "$exit_code"
 }
 
+# 全部游戏停止后配置共享物理内存预算。
+cmd_setup_memory_budget() {
+  require_root setup-memory-budget
+  load_config
+  local root="${BSP_MEMORY_CGROUP_ROOT:-/sys/fs/cgroup}" meminfo="${BSP_MEMORY_MEMINFO:-/proc/meminfo}"
+  local units_dir="${BSP_MEMORY_SYSTEMD_DIR:-/etc/systemd/system}"
+  local total peak reserve budget headroom panel_group pool_group unit_file active service_user service_uid service_home panel_pid panel_name info
+  [[ -f "$root/cgroup.controllers" ]] && grep -qw memory "$root/cgroup.controllers" || { log_error 'cgroup v2 memory controller unavailable; no budget changed.'; return 1; }
+  total="$(awk '/^MemTotal:/ { print int($2/1024) }' "$meminfo")"
+  [[ "$total" =~ ^[0-9]+$ && "$total" -gt 1024 ]] || { log_error 'Host MemTotal unavailable or too small.'; return 1; }
+  headroom="${BSP_HOST_MEMORY_HEADROOM_MB:-$(read_env_value "$PANEL_ENV_FILE" BSP_HOST_MEMORY_HEADROOM_MB)}"
+  [[ "$headroom" =~ ^[0-9]+$ ]] || headroom=0
+  if [[ "$RUNTIME_MODE" == native ]]; then
+    service_user="$(systemctl show "$NATIVE_SERVICE" -p User --value)"
+    [[ -n "$service_user" && "$service_user" != root ]] || { log_error 'Native panel requires a dedicated service user.'; return 1; }
+    service_uid="$(id -u "$service_user")" || return 1
+    service_home="$(getent passwd "$service_user" | cut -d: -f6)"
+    [[ "$service_home" == /* && -d "$service_home" ]] || return 1
+    panel_group="$(systemctl show "$NATIVE_SERVICE" -p ControlGroup --value)"
+    active="$(runuser -u "$service_user" -- env XDG_RUNTIME_DIR="/run/user/$service_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$service_uid/bus" systemctl --user list-units --state=active,activating,deactivating --no-legend '*-master.service' '*-caves.service')" || return 1
+    [[ -z "$active" ]] || { log_error 'Stop every DST shard first. Running limits remain unchanged.'; return 1; }
+    mkdir -p "$units_dir/user@$service_uid.service.d" || return 1
+    [[ ! -L "$units_dir/user@$service_uid.service.d/bsp-memory.conf" ]] || return 1
+    printf '[Service]\nDelegate=memory\n' > "$units_dir/user@$service_uid.service.d/bsp-memory.conf" || return 1
+    systemctl daemon-reload || return 1
+    local user_group
+    user_group="$(systemctl show "user@$service_uid.service" -p ControlGroup --value)"
+    [[ "$user_group" == /* && "$user_group" != *..* ]] && grep -qw memory "$root$user_group/cgroup.controllers" || { log_error "Memory delegation not active. Keep games stopped, restart user@$service_uid.service, then rerun."; return 1; }
+    unit_file="$service_home/.config/systemd/user/bspdst.slice"
+  else
+    [[ -z "${DOCKER_HOST:-}" || "${DOCKER_HOST}" == unix://* ]] || { log_error 'Remote Docker budget cannot be verified.'; return 1; }
+    info="$(docker info --format '{{.CgroupDriver}} {{.CgroupVersion}} {{json .SecurityOptions}}')" || return 1
+    [[ "$info" == systemd\ 2\ * && "$info" != *rootless* ]] || { log_error 'Requires rootful Docker with systemd cgroup v2.'; return 1; }
+    active="$(docker ps --format '{{.Names}}')" || return 1
+    [[ ! "$active" =~ (^|[[:space:]])[^[:space:]]*-(master|caves)($|[[:space:]]) ]] || { log_error 'Stop every DST shard first. Running limits remain unchanged.'; return 1; }
+    panel_name="${BSP_PANEL_CONTAINER_NAME:-$(read_env_value "$PANEL_ENV_FILE" BSP_PANEL_CONTAINER_NAME)}"
+    panel_pid="$(docker inspect --format '{{.State.Pid}}' "${panel_name:-bubblesharkpanel-panel}")" || return 1
+    [[ "$panel_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    panel_group="$(awk -F: '$1==0 { print $3 }' "${BSP_MEMORY_PROC_ROOT:-/proc}/$panel_pid/cgroup")"
+    [[ "$panel_group" == /* && "$panel_group" != *..* ]] && grep -qx "$panel_pid" "$root$panel_group/cgroup.procs" || { log_error 'Docker host identity could not be verified.'; return 1; }
+    unit_file="$units_dir/bspdst.slice"
+  fi
+  peak=''
+  if [[ "$panel_group" == /* && "$panel_group" != *..* ]]; then
+    peak="$(cat "$root$panel_group/memory.peak" 2>/dev/null || true)"
+  fi
+  if [[ ! "$peak" =~ ^[0-9]+$ ]]; then peak=536870912; log_warn 'Panel peak unknown; estimated 512 MiB.'; fi
+  reserve="$(awk -v peak="$peak" -v headroom="$headroom" 'BEGIN { value=peak/1048576*1.5+512; if(value<1024)value=1024; if(value<headroom)value=headroom; print int((value+255)/256)*256 }')"
+  budget=$(( (total-reserve)*1048576 ))
+  [[ "$budget" -gt 0 ]] || { log_error 'Reserve leaves no game RAM budget.'; return 1; }
+  [[ ! -L "$unit_file" ]] || { log_error 'Refusing to overwrite a symbolic link.'; return 1; }
+  if [[ "$RUNTIME_MODE" == native ]]; then
+    runuser -u "$service_user" -- mkdir -p "$(dirname "$unit_file")" || return 1
+    printf '[Unit]\nDescription=BubbleSharkPanel shared game memory budget\n[Slice]\nMemoryAccounting=yes\nMemoryHigh=infinity\nMemoryMax=%s\nMemorySwapMax=infinity\n' "$budget" | runuser -u "$service_user" -- tee "$unit_file" >/dev/null || return 1
+  else
+    mkdir -p "$(dirname "$unit_file")" || return 1
+    printf '[Unit]\nDescription=BubbleSharkPanel shared game memory budget\n[Slice]\nMemoryAccounting=yes\nMemoryHigh=infinity\nMemoryMax=%s\nMemorySwapMax=infinity\n' "$budget" > "$unit_file" || return 1
+  fi
+  if [[ "$RUNTIME_MODE" == native ]]; then
+    runuser -u "$service_user" -- env XDG_RUNTIME_DIR="/run/user/$service_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$service_uid/bus" systemctl --user daemon-reload || return 1
+    runuser -u "$service_user" -- env XDG_RUNTIME_DIR="/run/user/$service_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$service_uid/bus" systemctl --user start bspdst.slice || return 1
+    runuser -u "$service_user" -- env XDG_RUNTIME_DIR="/run/user/$service_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$service_uid/bus" systemctl --user set-property --runtime bspdst.slice "MemoryMax=$budget" MemoryHigh=infinity MemorySwapMax=infinity || return 1
+    pool_group="$(runuser -u "$service_user" -- env XDG_RUNTIME_DIR="/run/user/$service_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$service_uid/bus" systemctl --user show bspdst.slice -p ControlGroup --value)"
+  else
+    systemctl daemon-reload && systemctl start bspdst.slice || return 1
+    systemctl set-property --runtime bspdst.slice "MemoryMax=$budget" MemoryHigh=infinity MemorySwapMax=infinity || return 1
+    pool_group="$(systemctl show bspdst.slice -p ControlGroup --value)"
+  fi
+  [[ "$pool_group" == /* && "$pool_group" != *..* ]] || return 1
+  [[ "$(cat "$root$pool_group/memory.max")" == "$budget" ]] || { log_error 'Actual shared limit mismatch; protection remains unverified.'; return 1; }
+  log_info "Shared budget verified: total=$total MiB, panel peak=$((peak/1048576)) MiB, reserve=$reserve MiB, game RAM budget=$((budget/1048576)) MiB. Existing swap is shared; shards join on next start."
+}
+
 # 小内存主机一键 swap（2G 默认，可用 BSP_SWAP_SIZE 覆盖）。
-# 安装器会以库方式加载本脚本并直接调用这个函数（BSP_BSP_LIB_ONLY=1），
-# 所以路径与大小都在函数内取值：既让 BSP_SWAP_SIZE / BSP_SWAP_FILE 覆盖真正生效，
-# 也让安装器能把 fstab / sysctl.d 重定向到自己的目录。
+# 安装器以库方式加载，所以路径与大小在函数内取值。
 cmd_setup_swap() {
   require_root setup-swap
   local swap_size="${BSP_SWAP_SIZE:-2G}"
   local swap_file="${BSP_SWAP_FILE:-/swapfile-bsp}"
   local fstab_file="${BSP_SWAP_FSTAB_FILE:-/etc/fstab}"
   local sysctl_dir="${BSP_SWAP_SYSCTL_DIR:-/etc/sysctl.d}"
+  local active_swaps active_swap
   if ! have swapon; then
     log_error "swapon not found; install util-linux first."
     return 1
   fi
-  if swapon --show=NAME --noheadings 2>/dev/null | grep -q .; then
+  if ! active_swaps="$(swapon --show=NAME --noheadings 2>/dev/null)"; then
+    log_error "Cannot inspect active swap; no files changed."
+    return 1
+  fi
+  while read -r active_swap; do
+    if [[ "${active_swap}" == "${swap_file}" ]]; then
+      log_info "Swap already active at ${swap_file}."
+      return 0
+    fi
+  done <<< "${active_swaps}"
+  if [[ -n "${active_swaps}" && -z "${BSP_SWAP_FILE:-}" ]]; then
     log_info "Swap already active:"
     swapon --show
     return 0
   fi
+  if [[ "${swap_file}" != /* || "${swap_file}" =~ [[:space:]] ]]; then
+    log_error "BSP_SWAP_FILE must be an absolute path without whitespace."
+    return 1
+  fi
+  if [[ ! "${swap_size}" =~ ^[1-9][0-9]*([KMGTPEZY](i?B)?)?$ ]]; then
+    log_error "Invalid BSP_SWAP_SIZE; use a positive size such as 2G or 2048M."
+    return 1
+  fi
+  if [[ -e "${swap_file}" || -L "${swap_file}" ]] || ! (set -o noclobber; : > "${swap_file}") 2>/dev/null; then
+    log_error "Refusing to overwrite ${swap_file}; choose a new BSP_SWAP_FILE to add swap."
+    return 1
+  fi
   log_info "Creating ${swap_size} swapfile at ${swap_file}..."
-  fallocate -l "${swap_size}" "${swap_file}" || dd if=/dev/zero of="${swap_file}" bs=1M count=2048 status=progress
-  chmod 600 "${swap_file}"
-  mkswap "${swap_file}"
-  swapon "${swap_file}"
-  if ! grep -qE "^${swap_file}[[:space:]]" "${fstab_file}"; then
+  chmod 600 "${swap_file}" || return 1
+  fallocate -l "${swap_size}" "${swap_file}" || dd if=/dev/zero of="${swap_file}" bs=1M count="${swap_size}" iflag=count_bytes status=progress || return 1
+  mkswap "${swap_file}" || return 1
+  swapon "${swap_file}" || return 1
+  if ! BSP_TARGET_SWAP_FILE="${swap_file}" awk '$1 == ENVIRON["BSP_TARGET_SWAP_FILE"] { found=1 } END { exit !found }' "${fstab_file}"; then
     # 追加前补齐文件行尾：若 /etc/fstab 最后一行没有换行，新条目会与它拼成一行，
     # 第 6 个字段随之变成非法值，mount -a 与开机挂载都会解析失败。
     if [[ -s "${fstab_file}" && -n "$(tail -c 1 "${fstab_file}")" ]]; then
@@ -325,6 +419,7 @@ print_menu() {
  6) 更新面板镜像 update
  7) 体检 doctor
  8) 配置 swap setup-swap
+ 9) 配置共享内存预算 setup-memory-budget
  0) 退出
 MENU
 }
@@ -334,7 +429,7 @@ interactive_menu() {
   while true; do
     print_menu
     local choice
-    read -r -p "选择 [0-8]: " choice
+    read -r -p "选择 [0-9]: " choice
     case "$choice" in
       1) cmd_status ;;
       2) cmd_start ;;
@@ -344,6 +439,7 @@ interactive_menu() {
       6) cmd_update ;;
       7) cmd_doctor ;;
       8) cmd_setup_swap ;;
+      9) cmd_setup_memory_budget ;;
       0) exit 0 ;;
       *) log_warn "无效选择" ;;
     esac
@@ -363,7 +459,8 @@ Commands:
   logs        Tail panel logs (200 lines)
   update      Pull the unified image and recreate the panel stack
   doctor      Diagnostics: health, runtime, resources, redacted config, logs, version
-  setup-swap  Create a 2G swapfile with OOM-friendly sysctls (small-RAM hosts)
+  setup-swap  Create a swapfile (default: 2G); set BSP_SWAP_FILE to append a new one
+  setup-memory-budget  Verify and configure shared game RAM budget (all shards stopped)
 
 Run without arguments for the interactive menu.
 Scope: this CLI manages the panel stack only; DST instance lifecycle belongs to the web panel.
@@ -390,6 +487,7 @@ main() {
     update) cmd_update ;;
     doctor) cmd_doctor ;;
     setup-swap) cmd_setup_swap ;;
+    setup-memory-budget) cmd_setup_memory_budget ;;
     -h|--help|help) print_usage ;;
     *) print_usage >&2; exit 1 ;;
   esac

@@ -54,36 +54,36 @@ const TIER_LABEL_ZH: Record<HostMemoryTier, string> = {
 const TIER_SCENARIOS: Record<HostMemoryTier, HostMemoryTierScenario> = {
   small: {
     singleInstance: '仅建议 1 个运行中的实例（地上世界）',
-    caves: '不建议开启洞穴（会多一个游戏容器，易 OOM）',
-    mods: '少量 Mod（约 ≤10 个），避免大型组合 Mod',
+    caves: '开启洞穴前检查 swap、两个分片峰值与宿主机余量',
+    mods: 'Mod 体量差异较大，请按资源设置中的实测峰值调整额度',
     multiInstance: '不建议同机多实例同时运行',
   },
   medium: {
-    singleInstance: '适合 1 个实例 + 洞穴',
-    caves: '可开启洞穴；安装/大更新时建议先停止实例',
-    mods: '中等规模 Mod（约 10–30 个）一般可接受',
+    singleInstance: '优先 1 个实例；洞穴与多 Mod 需观察加载峰值',
+    caves: '检查两个分片总占用；安装/大更新时建议先停止实例',
+    mods: 'Mod 数量无法保证内存够用，请结合实测峰值与 swap 余量',
     multiInstance: '第二实例可用 seed 复制；避免与安装/更新并行',
   },
   large: {
-    singleInstance: '单实例 + 洞穴 + 较多 Mod 较从容',
+    singleInstance: '可规划单实例与洞穴，仍需检查分片总占用',
     caves: '洞穴与地上可同时运行',
-    mods: '较多 Mod 仍建议观察 DST 容器内存',
+    mods: '较多 Mod 仍建议观察游戏分片实测峰值',
     multiInstance: '同机多实例需自行规划总内存与上限',
   },
 }
 
 const TIER_SUMMARY_ZH: Record<HostMemoryTier, string> = {
-  small: '总内存偏小：优先单实例（仅地上）、少 Mod，并避免安装与运行叠加。',
-  medium: '总内存适中：可开洞穴与中等 Mod；重操作前请先停止其它实例。',
+  small: '总内存偏小：优先单实例地上世界，检查 swap 与加载峰值，避免安装与运行叠加。',
+  medium: '总内存适中：洞穴与多 Mod 需结合实测峰值规划；重操作前请先停止其它实例。',
   large: '总内存较充足：适合洞穴与较多 Mod；仍建议为 SteamCMD 安装预留空闲内存。',
 }
 
 function resolveCavesWarning(tier: HostMemoryTier): string | null {
   if (tier === 'small') {
-    return '当前宿主机内存档位偏小：开启洞穴会额外运行一个游戏容器，可能导致安装失败或运行中 OOM。建议仅地上世界，或升级至约 6 GiB 及以上。'
+    return '当前宿主机内存档位偏小：洞穴会额外运行一个游戏分片。请先配置 swap 并检查两个分片的实测峰值；频繁换页会拖慢加载，宿主机余量不足时仍可能 OOM。'
   }
   if (tier === 'medium') {
-    return '开启洞穴会显著增加内存占用；若同时进行 Steam 安装/更新，请先停止正在运行的实例。'
+    return '开启洞穴会增加内存占用；请检查两个分片峰值与 swap 余量。若同时进行 Steam 安装/更新，请先停止正在运行的实例。'
   }
   return null
 }

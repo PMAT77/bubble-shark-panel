@@ -1,5 +1,7 @@
 import { resolveApiBaseUrl, withTrailingSlash } from '../base-url'
 import api from '../index'
+import type { InstanceResourceConfig, InstanceResourcesPayload, InstanceStartupSnapshot, ResourceSnapshot } from '../../../shared/contracts/instance-resources'
+export type { InstanceResourceConfig, InstanceResourcesPayload, InstanceStartupSnapshot, ResourceSnapshot }
 import type {
   ConsoleLogHistoryDto,
   InstanceConnectInfoDto,
@@ -73,6 +75,9 @@ export type InstanceMaintenanceAnnounceState = InstanceMaintenanceAnnounceStateD
 export type InstanceMaintenancePushResult = InstanceMaintenancePushResultDto
 
 export default {
+  getInstanceResources: (id: string, options?: { signal?: AbortSignal }) => api.get('app/instance/resources', { params: { id }, ...options }) as Promise<{ data: InstanceResourcesPayload }>,
+  saveInstanceResources: (id: string, config: InstanceResourceConfig) => api.post('app/instance/resources', { id, config }) as Promise<{ data: InstanceResourcesPayload }>,
+  getInstanceStartup: (id: string, options?: { signal?: AbortSignal }) => api.get('app/instance/startup', { params: { id }, ...options }) as Promise<{ data: InstanceStartupSnapshot | null }>,
   getInstanceList: (data?: InstanceListQuery) => api.post('app/instance/list', data),
   /**
    * 实例标识选项：给"要在界面上选一个实例"的模块用（Mod、备份、计划任务、成员授权）。
@@ -100,12 +105,12 @@ export default {
   startInstance: (id: string, options?: { autoAllocatePorts?: boolean }) => api.post('app/instance/start', {
     id,
     ...(options?.autoAllocatePorts ? { autoAllocatePorts: true } : {}),
-  }),
+  }) as Promise<{ data: { taskId?: string } }>,
   stopInstance: (id: string) => api.post('app/instance/stop', { id }),
   restartInstance: (id: string, options?: { autoAllocatePorts?: boolean }) => api.post('app/instance/restart', {
     id,
     ...(options?.autoAllocatePorts ? { autoAllocatePorts: true } : {}),
-  }),
+  }) as Promise<{ data: { taskId?: string } }>,
   deleteInstance: (id: string) => api.post('app/instance/delete', { id }),
   getInstanceConnectInfo: (instanceId: string) => api.get('app/instance/connect-info', {
     params: { instanceId },

@@ -18,22 +18,22 @@ SMOKE_INSTALLED_TAG='v0.6.0'
 # 摘要用例用的假版本：只用于拼装显示字符串，不参与任何版本比较。
 SMOKE_FAKE_TAG='v9.9.9'
 
-# v0.17.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
-[[ "${BSP_RELEASE_TAG}" == "v0.17.0" ]]
+# v0.18.0 统一镜像：三键同值（占位 registry 待 resolve_image_registry 替换）
+[[ "${BSP_RELEASE_TAG}" == "v0.18.0" ]]
 [[ "${PANEL_IMAGE}" == "" ]]
 [[ "${BSP_GAME_DST_IMAGE}" == "" ]]
 [[ "${BSP_STEAMCMD_IMAGE}" == "" ]]
 # 默认镜像池为空（由 init_installer_repo_pool 按代理清单生成）
 [[ "${INSTALLER_REPO_MIRRORS}" == "" ]]
 init_installer_repo_pool
-[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.17.0"* ]]
+[[ "${INSTALLER_REPO_MIRRORS}" == *"@v0.18.0"* ]]
 [[ "${INSTALLER_REPO_MIRRORS}" == *gh-proxy.com* ]]
 [[ "${PANEL_HEALTHCHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]
 [[ "${PANEL_HEALTHCHECK_INTERVAL_SECONDS}" =~ ^[0-9]+$ ]]
 
 # 统一镜像引用直接生成（GHCR 官方源；PANEL_IMAGE 可覆盖）
 finalize_image_refs
-[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.17.0" ]]
+[[ "${PANEL_IMAGE}" == "ghcr.io/pmat77/bubblesharkpanel:v0.18.0" ]]
 [[ "${BSP_GAME_DST_IMAGE}" == "${PANEL_IMAGE}" ]]
 [[ "${BSP_STEAMCMD_IMAGE}" == "${PANEL_IMAGE}" ]]
 
@@ -802,10 +802,16 @@ grep -Fxq '/dev/vda1 / ext4 defaults 0 1' "${SWAP_FSTAB}" || {
 [[ "$(tail -c 1 "${SWAP_FSTAB}" | od -An -tu1 | tr -d '[:space:]')" == '10' ]]
 grep -Fq 'vm.swappiness = 20' "${SWAP_SYSCTL_DIR}/99-bubblesharkpanel.conf"
 
-# 3) 内存档位够用：不创建 swapfile
+# 3) 6G 档位无 swap 时创建 2G；8G 档位不创建
 rm -f "${SWAP_MARKER}" "${SWAP_FILE}"
 AUTO_SWAP_STATE='none'
 STUB_MEM_MB='7629'
+ensure_small_host_swap
+[[ "${AUTO_SWAP_STATE}" == 'created' ]]
+[[ "${AUTO_SWAP_TARGET_MB}" == '2048' ]]
+rm -f "${SWAP_MARKER}" "${SWAP_FILE}"
+AUTO_SWAP_STATE='none'
+STUB_MEM_MB='8192'
 ensure_small_host_swap
 [[ "${AUTO_SWAP_STATE}" == 'skipped' ]]
 [[ ! -e "${SWAP_FILE}" ]]
@@ -818,8 +824,104 @@ ensure_small_host_swap
 [[ "${AUTO_SWAP_STATE}" == 'skipped' ]]
 [[ ! -e "${SWAP_FILE}" ]]
 BSP_SWAP_ON_INSTALL='1'
+[[ "$(resolve_auto_swap_size_mb 3799)" == 4096 ]]
+[[ "$(resolve_auto_swap_size_mb 3800)" == 3072 ]]
+[[ "$(resolve_auto_swap_size_mb 5119)" == 3072 ]]
+[[ "$(resolve_auto_swap_size_mb 5120)" == 2048 ]]
+rm -f "${SWAP_MARKER}" "${SWAP_FILE}"
+STUB_MEM_MB='3915'
+BSP_SWAP_SIZE=1G
+AUTO_SWAP_STATE=none
+ensure_small_host_swap
+[[ "${AUTO_SWAP_TARGET_MB}" == 1024 ]]
+[[ "${AUTO_SWAP_STATE}" == created ]]
+unset BSP_SWAP_SIZE
 STUB_MEM_MB='7629'
 rm -rf "${SWAP_TEST_DIR}"
+
+# ---- 手工追加 swap：临时文件与命令 stub，绝不调用宿主机 swapon ----
+(
+  swap_cli_dir="$(mktemp -d)"
+  trap 'rm -rf "${swap_cli_dir}"' EXIT
+  BSP_BSP_LIB_ONLY=1 source "${SCRIPT_DIR}/bsp.sh"
+  require_root() { :; }
+  active_swap_file="${swap_cli_dir}/active"
+  swap_cli_trace="${swap_cli_dir}/trace"
+  BSP_SWAP_FSTAB_FILE="${swap_cli_dir}/fstab"
+  BSP_SWAP_SYSCTL_DIR="${swap_cli_dir}/sysctl.d"
+  mkdir -p "${BSP_SWAP_SYSCTL_DIR}"
+  printf '/dev/vda1 / ext4 defaults 0 1' > "${BSP_SWAP_FSTAB_FILE}"
+  printf '%s\n' "${swap_cli_dir}/existing-swap" > "${active_swap_file}"
+  : > "${swap_cli_trace}"
+  fallocate_fail=0
+  swapon_probe_fail=0
+  swapon() {
+    if [[ "${1:-}" == --show* ]]; then
+      [[ "${swapon_probe_fail}" == 0 ]] || return 1
+      cat "${active_swap_file}"
+    else
+      printf 'swapon %s\n' "$1" >> "${swap_cli_trace}"
+      printf '%s\n' "$1" >> "${active_swap_file}"
+    fi
+  }
+  fallocate() {
+    printf 'fallocate %s\n' "$*" >> "${swap_cli_trace}"
+    [[ "${fallocate_fail}" == 0 ]]
+  }
+  mkswap() { printf 'mkswap %s\n' "$1" >> "${swap_cli_trace}"; }
+  sysctl() { :; }
+
+  # 未指定新路径时，任意已有 swap 都让命令保持幂等。
+  unset BSP_SWAP_FILE
+  cmd_setup_swap
+  [[ ! -s "${swap_cli_trace}" ]]
+  [[ "$(cat "${BSP_SWAP_FSTAB_FILE}")" == '/dev/vda1 / ext4 defaults 0 1' ]]
+
+  # 指向 active 目标同样直接成功，不重复创建或写 fstab。
+  BSP_SWAP_FILE="${swap_cli_dir}/existing-swap"
+  printf 'keep-active\n' > "${BSP_SWAP_FILE}"
+  cmd_setup_swap
+  [[ "$(cat "${BSP_SWAP_FILE}")" == keep-active ]]
+  [[ ! -s "${swap_cli_trace}" ]]
+
+  # 显式新路径允许追加，原有 swap 保持 active。
+  BSP_SWAP_FILE="${swap_cli_dir}/extra-swap"
+  BSP_SWAP_SIZE=3G
+  cmd_setup_swap
+  [[ -f "${BSP_SWAP_FILE}" ]]
+  grep -Fxq "${swap_cli_dir}/existing-swap" "${active_swap_file}"
+  grep -Fxq "${BSP_SWAP_FILE}" "${active_swap_file}"
+  grep -Fxq "${BSP_SWAP_FILE} none swap sw 0 0" "${BSP_SWAP_FSTAB_FILE}"
+  grep -Fxq '/dev/vda1 / ext4 defaults 0 1' "${BSP_SWAP_FSTAB_FILE}"
+  [[ "$(wc -l < "${BSP_SWAP_FSTAB_FILE}")" -eq 2 ]]
+
+  # 已有但未 active 的文件不得截断或格式化。
+  BSP_SWAP_FILE="${swap_cli_dir}/keep-data"
+  printf 'keep-data\n' > "${BSP_SWAP_FILE}"
+  : > "${swap_cli_trace}"
+  if cmd_setup_swap; then exit 1; fi
+  [[ "$(cat "${BSP_SWAP_FILE}")" == keep-data ]]
+  [[ ! -s "${swap_cli_trace}" ]]
+
+  # fallocate 失败后真实 dd 只写请求的 3MiB，不回退成固定 2GiB。
+  BSP_SWAP_FILE="${swap_cli_dir}/fallback-swap"
+  BSP_SWAP_SIZE=3M
+  fallocate_fail=1
+  cmd_setup_swap
+  [[ "$(wc -c < "${BSP_SWAP_FILE}")" -eq 3145728 ]]
+  grep -Fxq "mkswap ${BSP_SWAP_FILE}" "${swap_cli_trace}"
+  grep -Fxq "swapon ${BSP_SWAP_FILE}" "${swap_cli_trace}"
+
+  # 探测失败与非法尺寸都不能创建文件。
+  BSP_SWAP_FILE="${swap_cli_dir}/probe-failed"
+  swapon_probe_fail=1
+  if cmd_setup_swap; then exit 1; fi
+  [[ ! -e "${BSP_SWAP_FILE}" ]]
+  swapon_probe_fail=0
+  BSP_SWAP_SIZE=-1G
+  if cmd_setup_swap; then exit 1; fi
+  [[ ! -e "${BSP_SWAP_FILE}" ]]
+)
 
 (
   legacy_layout="$(mktemp -d)"
@@ -835,5 +937,74 @@ rm -rf "${SWAP_TEST_DIR}"
   [[ "$PANEL_BACKUPS_DIR" == "$legacy_layout/backups" ]]
   [[ "$NATIVE_STEAMCMD_PATH" == "$legacy_layout/steamcmd.sh" ]]
   [[ "$PANEL_NATIVE_SERVICE" == game-server-hub.service ]]
+)
+# ---- 共享预算：只使用临时 cgroup 文件及命令 stub，不接触宿主 systemd ----
+(
+  budget_test="$(mktemp -d)"
+  trap 'rm -rf "$budget_test"' EXIT
+  BSP_BSP_LIB_ONLY=1 source "${SCRIPT_DIR}/bsp.sh"
+  require_root() { :; }
+  load_config() { :; }
+  BSP_MEMORY_CGROUP_ROOT="$budget_test/cgroup"
+  BSP_MEMORY_SYSTEMD_DIR="$budget_test/units"
+  BSP_MEMORY_MEMINFO="$budget_test/meminfo"
+  BSP_MEMORY_PROC_ROOT="$budget_test/proc"
+  mkdir -p "$BSP_MEMORY_CGROUP_ROOT/user/pool" "$BSP_MEMORY_CGROUP_ROOT/panel" "$BSP_MEMORY_CGROUP_ROOT/bspdst.slice" "$budget_test/service-home" "$BSP_MEMORY_PROC_ROOT/123"
+  printf 'memory cpu\n' > "$BSP_MEMORY_CGROUP_ROOT/cgroup.controllers"
+  printf 'memory\n' > "$BSP_MEMORY_CGROUP_ROOT/user/cgroup.controllers"
+  printf 'MemTotal: 6067224 kB\n' > "$BSP_MEMORY_MEMINFO"
+  printf '320864256\n' > "$BSP_MEMORY_CGROUP_ROOT/panel/memory.peak"
+  printf '123\n' > "$BSP_MEMORY_CGROUP_ROOT/panel/cgroup.procs"
+  printf '0::/panel\n' > "$BSP_MEMORY_PROC_ROOT/123/cgroup"
+  active_budget_game=0
+  RUNTIME_MODE=native
+  id() { if [[ "${1:-}" == -u ]]; then printf '999\n'; else printf 'bsp\n'; fi; }
+  getent() { printf 'bsp:x:999:999::%s/service-home:/bin/sh\n' "$budget_test"; }
+  chown() { :; }
+  runuser() { shift 3; if [[ "$1" == mkdir || "$1" == tee ]]; then command "$@"; return; fi; while [[ $# -gt 0 && "$1" != systemctl ]]; do shift; done; systemctl "$@"; }
+  systemctl() {
+    [[ "${1:-}" != systemctl ]] || shift
+    [[ "${1:-}" != --user ]] || shift
+    case "${1:-}" in
+      show)
+        if [[ "$*" == *' -p User '* ]]; then printf 'bsp\n'
+        elif [[ "$2" == user@* ]]; then printf '/user\n'
+        elif [[ "$2" == bspdst.slice ]]; then [[ "$RUNTIME_MODE" == native ]] && printf '/user/pool\n' || printf '/bspdst.slice\n'
+        else printf '/panel\n'; fi ;;
+      list-units) [[ "$active_budget_game" == 0 ]] || printf 'bsp-fixture-master.service loaded active running\n' ;;
+      set-property)
+        local arg destination
+        [[ "$RUNTIME_MODE" == native ]] && destination='/user/pool' || destination='/bspdst.slice'
+        for arg in "$@"; do [[ "$arg" != MemoryMax=* ]] || printf '%s\n' "${arg#*=}" > "$BSP_MEMORY_CGROUP_ROOT$destination/memory.max"; done ;;
+    esac
+    return 0
+  }
+  cmd_setup_memory_budget
+  expected_budget=$((4901*1048576))
+  [[ "$(cat "$BSP_MEMORY_CGROUP_ROOT/user/pool/memory.max")" == "$expected_budget" ]]
+  grep -q 'MemoryHigh=infinity' "$budget_test/service-home/.config/systemd/user/bspdst.slice"
+  active_budget_game=1
+  printf '2097152000\n' > "$BSP_MEMORY_CGROUP_ROOT/panel/memory.peak"
+  if cmd_setup_memory_budget; then exit 1; fi
+  [[ "$(cat "$BSP_MEMORY_CGROUP_ROOT/user/pool/memory.max")" == "$expected_budget" ]]
+  active_budget_game=0
+  RUNTIME_MODE=docker
+  docker_rootless=0
+  docker() {
+    case "$1" in
+      info) [[ "$docker_rootless" == 0 ]] && printf 'systemd 2 []\n' || printf 'systemd 2 [rootless]\n' ;;
+      ps) [[ "$active_budget_game" == 0 ]] || printf 'bsp-fixture-master\n' ;;
+      inspect) printf '123\n' ;;
+    esac
+    return 0
+  }
+  unset DOCKER_HOST
+  printf '320864256\n' > "$BSP_MEMORY_CGROUP_ROOT/panel/memory.peak"
+  cmd_setup_memory_budget
+  [[ "$(cat "$BSP_MEMORY_CGROUP_ROOT/bspdst.slice/memory.max")" == "$expected_budget" ]]
+  docker_rootless=1
+  if cmd_setup_memory_budget; then exit 1; fi
+  DOCKER_HOST=tcp://remote:2375
+  if cmd_setup_memory_budget; then exit 1; fi
 )
 printf 'install-linux-smoke-ok\n'

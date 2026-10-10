@@ -283,7 +283,7 @@ importers:
         version: 14.4.0(vue@3.5.34(typescript@5.9.3))
       '@vueuse/integrations':
         specifier: 'catalog:'
-        version: 14.4.0(async-validator@4.2.5)(axios@1.20.0)(nprogress@0.2.0)(vue@3.5.34(typescript@5.9.3))
+        version: 14.4.0(async-validator@4.2.5)(axios@1.20.0)(nprogress@0.2.0)(sortablejs@1.15.7)(vue@3.5.34(typescript@5.9.3))
       axios:
         specifier: 'catalog:'
         version: 1.20.0
@@ -311,6 +311,9 @@ importers:
       fastify:
         specifier: 'catalog:'
         version: 5.12.5
+      fengari:
+        specifier: 0.1.5
+        version: 0.1.5
       hotkeys-js:
         specifier: 'catalog:'
         version: 4.0.8
@@ -347,6 +350,9 @@ importers:
       scule:
         specifier: 'catalog:'
         version: 1.3.0
+      sortablejs:
+        specifier: ^1.15.7
+        version: 1.15.7
       tailwind-merge:
         specifier: 'catalog:'
         version: 3.6.0
@@ -399,6 +405,9 @@ importers:
       '@types/path-browserify':
         specifier: 'catalog:'
         version: 1.0.3
+      '@types/sortablejs':
+        specifier: ^1.15.9
+        version: 1.15.9
       '@types/tar-stream':
         specifier: 3.1.4
         version: 3.1.4
@@ -3270,6 +3279,9 @@ packages:
   '@types/resolve@1.20.2':
     resolution: {integrity: sha512-60BCwRFOZCQhDncwQdxxeOEEkbc5dIMccYLwbxsS4TUNeVECQ/pBJ0j09mrHOl/JJvpRPGwO9SvE4nR2Nb/a4Q==}
 
+  '@types/sortablejs@1.15.9':
+    resolution: {integrity: sha512-7HP+rZGE2p886PKV9c9OJzLBI6BBJu1O7lJGYnPyG3fS4/duUCcngkNCjsLwIMV+WMqANe3tt4irrXHSIe68OQ==}
+
   '@types/ssh2@1.15.5':
     resolution: {integrity: sha512-N1ASjp/nXH3ovBHddRJpli4ozpk6UdDYIX4RJWFa9L1YKnzdhTlVmiGHm4DZnj/jLbqZpes4aeR30EFGQtvhQQ==}
 
@@ -4416,6 +4428,9 @@ packages:
       picomatch:
         optional: true
 
+  fengari@0.1.5:
+    resolution: {integrity: sha512-0DS4Nn4rV8qyFlQCpKK8brT61EUtswynrpfFTcgLErcilBIBskSMQ86fO2WVuybr14ywyKdRjv91FiRZwnEuvQ==}
+
   fflate@0.8.3:
     resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
@@ -5410,6 +5425,10 @@ packages:
     resolution: {integrity: sha512-9u/XQ1pvrQtYyMpZe7DXKv2p5CNvyVwzUB6uhLAnQwHMSgKMBR62lc7AHljaeteeHXn11XTAaLLUVZYVZyuRBQ==}
     engines: {node: '>= 20.19.0'}
 
+  readline-sync@1.4.10:
+    resolution: {integrity: sha512-gNva8/6UAe8QYepIQH/jQ2qn91Qj0B9sYjMBBs3QOB8F2CXcKgLxQaJRP76sWVRQt+QU+8fAkCbCvjjMFu7Ycw==}
+    engines: {node: '>= 0.8.0'}
+
   real-require@0.2.0:
     resolution: {integrity: sha512-57frrGM/OCTLqLOAh0mhVA9VBMHd+9U7Zb2THMGdBUoZVOtGbJzjxsYGDJ3A9AYYCP4hn6y1TVbaOfzWtm5GFg==}
     engines: {node: '>= 12.13.0'}
@@ -5743,6 +5762,9 @@ packages:
   sonic-boom@4.2.1:
     resolution: {integrity: sha512-w6AxtubXa2wTXAUsZMMWERrsIRAdrK0Sc+FUytWvYAhBJLyuI4llrMIC1DtlNSdI99EI86KZum2MMq3EAZlF9Q==}
 
+  sortablejs@1.15.7:
+    resolution: {integrity: sha512-Kk8wLQPlS+yi1ZEf48a4+fzHa4yxjC30M/Sr2AnQu+f/MPwvvX9XjZ6OWejiz8crBsLwSq8GHqaxaET7u6ux0A==}
+
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
@@ -5768,6 +5790,9 @@ packages:
   split2@4.2.0:
     resolution: {integrity: sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==}
     engines: {node: '>= 10.x'}
+
+  sprintf-js@1.1.3:
+    resolution: {integrity: sha512-Oo+0REFV59/rz3gfJNKQiBlwfHaSESl1pcGyABQsnnIfWOFt6JNj5gCog2U6MLZ//IGYD+nA8nI+mTShREReaA==}
 
   srvx@1.0.4:
     resolution: {integrity: sha512-eZmYaxUfZSo7/8m8UdsHRJNmTLSCTPPom9d7a60vMmuVeZvwhbvflRR+00/CxTCjMOFa5+H8tgBeNDVZ+w7AAQ==}
@@ -5898,6 +5923,10 @@ packages:
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
+
+  tmp@0.2.7:
+    resolution: {integrity: sha512-e0votIpp4Uo2AJYSzVHV6xCcawuiez3DzqDAbrTc3YxBkplN6e+dM13ZeIcZnDg/QpSuU2zfZ3rzwY8ukEnaXw==}
+    engines: {node: '>=14.14'}
 
   toad-cache@3.7.0:
     resolution: {integrity: sha512-/m8M+2BJUpoJdgAHoG+baCwBT+tf2VraSfkBgl0Y00qIWt41DJ8R5B8nsEw0I58YwF5IZH6z24/2TobDKnqSWw==}
@@ -8605,6 +8634,8 @@ snapshots:
 
   '@types/resolve@1.20.2': {}
 
+  '@types/sortablejs@1.15.9': {}
+
   '@types/ssh2@1.15.5':
     dependencies:
       '@types/node': 18.19.130
@@ -9031,7 +9062,7 @@ snapshots:
       '@vueuse/shared': 14.4.0(vue@3.5.34(typescript@5.9.3))
       vue: 3.5.34(typescript@5.9.3)
 
-  '@vueuse/integrations@14.4.0(async-validator@4.2.5)(axios@1.20.0)(nprogress@0.2.0)(vue@3.5.34(typescript@5.9.3))':
+  '@vueuse/integrations@14.4.0(async-validator@4.2.5)(axios@1.20.0)(nprogress@0.2.0)(sortablejs@1.15.7)(vue@3.5.34(typescript@5.9.3))':
     dependencies:
       '@vueuse/core': 14.4.0(vue@3.5.34(typescript@5.9.3))
       '@vueuse/shared': 14.4.0(vue@3.5.34(typescript@5.9.3))
@@ -9040,6 +9071,7 @@ snapshots:
       async-validator: 4.2.5
       axios: 1.20.0
       nprogress: 0.2.0
+      sortablejs: 1.15.7
 
   '@vueuse/metadata@12.8.2': {}
 
@@ -9939,6 +9971,12 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
       picomatch: 4.0.7
+
+  fengari@0.1.5:
+    dependencies:
+      readline-sync: 1.4.10
+      sprintf-js: 1.1.3
+      tmp: 0.2.7
 
   fflate@0.8.3: {}
 
@@ -10934,6 +10972,8 @@ snapshots:
 
   readdirp@5.0.0: {}
 
+  readline-sync@1.4.10: {}
+
   real-require@0.2.0: {}
 
   real-require@1.0.0: {}
@@ -11292,6 +11332,8 @@ snapshots:
     dependencies:
       atomic-sleep: 1.0.0
 
+  sortablejs@1.15.7: {}
+
   source-map-js@1.2.1: {}
 
   source-map-support@0.5.21:
@@ -11308,6 +11350,8 @@ snapshots:
   split-ca@1.0.1: {}
 
   split2@4.2.0: {}
+
+  sprintf-js@1.1.3: {}
 
   srvx@1.0.4: {}
 
@@ -11472,6 +11516,8 @@ snapshots:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
+
+  tmp@0.2.7: {}
 
   toad-cache@3.7.0: {}
 

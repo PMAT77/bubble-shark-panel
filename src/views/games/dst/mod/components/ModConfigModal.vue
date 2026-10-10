@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import type { ModConfigDefinition, ModConfigValues } from '@/api/modules/mod'
-import { NButton, NInput, NInputNumber, NModal, NSelect, NSpin, NSwitch, NTag, NTooltip, useMessage } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NModal, NPopover, NSelect, NSpin, NSwitch, useMessage } from 'naive-ui'
 import type { SelectOption } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
 import apiMod from '@/api/modules/mod'
+import { buildDefinitionOptionsPayload, buildManualOptionsPayload, createConfigEditValues, resolveConfigControlKind, validateConfigKvRows } from '../modConfigState'
+import type { ModConfigKvRow } from '../modConfigState'
+import type { ModConfigDefinitionStatus } from '../../../../../../shared/contracts/mod'
 
 defineOptions({
   name: 'ModConfigModal',
@@ -11,11 +14,6 @@ defineOptions({
 
 // 保存 Mod 配置要 mod:config：只读账号即使打开了这个弹窗也提交不了
 const { auth: hasPermission } = useAppAuth()
-
-interface KvRow {
-  key: string
-  value: string
-}
 
 const props = defineProps<{
   show: boolean
@@ -33,11 +31,15 @@ const message = useMessage()
 const loading = ref(false)
 const saving = ref(false)
 const definitions = ref<ModConfigDefinition[]>([])
-const editValues = ref<Record<string, string>>({})
+const editValues = ref<Record<string, string | null>>({})
 /** 加载时的原始值：未修改的项原样提交，避免 string 化破坏类型 */
 const originalValues = ref<Record<string, string | number | boolean>>({})
-const kvRows = ref<KvRow[]>([])
+const kvRows = ref<ModConfigKvRow[]>([])
+const definitionStatus = ref<ModConfigDefinitionStatus>()
+const definitionMessage = ref<string | null>(null)
 const definitionsParsed = computed(() => definitions.value.length > 0)
+const manualEditorAvailable = computed(() => definitionStatus.value !== 'empty' || kvRows.value.length > 0)
+let loadVersion = 0
 
 const visible = computed({
   get: () => props.show,
@@ -63,49 +65,40 @@ async function loadConfig() {
     return
   }
   loading.value = true
+  const version = ++loadVersion
   try {
     const response = await apiMod.getModConfig(props.instanceId, props.workshopId)
+    if (version !== loadVersion) return
     definitions.value = response.data.definitions
+    definitionStatus.value = response.data.definitionStatus
+    definitionMessage.value = response.data.definitionMessage ?? (definitions.value.length ? null : '暂时无法读取这个 Mod 的配置选项。')
     const loaded = response.data.options
     originalValues.value = { ...loaded }
-    const next: Record<string, string> = {}
-    for (const [key, value] of Object.entries(loaded)) {
-      next[key] = String(value)
-    }
-    editValues.value = next
+    editValues.value = createConfigEditValues(definitions.value, loaded)
     kvRows.value = Object.entries(loaded).map(([key, value]) => ({
       key,
       value: String(value),
     }))
   }
   catch (error: unknown) {
+    if (version !== loadVersion) return
     message.error(getErrorMessage(error, '加载 Mod 配置失败'))
     visible.value = false
   }
   finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
-watch(() => props.show, (show) => {
+watch(() => [props.show, props.instanceId, props.workshopId] as const, ([show]) => {
   if (show) {
     void loadConfig()
   }
-})
+  else loadVersion += 1
+}, { immediate: true })
 
 function resolveControlKind(def: ModConfigDefinition): 'select' | 'switch' | 'number' | 'text' {
-  if (def.options.length > 0) {
-    return 'select'
-  }
-  const current = editValues.value[def.name] ?? String(def.default ?? '')
-  const raw = originalValues.value[def.name] ?? def.default
-  if (typeof raw === 'boolean' || current === 'true' || current === 'false') {
-    return 'switch'
-  }
-  if (typeof raw === 'number' || (current !== '' && Number.isFinite(Number(current)))) {
-    return 'number'
-  }
-  return 'text'
+  return resolveConfigControlKind(def, originalValues.value)
 }
 
 function buildSelectOptions(def: ModConfigDefinition): SelectOption[] {
@@ -128,81 +121,24 @@ function removeKvRow(index: number) {
   kvRows.value = kvRows.value.filter((_, i) => i !== index)
 }
 
-function inferKvValue(rawValue: string): string | number | boolean {
-  if (rawValue === 'true') {
-    return true
-  }
-  if (rawValue === 'false') {
-    return false
-  }
-  if (rawValue.trim() !== '' && Number.isFinite(Number(rawValue))) {
-    return Number(rawValue)
-  }
-  return rawValue
-}
-
-/** 定义模式：把编辑值还原为原始类型（未修改保持原样，修改按控件类型转换） */
-function resolveTypedValue(def: ModConfigDefinition, edited: string): string | number | boolean | undefined {
-  if (edited === '') {
-    return undefined
-  }
-  const original = originalValues.value[def.name]
-  if (original !== undefined && String(original) === edited) {
-    return original
-  }
-  const kind = resolveControlKind(def)
-  if (kind === 'switch') {
-    return edited === 'true'
-  }
-  if (kind === 'number') {
-    return Number(edited)
-  }
-  if (kind === 'select') {
-    const candidate = def.options.find(option => String(option.data) === edited)
-    return candidate ? candidate.data : edited
-  }
-  return edited
-}
-
-function buildOptionsPayload(): ModConfigValues | null {
-  if (!definitionsParsed.value) {
-    const result: ModConfigValues = {}
-    for (const row of kvRows.value) {
-      const key = row.key.trim()
-      if (!key) {
-        continue
-      }
-      result[key] = inferKvValue(row.value)
-    }
-    return Object.keys(result).length > 0 ? result : null
-  }
-  const result: ModConfigValues = {}
-  for (const def of definitions.value) {
-    const edited = editValues.value[def.name] ?? ''
-    const typed = resolveTypedValue(def, edited)
-    if (typed !== undefined) {
-      result[def.name] = typed
-    }
-  }
-  return Object.keys(result).length > 0 ? result : null
-}
-
 async function saveConfig() {
   if (!props.instanceId || !props.workshopId || saving.value) {
     return
   }
   if (!definitionsParsed.value) {
-    const invalidRow = kvRows.value.find(row => !row.key.trim() && row.value.trim() !== '')
-    if (invalidRow) {
-      message.warning('存在未填写键名的配置行，请填写键名或删除该行')
+    const invalid = validateConfigKvRows(kvRows.value)
+    if (invalid) {
+      message.warning(invalid)
       return
     }
   }
-  const options = buildOptionsPayload()
+  const options: ModConfigValues = definitionsParsed.value
+    ? buildDefinitionOptionsPayload(definitions.value, editValues.value, originalValues.value)
+    : buildManualOptionsPayload(kvRows.value, originalValues.value)
   saving.value = true
   try {
     const response = await apiMod.updateModConfig(props.instanceId, props.workshopId, {
-      options: options ?? {},
+      options,
     })
     message.success('Mod 配置已保存，重启实例后生效')
     emit('saved', response.data.riskTip ?? null)
@@ -222,7 +158,7 @@ async function saveConfig() {
     v-model:show="visible"
     preset="card"
     :title="'配置 - ' + (modName || workshopId)"
-    class="w-[min(680px,94vw)]"
+    class="mod-config-modal"
     :bordered="false"
     size="small"
   >
@@ -234,77 +170,99 @@ async function saveConfig() {
 
         <template v-if="definitionsParsed">
           <div class="space-y-4">
-            <div v-for="def in definitions" :key="def.name" class="flex flex-col gap-1">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium">{{ def.label || def.name }}</span>
-                <NTag size="tiny" :bordered="false" type="default">{{ def.name }}</NTag>
-                <NTooltip v-if="def.hover" trigger="hover">
+            <div v-for="(def, index) in definitions" :key="`${index}:${def.name}`" class="min-w-0 flex flex-col gap-1">
+              <div class="min-w-0 flex items-center gap-2">
+                <span class="min-w-0 break-words text-sm font-medium">{{ def.label || def.name }}</span>
+                <NPopover v-if="!def.isHeader || def.hover" trigger="click">
                   <template #trigger>
-                    <span class="cursor-help text-xs text-muted-foreground">?</span>
+                    <NButton size="tiny" quaternary aria-label="查看配置说明">?</NButton>
                   </template>
-                  {{ def.hover }}
-                </NTooltip>
+                  <div class="max-w-[min(320px,80vw)] break-words text-xs">
+                    <p v-if="!def.isHeader">配置键：{{ def.name }}</p>
+                    <p v-if="def.hover" class="whitespace-pre-wrap">{{ def.hover }}</p>
+                  </div>
+                </NPopover>
               </div>
-              <NSelect
-                v-if="resolveControlKind(def) === 'select'"
-                size="small"
-                :value="editValues[def.name] ?? ''"
-                :options="buildSelectOptions(def)"
-                placeholder="未设置"
-                clearable
-                @update:value="(value: string | null) => { editValues[def.name] = value ?? '' }"
-              />
-              <NSwitch
-                v-else-if="resolveControlKind(def) === 'switch'"
-                size="small"
-                :value="editValues[def.name] === 'true'"
-                @update:value="(value: boolean) => { editValues[def.name] = value ? 'true' : 'false' }"
-              />
-              <NInputNumber
-                v-else-if="resolveControlKind(def) === 'number'"
-                size="small"
-                :value="editValues[def.name] === '' || editValues[def.name] === undefined ? null : Number(editValues[def.name])"
-                placeholder="未设置"
-                class="w-full"
-                @update:value="(value: number | null) => { editValues[def.name] = value === null ? '' : String(value) }"
-              />
-              <NInput
-                v-else
-                v-model:value="editValues[def.name]"
-                size="small"
-                placeholder="未设置"
-                clearable
-              />
+              <template v-if="!def.isHeader">
+                <NSelect
+                  v-if="resolveControlKind(def) === 'select'"
+                  size="small"
+                  :value="editValues[def.name] ?? null"
+                  :options="buildSelectOptions(def)"
+                  placeholder="未设置"
+                  :aria-label="def.label || def.name"
+                  clearable
+                  @update:value="(value: string | null) => { editValues[def.name] = value }"
+                />
+                <NSwitch
+                  v-else-if="resolveControlKind(def) === 'switch'"
+                  size="small"
+                  :aria-label="def.label || def.name"
+                  :value="(editValues[def.name] ?? String(def.default ?? false)) === 'true'"
+                  @update:value="(value: boolean) => { editValues[def.name] = value ? 'true' : 'false' }"
+                />
+                <NInputNumber
+                  v-else-if="resolveControlKind(def) === 'number'"
+                  size="small"
+                  :value="editValues[def.name] == null ? null : Number(editValues[def.name])"
+                  placeholder="未设置"
+                  :aria-label="def.label || def.name"
+                  class="w-full"
+                  @update:value="(value: number | null) => { editValues[def.name] = value === null ? null : String(value) }"
+                />
+                <NInput
+                  v-else
+                  :value="editValues[def.name]"
+                  size="small"
+                  placeholder="未设置"
+                  :aria-label="def.label || def.name"
+                  clearable
+                  @update:value="(value: string) => { editValues[def.name] = value === '' ? null : value }"
+                />
+                <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span v-if="editValues[def.name] == null">未设置，保存后使用默认值</span>
+                  <NButton v-else size="tiny" quaternary @click="editValues[def.name] = null">使用默认值</NButton>
+                </div>
+              </template>
             </div>
           </div>
         </template>
 
         <template v-else>
           <p class="mb-2 text-xs text-muted-foreground">
-            无法读取这个 Mod 的配置选项，请手动填写键和值。
+            {{ definitionMessage }}
           </p>
-          <div class="space-y-2">
-            <div v-for="(row, index) in kvRows" :key="index" class="flex items-center gap-2">
-              <NInput
-                v-model:value="row.key"
-                size="small"
-                placeholder="配置键"
-                class="w-48 shrink-0"
-              />
-              <NInput
-                v-model:value="row.value"
-                size="small"
-                placeholder="配置值"
-                class="min-w-0 flex-1"
-              />
-              <NButton size="tiny" quaternary type="error" @click="removeKvRow(index)">
-                删除
-              </NButton>
+          <template v-if="manualEditorAvailable">
+            <p class="mb-3 text-xs text-muted-foreground">
+              已有配置可以修改。新增项请使用 Mod 作者提供的键和值，随意填写不会增加新功能。
+            </p>
+            <div class="space-y-2">
+              <div v-for="(row, index) in kvRows" :key="index" class="mod-config-kv-row">
+                <div class="mod-config-kv-key">
+                  <NInput
+                    v-model:value="row.key"
+                    size="small"
+                    placeholder="配置键"
+                    :aria-label="`第 ${index + 1} 项配置键`"
+                  />
+                </div>
+                <div class="min-w-0">
+                  <NInput
+                    v-model:value="row.value"
+                    size="small"
+                    placeholder="配置值"
+                    :aria-label="`第 ${index + 1} 项配置值`"
+                  />
+                </div>
+                <NButton size="tiny" quaternary type="error" :aria-label="`删除第 ${index + 1} 项配置`" @click="removeKvRow(index)">
+                  删除
+                </NButton>
+              </div>
             </div>
-          </div>
-          <NButton size="small" dashed class="mt-3 w-full" @click="addKvRow">
-            添加配置项
-          </NButton>
+            <NButton size="small" dashed class="mt-3 w-full" @click="addKvRow">
+              添加配置项
+            </NButton>
+          </template>
         </template>
       </div>
     </NSpin>
@@ -321,3 +279,37 @@ async function saveConfig() {
     </template>
   </NModal>
 </template>
+
+<style scoped>
+:global(.n-card.mod-config-modal) {
+  width: min(680px, 94vw);
+  max-height: 90dvh;
+}
+
+:global(.mod-config-modal > .n-card-content) {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.mod-config-kv-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.mod-config-kv-key {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 640px) {
+  .mod-config-kv-row {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+  }
+
+  .mod-config-kv-key {
+    grid-column: auto;
+  }
+}
+</style>

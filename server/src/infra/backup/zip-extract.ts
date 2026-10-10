@@ -23,7 +23,8 @@ const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
 export async function extractZipArchive(zipPath: string, targetDir: string, limits: ZipExtractLimits = DEFAULT_ZIP_EXTRACT_LIMITS): Promise<void> {
   fs.mkdirSync(targetDir, { recursive: true })
   const entries = new ArchiveEntries(targetDir, limits)
-  const zip = await yauzl.openPromise(zipPath, { lazyEntries: true, autoClose: false, strictFileNames: true })
+  // 兼容旧 Mod 包的反斜杠分隔符；yauzl 先转为 /，再由自身与 ArchiveEntries 校验路径。
+  const zip = await yauzl.openPromise(zipPath, { lazyEntries: true, autoClose: false, strictFileNames: false })
   let streamedBytes = 0
   try {
     while (true) {

@@ -43,8 +43,12 @@ fs.rmSync(outputRoot, { recursive: true, force: true })
 fs.mkdirSync(path.join(outputRoot, 'server', 'dist'), { recursive: true })
 
 await build({
-  entryPoints: [path.join(repoRoot, 'server', 'src', 'main.ts')],
-  outfile: path.join(outputRoot, 'server', 'dist', 'main.mjs'),
+  entryPoints: {
+    main: path.join(repoRoot, 'server', 'src', 'main.ts'),
+    'modinfo-reader-worker': path.join(repoRoot, 'server/src/infra/game-adapter/dst/modinfo-reader-worker.mjs'),
+  },
+  outdir: path.join(outputRoot, 'server', 'dist'),
+  outExtension: { '.js': '.mjs' },
   bundle: true,
   platform: 'node',
   format: 'esm',

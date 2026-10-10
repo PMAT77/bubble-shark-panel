@@ -1,6 +1,6 @@
 services:
   panel:
-    image: ${PANEL_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.16.0}
+    image: ${PANEL_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}
     build:
       context: .
       dockerfile: docker/unified/Dockerfile
@@ -37,12 +37,12 @@ services:
       BSP_INSTANCES_ROOT: /var/lib/bubblesharkpanel/instances
       BSP_BACKUPS_ROOT: /var/lib/bubblesharkpanel/backups
       DOCKER_HOST: unix:///var/run/docker.sock
-      PANEL_IMAGE: ${PANEL_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.16.0}
+      PANEL_IMAGE: ${PANEL_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}
       # 面板内一键更新的 updater 容器镜像（留空自动挑选：目标镜像 → 当前面板镜像 → 官方 CLI 镜像）
       BSP_PANEL_UPDATER_IMAGE: ${BSP_PANEL_UPDATER_IMAGE:-${GSH_PANEL_UPDATER_IMAGE:-}}
       # v0.2.2 起面板/DST/SteamCMD 合并为同一统一镜像；三个变量值一致，保留以便旧配置平滑迁移
-      BSP_GAME_DST_IMAGE: ${BSP_GAME_DST_IMAGE:-${GSH_GAME_DST_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.16.0}}
-      BSP_STEAMCMD_IMAGE: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.16.0}}
+      BSP_GAME_DST_IMAGE: ${BSP_GAME_DST_IMAGE:-${GSH_GAME_DST_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}}
+      BSP_STEAMCMD_IMAGE: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}}
       # 备选镜像 registry 候选（逗号分隔）：按顺序优先尝试，全部失败后回退主引用
       BSP_IMAGE_MIRRORS: ${BSP_IMAGE_MIRRORS:-${GSH_IMAGE_MIRRORS:-}}
       BSP_STEAMCMD_CONTAINER_MEMORY_MB: ${BSP_STEAMCMD_CONTAINER_MEMORY_MB:-${GSH_STEAMCMD_CONTAINER_MEMORY_MB:-}}
@@ -148,7 +148,7 @@ services:
       retries: 3
 
   steamcmd:
-    image: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.16.0}}
+    image: ${BSP_STEAMCMD_IMAGE:-${GSH_STEAMCMD_IMAGE:-ghcr.io/pmat77/bubblesharkpanel:v0.17.0}}
     profiles:
       - tools
     entrypoint: ["/bin/true"]

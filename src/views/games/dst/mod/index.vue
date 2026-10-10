@@ -13,11 +13,14 @@ import type {
 } from '@/api/modules/mod'
 import type { InstanceSummaryItem } from '@/api/modules/instance'
 import { useDebounceFn } from '@vueuse/core'
-import { ChevronRight } from 'lucide-vue-next'
+import { ChevronRight, GripVertical } from 'lucide-vue-next'
+import { useSortable } from '@vueuse/integrations/useSortable'
+import type { SortableEvent } from 'sortablejs'
+import { moveModLoadOrder } from './modLoadOrder'
 import type { NotificationReactive } from 'naive-ui'
 import { NAlert, NButton, NCard, NDataTable, NEmpty, NImage, NInput, NPagination, NRate, NSelect, NSwitch, NTabPane, NTabs, NTag, NTooltip, useDialog, useMessage, useNotification } from 'naive-ui'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
-import { computed, h, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiMod from '@/api/modules/mod'
 import type { ModDownloadQueueDto } from '@/api/modules/mod'
@@ -85,7 +88,7 @@ const retryingFailedMods = ref(false)
 const unsubscribingWorkshopIds = ref<Set<string>>(new Set())
 const checkedRowKeys = ref<Array<string | number>>([])
 const batchUpdating = ref(false)
-/** 加载顺序调整中：期间禁用全部上移/下移按钮，避免并发提交 */
+/** 加载顺序保存中，避免并发提交。 */
 const reorderingMods = ref(false)
 const configModalShow = ref(false)
 const localImportShow = ref(false)
@@ -722,7 +725,7 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
   {
     title: '操作',
     key: 'actions',
-    width: 190,
+    width: 260,
     render: row => h('div', { class: 'flex items-center gap-3' }, [
       // 订阅 / 取消订阅 / 重试都是 mod:install：只读账号不该看到这个入口
       ...(hasPermission('mod:install')
@@ -735,7 +738,7 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
                 : (row.installed ? 'default' : 'primary'),
               disabled: !hasSelectedInstance.value
                 || (unsubscribingWorkshopIds.value.has(row.workshopId))
-                || (resolveMarketSubscribeStatus(row) === 'pending'),
+                || isPendingWorkshop(row.workshopId),
               loading: unsubscribingWorkshopIds.value.has(row.workshopId),
               class: 'min-w-[4.5rem]',
               onClick: () => {
@@ -744,11 +747,8 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
                   confirmUnsubscribeFromMarket(row)
                   return
                 }
-                if (status === 'failed') {
+                if (status === 'failed' || status === 'pending') {
                   void retryFromMarket(row)
-                  return
-                }
-                if (status === 'pending') {
                   return
                 }
                 void installFromSteam(row)
@@ -760,8 +760,9 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
                   return '取消订阅'
                 }
                 if (isPendingWorkshop(row.workshopId)) {
-                  return '订阅中'
+                  return pendingDownloadLabel(row.workshopId)
                 }
+                if (resolveMarketSubscribeStatus(row) === 'pending') return '下载'
                 if (resolveMarketSubscribeStatus(row) === 'failed') {
                   return '重试'
                 }
@@ -769,6 +770,14 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
               },
             },
           )]
+        : []),
+      ...(resolveMarketSubscribeStatus(row) === 'failed' && hasPermission('mod:install')
+        ? [h(NButton, {
+            size: 'tiny',
+            disabled: marketActionDisabled(row),
+            loading: unsubscribingWorkshopIds.value.has(row.workshopId),
+            onClick: () => confirmUnsubscribeFromMarket(row),
+          }, { default: () => '取消订阅' })]
         : []),
       h(
         NButton,
@@ -787,6 +796,14 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
 const subscribedColumns: DataTableColumns<ModItemDto> = [
   {
     type: 'selection',
+  },
+  {
+    title: '顺序', key: 'loadOrder', width: 64,
+    render: row => hasPermission('mod:toggle') ? h('button', {
+      type: 'button', class: 'mod-sort-handle', disabled: !canDragMod(row),
+      'aria-label': `调整 ${row.name} 的加载顺序`, title: '拖动调整加载顺序，也可使用上下方向键',
+      onKeydown: (event: KeyboardEvent) => onModSortKeydown(event, row),
+    }, [h(GripVertical, { size: 16, 'aria-hidden': true })]) : String(row.loadOrder + 1),
   },
   {
     title: '缩略图',
@@ -870,13 +887,14 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
     title: '启用',
     key: 'enabled',
     width: 90,
-    // 没有 mod:toggle 就不给开关：改成只读标签，避免整列看起来是空的
-    render: row => (hasPermission('mod:toggle')
+    // 未就绪时不展示保存的启用设置；只读账号在就绪后显示状态标签。
+    render: row => row.installStatus !== 'ready'
+      ? h('span', { class: 'text-xs text-muted-foreground whitespace-normal' }, '未就绪，无法启用')
+      : (hasPermission('mod:toggle')
       ? h(NSwitch, {
           size: 'small',
           value: row.enabled,
           disabled: !hasSelectedInstance.value
-            || row.installStatus !== 'ready'
             || isPendingWorkshop(row.workshopId)
             || unsubscribingWorkshopIds.value.has(row.workshopId),
           'onUpdate:value': () => void toggleSubscribedMod(row),
@@ -887,9 +905,16 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
     title: '操作',
     key: 'actions',
     width: 400,
-    render: (row, index) => h('div', { class: 'flex items-center gap-3' }, [
+    render: row => h('div', { class: 'flex items-center gap-3' }, [
       ...(row.installStatus === 'pending' && !isPendingWorkshop(row.workshopId) && hasPermission('mod:install')
         ? [h(NButton, { size: 'tiny', onClick: () => void retryFailedInstall(row) }, { default: () => '下载' })] : []),
+      ...(row.installStatus === 'failed' && hasPermission('mod:install')
+        ? [h(NButton, {
+            size: 'tiny',
+            type: 'primary',
+            disabled: !hasSelectedInstance.value || unsubscribingWorkshopIds.value.has(row.workshopId) || isPendingWorkshop(row.workshopId),
+            onClick: () => void retryFailedInstall(row),
+          }, { default: () => '重试' })] : []),
       ...(row.installStatus !== 'ready' && hasPermission('mod:install')
         ? [h(NButton, { size: 'tiny', onClick: () => { localImportShow.value = true } }, { default: () => '本地导入' })] : []),
       ...(row.installStatus === 'ready'
@@ -939,22 +964,15 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
             NButton,
             {
               size: 'tiny',
-              type: row.installStatus === 'failed' ? 'primary' : 'default',
               disabled: !hasSelectedInstance.value
                 || unsubscribingWorkshopIds.value.has(row.workshopId)
                 || row.installStatus === 'pending'
                 || isPendingWorkshop(row.workshopId),
               loading: unsubscribingWorkshopIds.value.has(row.workshopId),
               class: 'w-16',
-              onClick: () => {
-                if (row.installStatus === 'failed') {
-                  void retryFailedInstall(row)
-                  return
-                }
-                confirmUnsubscribe(row)
-              },
+              onClick: () => confirmUnsubscribe(row),
             },
-            { default: () => (row.installStatus === 'failed' ? '重试' : '取消订阅') },
+            { default: () => '取消订阅' },
           )]
         : []),
       h(
@@ -967,31 +985,6 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
         },
         { default: () => '详情' },
       ),
-      // 加载顺序调整属于 mod:toggle
-      ...(hasPermission('mod:toggle')
-        ? [
-            h(
-              NButton,
-              {
-                size: 'tiny',
-                text: true,
-                disabled: !canMoveInstalledMod(row, index, -1),
-                onClick: () => void moveInstalledMod(index, -1),
-              },
-              { default: () => '上移' },
-            ),
-            h(
-              NButton,
-              {
-                size: 'tiny',
-                text: true,
-                disabled: !canMoveInstalledMod(row, index, 1),
-                onClick: () => void moveInstalledMod(index, 1),
-              },
-              { default: () => '下移' },
-            ),
-          ]
-        : []),
     ]),
   },
 ]
@@ -1037,6 +1030,10 @@ async function loadInstalledMods() {
     // 补缩略图：导入存档带进来的 Mod 本地没有图，服务端按创意工坊 ID 补齐后落库，只补缺的那些
     const response = await apiMod.getModList(id)
     if (request !== listRequest || id !== selectedInstanceId.value) return
+    if (dragSnapshot.value || reorderingMods.value) {
+      if (dragSnapshot.value) dragSnapshot.value.invalidated = true
+      return
+    }
     installedMods.value = response.data.mods
     if (previewRequestInstance !== id) {
       previewRequestInstance = id
@@ -1471,55 +1468,102 @@ async function checkModUpdates() {
   }
 }
 
-/** 可参与排序的 Mod：服务端只对「已就绪」的 Mod 落库加载顺序，其余行禁用上移/下移 */
+/** 加载顺序只对已就绪内容生效。 */
 function isReorderableInstalledMod(row: ModItemDto): boolean {
   return row.installStatus === 'ready' && !isPendingWorkshop(row.workshopId)
 }
 
-/**
- * 上移/下移按钮可用性：首行不能上移、末行不能下移、单个 Mod 全部禁用、请求进行中全部禁用；
- * 目标位置本身不可排序时同样禁用，避免出现「提示成功但顺序没变」。
- */
-function canMoveInstalledMod(row: ModItemDto, index: number, offset: number): boolean {
-  if (reorderingMods.value || !hasSelectedInstance.value || installedMods.value.length < 2) {
-    return false
+const subscribedTableRef = ref<InstanceType<typeof NDataTable> | null>(null)
+const subscribedCardsRef = ref<HTMLElement | null>(null)
+const sortElement = shallowRef<HTMLElement | null>(null)
+const dragSnapshot = shallowRef<{
+  action: ReturnType<typeof actionScope.capture>
+  targetId: string | null
+  nodes: Element[]
+  parent: HTMLElement
+  invalidated: boolean
+} | null>(null)
+const sortingDisabled = computed(() => !hasPermission('mod:toggle') || !hasSelectedInstance.value
+  || loadingInstalled.value || reorderingMods.value || installedMods.value.filter(isReorderableInstalledMod).length < 2)
+function canDragMod(row: ModItemDto) { return !sortingDisabled.value && isReorderableInstalledMod(row) }
+function subscribedRowProps(row: ModItemDto) { return { class: 'mod-sort-row', 'data-mod-id': row.workshopId } }
+function restoreDragDom(snapshot: NonNullable<typeof dragSnapshot.value>) {
+  // Sortable 先恢复 DOM，随后由 Vue 按服务端结果更新，避免 keyed diff 再移动一次。
+  for (const node of snapshot.nodes) if (node.parentNode === snapshot.parent) snapshot.parent.appendChild(node)
+}
+const sortable = useSortable(sortElement, installedMods, {
+  watchElement: true, handle: '.mod-sort-handle', draggable: '[data-mod-id]',
+  filter: (_event, target) => !installedMods.value.some(mod => mod.workshopId === target.dataset.modId && canDragMod(mod)),
+  preventOnFilter: false,
+  animation: 150, delay: 150, delayOnTouchOnly: true, touchStartThreshold: 5, ghostClass: 'mod-sort-ghost',
+  onUpdate: () => {}, // 不使用适配器的自动数组更新，保存成功后采用服务端顺序。
+  onMove: event => {
+    const row = installedMods.value.find(mod => mod.workshopId === event.related.dataset.modId)
+    const allowed = Boolean(row && canDragMod(row))
+    if (allowed && dragSnapshot.value) dragSnapshot.value.targetId = row!.workshopId
+    return allowed
+  },
+  onStart: event => {
+    dragSnapshot.value = { action: actionScope.capture(), targetId: null,
+      nodes: Array.from(event.from.children), parent: event.from, invalidated: false }
+  },
+  onEnd: (event: SortableEvent) => {
+    const snapshot = dragSnapshot.value
+    if (!snapshot) return
+    const readyIds = new Set(installedMods.value.filter(mod => mod.installStatus === 'ready').map(mod => mod.workshopId))
+    const workshopIds = Array.from(event.from.children).map(node => (node as HTMLElement).dataset.modId ?? '').filter(id => readyIds.has(id))
+    restoreDragDom(snapshot)
+    dragSnapshot.value = null
+    if (!snapshot.action.isCurrent()) return
+    if (snapshot.invalidated) { void loadInstalledMods(); return }
+    if (snapshot.targetId && workshopIds.length === readyIds.size) void saveModLoadOrder(workshopIds, event.item.dataset.modId ?? '')
+  },
+})
+watch([activeTab, isMobileMode, selectedInstanceId, () => installedMods.value.length], async () => {
+  await nextTick()
+  sortElement.value = activeTab.value !== 'subscribed' ? null : isMobileMode.value
+    ? subscribedCardsRef.value : subscribedTableRef.value?.$el.querySelector('.n-data-table-tbody') ?? null
+  sortable.option('disabled', sortingDisabled.value)
+}, { flush: 'post', immediate: true })
+watch(sortingDisabled, disabled => sortable.option('disabled', disabled))
+watch(() => installedMods.value.map(mod => `${mod.workshopId}:${mod.installStatus}:${isPendingWorkshop(mod.workshopId)}`).join(','), () => {
+  if (dragSnapshot.value) dragSnapshot.value.invalidated = true
+}, { flush: 'sync' })
+watch([selectedInstanceId, isMobileMode, activeTab], () => {
+  if (dragSnapshot.value) restoreDragDom(dragSnapshot.value)
+  dragSnapshot.value = null
+  sortElement.value = null
+}, { flush: 'sync' })
+onBeforeUnmount(() => {
+  if (dragSnapshot.value) restoreDragDom(dragSnapshot.value)
+  dragSnapshot.value = null
+})
+function onModSortKeydown(event: KeyboardEvent, row: ModItemDto) {
+  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+  event.preventDefault()
+  if (!canDragMod(row)) return
+  const offset = event.key === 'ArrowUp' ? -1 : 1
+  for (let index = installedMods.value.indexOf(row) + offset; index >= 0 && index < installedMods.value.length; index += offset) {
+    const target = installedMods.value[index]
+    if (isReorderableInstalledMod(target)) { void reorderInstalledMod(row.workshopId, target.workshopId); return }
   }
-  if (!isReorderableInstalledMod(row)) {
-    return false
-  }
-  const target = index + offset
-  if (target < 0 || target >= installedMods.value.length) {
-    return false
-  }
-  return isReorderableInstalledMod(installedMods.value[target])
 }
 
-/** 上移/下移一位：提交调整后的完整顺序，成功后以服务端返回的列表为准 */
-async function moveInstalledMod(index: number, offset: number) {
+async function reorderInstalledMod(fromId: string, toId: string) {
+  if (sortingDisabled.value) return
+  const workshopIds = moveModLoadOrder(installedMods.value, fromId, toId, isPendingWorkshop)
+  if (!workshopIds) return
+  await saveModLoadOrder(workshopIds, fromId)
+}
+
+async function saveModLoadOrder(workshopIds: string[], fromId: string) {
   const action = actionScope.capture()
-  const current = installedMods.value
-  const target = index + offset
-  const instanceId = selectedInstanceId.value
-  if (
-    !instanceId
-    || reorderingMods.value
-    || index < 0
-    || index >= current.length
-    || target < 0
-    || target >= current.length
-    || !isReorderableInstalledMod(current[index])
-    || !isReorderableInstalledMod(current[target])
-  ) {
-    return
-  }
-  const reordered = [...current]
-  const moved = reordered.splice(index, 1)
-  reordered.splice(target, 0, ...moved)
+  if (sortingDisabled.value || workshopIds.join(',') === installedMods.value.filter(mod => mod.installStatus === 'ready').map(mod => mod.workshopId).join(',')) return
+  listRequest++ // 丢弃保存前发起的列表请求。
   reorderingMods.value = true
+  let refresh = false
   try {
-    const response = await apiMod.reorderMods(instanceId, {
-      workshopIds: reordered.filter(mod => isReorderableInstalledMod(mod)).map(mod => mod.workshopId),
-    })
+    const response = await apiMod.reorderMods(action.instanceId, { workshopIds })
     if (!action.isCurrent()) return
     installedMods.value = response.data.mods
     const riskTip = response.data.riskTip?.trim()
@@ -1534,9 +1578,15 @@ async function moveInstalledMod(index: number, offset: number) {
       return
     }
     message.error(getErrorMessage(error, '调整 Mod 加载顺序失败，请稍后重试'))
+    refresh = true
   }
   finally {
-    if (action.isCurrent()) reorderingMods.value = false
+    if (action.isCurrent()) {
+      reorderingMods.value = false
+      if (refresh) await loadInstalledMods()
+      await nextTick()
+      if (action.isCurrent()) sortElement.value?.querySelector<HTMLButtonElement>(`[data-mod-id="${CSS.escape(fromId)}"] .mod-sort-handle`)?.focus()
+    }
   }
 }
 
@@ -1721,7 +1771,7 @@ function handleMarketAction(item: SteamModListQueryResultItem) {
     confirmUnsubscribeFromMarket(item)
     return
   }
-  if (status === 'failed') {
+  if (status === 'failed' || status === 'pending') {
     void retryFromMarket(item)
     return
   }
@@ -1733,22 +1783,15 @@ function handleMarketAction(item: SteamModListQueryResultItem) {
 function marketActionLabel(item: SteamModListQueryResultItem): string {
   const status = resolveMarketSubscribeStatus(item)
   if (item.installed || status === 'ready') return '取消订阅'
-  if (status === 'pending' || isPendingWorkshop(item.workshopId)) return '订阅中'
+  if (isPendingWorkshop(item.workshopId)) return pendingDownloadLabel(item.workshopId)
+  if (status === 'pending') return '下载'
   return status === 'failed' ? '重试' : '订阅'
 }
 
 function marketActionDisabled(item: SteamModListQueryResultItem): boolean {
   return !hasSelectedInstance.value
     || unsubscribingWorkshopIds.value.has(item.workshopId)
-    || resolveMarketSubscribeStatus(item) === 'pending'
-}
-
-function handleSubscribedAction(item: ModItemDto) {
-  if (item.installStatus === 'failed') {
-    void retryFailedInstall(item)
-    return
-  }
-  confirmUnsubscribe(item)
+    || isPendingWorkshop(item.workshopId)
 }
 
 function confirmUnsubscribe(row: ModItemDto) {
@@ -2111,6 +2154,14 @@ onMounted(async () => {
                     >
                       {{ marketActionLabel(mod) }}
                     </NButton>
+                    <NButton
+                      v-if="resolveMarketSubscribeStatus(mod) === 'failed' && hasPermission('mod:install')"
+                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
+                      :disabled="marketActionDisabled(mod)"
+                      @click="confirmUnsubscribeFromMarket(mod)"
+                    >
+                      取消订阅
+                    </NButton>
                     <NButton :disabled="!hasSelectedInstance" @click="goToModDetail(mod.workshopId)">
                       详情
                     </NButton>
@@ -2256,6 +2307,7 @@ onMounted(async () => {
                 <NDataTable
                   v-if="!isMobileMode"
                   :key="`subscribed-${selectedInstanceId}`"
+                  ref="subscribedTableRef"
                   :bordered="false"
                   :single-line="false"
                   :columns="subscribedColumns"
@@ -2263,6 +2315,7 @@ onMounted(async () => {
                   :loading="loadingInstalled"
                   :pagination="false"
                   :row-key="(row: ModItemDto) => row.workshopId"
+                  :row-props="subscribedRowProps"
                   :checked-row-keys="checkedRowKeys"
                   class="dst-mod-table dst-mod-subscribed-table shrink-0 flex-1"
                   flex-height
@@ -2311,9 +2364,11 @@ onMounted(async () => {
                     <template v-if="lastUpdateCheckedAt"> · 上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</template>
                   </p>
                   <NEmpty v-if="!loadingInstalled && installedMods.length === 0" size="small" :description="subscribedEmptyDescription" />
+                  <div ref="subscribedCardsRef" class="space-y-3">
                   <article
-                    v-for="(mod, modIndex) in installedMods"
+                    v-for="mod in installedMods"
                     :key="mod.workshopId"
+                    :data-mod-id="mod.workshopId"
                     class="rounded-lg border border-border bg-card p-3 space-y-3"
                   >
                     <div class="flex gap-3">
@@ -2345,6 +2400,15 @@ onMounted(async () => {
                     <p v-if="mod.installError" class="text-sm text-rose-600 dark:text-rose-400">{{ mod.installError }}</p>
                     <div class="flex gap-2">
                       <NButton
+                        v-if="mod.installStatus === 'failed' && hasPermission('mod:install')"
+                        class="flex-1"
+                        type="primary"
+                        :disabled="!hasSelectedInstance || unsubscribingWorkshopIds.has(mod.workshopId) || isPendingWorkshop(mod.workshopId)"
+                        @click="retryFailedInstall(mod)"
+                      >
+                        重试
+                      </NButton>
+                      <NButton
                         v-if="isModUpdatable(mod) && hasPermission('mod:install')"
                         class="flex-1"
                         type="primary"
@@ -2372,11 +2436,11 @@ onMounted(async () => {
                       <NButton
                         class="flex-1"
                         :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
-                        :disabled="!hasSelectedInstance || mod.installStatus === 'pending' || isPendingWorkshop(mod.workshopId)"
-                        @click="handleSubscribedAction(mod)"
+                        :disabled="!hasSelectedInstance || unsubscribingWorkshopIds.has(mod.workshopId) || mod.installStatus === 'pending' || isPendingWorkshop(mod.workshopId)"
+                        @click="confirmUnsubscribe(mod)"
                         v-if="hasPermission('mod:install')"
                       >
-                        {{ mod.installStatus === 'failed' ? '重试' : '取消订阅' }}
+                        取消订阅
                       </NButton>
                       <NButton :disabled="!hasSelectedInstance" @click="goToModDetail(mod.workshopId)">
                         详情
@@ -2386,26 +2450,13 @@ onMounted(async () => {
                       <NButton v-if="mod.installStatus === 'pending' && !isPendingWorkshop(mod.workshopId)" @click="retryFailedInstall(mod)">下载</NButton>
                       <NButton @click="localImportShow = true">本地导入</NButton>
                     </div>
-                    <div v-if="installedMods.length > 1 && hasPermission('mod:toggle')" class="flex items-center justify-end gap-2">
-                      <span class="text-xs text-muted-foreground">加载顺序</span>
-                      <NButton
-                        size="small"
-                        secondary
-                        :disabled="!canMoveInstalledMod(mod, modIndex, -1)"
-                        @click="moveInstalledMod(modIndex, -1)"
-                      >
-                        上移
-                      </NButton>
-                      <NButton
-                        size="small"
-                        secondary
-                        :disabled="!canMoveInstalledMod(mod, modIndex, 1)"
-                        @click="moveInstalledMod(modIndex, 1)"
-                      >
-                        下移
-                      </NButton>
-                    </div>
+                    <button v-if="hasPermission('mod:toggle')" type="button" class="mod-sort-handle ml-auto"
+                      :disabled="!canDragMod(mod)" :aria-label="`调整 ${mod.name} 的加载顺序`"
+                      title="拖动调整加载顺序，也可使用上下方向键" @keydown="onModSortKeydown($event, mod)">
+                      <GripVertical :size="20" aria-hidden="true" /><span>加载顺序</span>
+                    </button>
                   </article>
+                  </div>
                 </div>
               </div>
             </NTabPane>
@@ -2434,6 +2485,18 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.dst-mod-page :deep(.mod-sort-handle) {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+  cursor: grab;
+  touch-action: none;
+}
+.dst-mod-page :deep(.mod-sort-handle:disabled) { cursor: default; opacity: 0.35; }
+.dst-mod-page :deep(.mod-sort-handle:focus-visible) { outline: 2px solid currentColor; outline-offset: 2px; }
+.dst-mod-page :deep(.mod-sort-ghost) { opacity: 0.4; }
 .dst-mod-page :deep(.group\/pagemain) {
   display: flex;
   flex-direction: column;

@@ -75,6 +75,7 @@ declare global {
   const resolveComponent: typeof import('vue').resolveComponent
   const resolveGuestLoginPrefill: typeof import('../composables/app/guestLoginPrefill').resolveGuestLoginPrefill
   const resolvePanelVersionMismatch: typeof import('../composables/panelVersionGuard').resolvePanelVersionMismatch
+  const resolvePendingWorkshopIds: typeof import('../composables/modDownloadQueuePoller').resolvePendingWorkshopIds
   const setActivePinia: typeof import('pinia').setActivePinia
   const setMapStoreSuffix: typeof import('pinia').setMapStoreSuffix
   const shallowReactive: typeof import('vue').shallowReactive

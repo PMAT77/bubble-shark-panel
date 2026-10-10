@@ -2,7 +2,7 @@ import type { MaybeRefOrGetter } from 'vue'
 import type { ModDownloadQueueDto, ModInstallJobDto, ModInstallJobPhase, ModInstallPayload, ModItemDto, ModListDto } from '@/api/modules/mod'
 import { computed, onScopeDispose, ref, toValue } from 'vue'
 import apiMod from '@/api/modules/mod'
-import { createModDownloadQueuePoller, shouldPollModDownloadQueue } from './modDownloadQueuePoller'
+import { createModDownloadQueuePoller, resolvePendingWorkshopIds, shouldPollModDownloadQueue } from './modDownloadQueuePoller'
 import type { ModDownloadQueuePoller } from './modDownloadQueuePoller'
 
 export interface ModInstallHandlers {
@@ -34,11 +34,7 @@ export function useInstanceModState(instanceId: MaybeRefOrGetter<string>) {
     return promise
   }
 
-  const pendingWorkshopIds = computed(() => new Set([
-    ...optimisticWorkshopIds.value,
-    ...(downloadQueue.value?.currentWorkshopIds ?? []),
-    ...(downloadQueue.value?.queueWorkshopIds ?? []),
-  ]))
+  const pendingWorkshopIds = computed(() => resolvePendingWorkshopIds(downloadQueue.value, optimisticWorkshopIds.value))
   const subscribingPhases = computed(() => {
     const phases = new Map<string, ModInstallJobPhase>()
     for (const item of downloadQueue.value?.items ?? []) {

@@ -17,7 +17,10 @@ import { build } from 'esbuild'
 const repoRoot = path.resolve(import.meta.dirname, '..')
 
 await build({
-  entryPoints: [path.join(repoRoot, 'server/src/main.ts')],
+  entryPoints: {
+    main: path.join(repoRoot, 'server/src/main.ts'),
+    'modinfo-reader-worker': path.join(repoRoot, 'server/src/infra/game-adapter/dst/modinfo-reader-worker.mjs'),
+  },
   outdir: path.join(repoRoot, 'dist-server'),
   bundle: true,
   splitting: true,

@@ -1,7 +1,7 @@
 {
   "name": "bubblesharkpanel",
   "type": "module",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -67,6 +67,7 @@
     "echarts": "catalog:",
     "es-toolkit": "catalog:",
     "fastify": "catalog:",
+    "fengari": "0.1.5",
     "hotkeys-js": "catalog:",
     "lucide-vue-next": "catalog:",
     "mitt": "catalog:",
@@ -79,6 +80,7 @@
     "pinyin-pro": "catalog:",
     "reka-ui": "catalog:",
     "scule": "catalog:",
+    "sortablejs": "^1.15.7",
     "tailwind-merge": "catalog:",
     "tar-stream": "3.2.0",
     "vee-validate": "catalog:",
@@ -98,6 +100,7 @@
     "@types/dockerode": "catalog:",
     "@types/nprogress": "catalog:",
     "@types/path-browserify": "catalog:",
+    "@types/sortablejs": "^1.15.9",
     "@types/tar-stream": "3.1.4",
     "@types/yauzl": "catalog:",
     "@unocss/core": "catalog:",

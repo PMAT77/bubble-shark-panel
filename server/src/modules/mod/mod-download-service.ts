@@ -106,6 +106,9 @@ interface InstanceQueueState {
   retryFailed: boolean
   mods: DbInstanceMod[]
   eligibleIds: string[]
+  /** 显式操作仅处理这些目标及依赖；全量开始可将现有队列扩展为自动补齐。 */
+  requestedIds: Set<string>
+  includeBackfill: boolean
 }
 
 const modInstallJobs = new Map<string, ModInstallJobRecord>()
@@ -360,6 +363,7 @@ async function buildBackfillPlan(input: {
   mods: DbInstanceMod[]
   now: number
   persistDependencies?: boolean
+  rootIds?: ReadonlySet<string>
 }): Promise<BackfillPlan> {
   const { instanceId, installPath, mods, now } = input
   const dependencyMap = readModDependencyMap(installPath)
@@ -381,7 +385,7 @@ async function buildBackfillPlan(input: {
   }
 
   for (const mod of mods) {
-    if ((!mod.enabled && !mod.downloadIntent) || included.has(mod.workshopId)) {
+    if ((input.rootIds ? !input.rootIds.has(mod.workshopId) : (!mod.enabled && !mod.downloadIntent)) || included.has(mod.workshopId)) {
       continue
     }
     included.add(mod.workshopId)
@@ -525,7 +529,9 @@ function takeHeadBatch(state: InstanceQueueState): SelectedBatch | null {
     return null
   }
   const force = state.head[0].force
-  const items = state.head.filter(item => item.force === force).slice(0, state.batchSize)
+  // 不跨越不同 force 的依赖批次，避免把强制更新的父项提到缺失依赖之前。
+  const boundary = state.head.findIndex(item => item.force !== force)
+  const items = state.head.slice(0, boundary < 0 ? state.head.length : boundary).slice(0, state.batchSize)
   const consumed = new Set(items)
   state.head = state.head.filter(item => !consumed.has(item))
   state.active = items
@@ -552,6 +558,7 @@ async function planBackfillBatch(
     mods,
     now: Date.now(),
     persistDependencies: true,
+    rootIds: state.includeBackfill ? undefined : state.requestedIds,
   })
   state.eligibleIds = plan.eligibleIds
   const first = plan.order[0]
@@ -888,9 +895,11 @@ async function runQueueLoop(state: InstanceQueueState): Promise<void> {
  */
 async function prepareQueue(state: InstanceQueueState): Promise<void> {
   let mods = await listInstanceModsFn(state.instanceId)
+  const plan = await buildBackfillPlan({ instanceId: state.instanceId, installPath: state.installPath, mods, now: Date.now(),
+    rootIds: state.includeBackfill ? undefined : state.requestedIds })
+  state.eligibleIds = plan.eligibleIds
   if (state.retryFailed) {
     state.retryFailed = false
-    const plan = await buildBackfillPlan({ instanceId: state.instanceId, installPath: state.installPath, mods, now: Date.now() })
     const failedMods = mods.filter(mod => mod.installStatus === 'failed' && plan.eligibleIds.includes(mod.workshopId))
     for (const mod of failedMods) {
       await patchMod(state.instanceId, mod.workshopId, {
@@ -920,7 +929,7 @@ function recalcQueueTotal(state: InstanceQueueState, mods: DbInstanceMod[]): voi
   const waiting = new Set(state.head.map(item => item.workshopId))
   for (const id of state.eligibleIds) if (!mods.some(mod => mod.workshopId === id)) waiting.add(id)
   for (const mod of mods) {
-    if (mod.installStatus === 'pending' && (state.eligibleIds.includes(mod.workshopId) || mod.enabled || mod.downloadIntent)) {
+    if (mod.installStatus === 'pending' && (state.eligibleIds.includes(mod.workshopId) || (state.includeBackfill && (mod.enabled || mod.downloadIntent)))) {
       waiting.add(mod.workshopId)
     }
   }
@@ -949,7 +958,7 @@ function toQueueDto(state: InstanceQueueState): ModDownloadQueueDto {
     const job = modInstallJobs.get(buildJobKey(state.instanceId, mod.workshopId))
     const status = active ? 'pending' : mod.installStatus
     return { workshopId: mod.workshopId, installStatus: status,
-      phase: active ? (job?.phase ?? 'waiting_steamcmd') : status === 'ready' ? 'ready' : status === 'failed' ? 'failed' : mod.nextRetryAt ? 'retry_wait' : queuedIds.has(mod.workshopId) ? 'queued' : 'inactive',
+      phase: active ? (job?.phase ?? 'waiting_steamcmd') : status === 'ready' ? 'ready' : status === 'failed' ? 'failed' : queuedIds.has(mod.workshopId) ? (mod.nextRetryAt ? 'retry_wait' : 'queued') : 'inactive',
       error: mod.installError, nextRetryAt: mod.nextRetryAt }
   })
   for (const id of queuedIds) {
@@ -996,19 +1005,27 @@ export async function startModDownloadQueue(input: {
   head?: ModDownloadQueueItem[]
   /** 用户显式点「开始下载」时为 true：把退避耗尽的失败项重置后一起排队 */
   retryFailed?: boolean
+  /** 单项/选中项入口为 false；全量开始默认自动补齐。 */
+  includeBackfill?: boolean
 }): Promise<ModDownloadQueueDto> {
   const instanceId = input.instanceId.trim()
   assertInstanceContentAvailable(instanceId)
   const installPath = input.installPath
   const existing = queueStates.get(instanceId)
   if (existing && existing.runPromise) {
+    if (input.includeBackfill === false && (existing.pauseRequested || existing.cancelRequested || existing.status === 'idle' || existing.status === 'paused')) {
+      await existing.runPromise
+      return startModDownloadQueue(input)
+    }
     if (input.head && input.head.length > 0) {
+      input.head.forEach(item => existing.requestedIds.add(item.workshopId))
       const previousHeadSize = existing.head.length
       existing.head = mergeQueueItems(existing.head, input.head.filter(item => !existing.active.some(active => active.workshopId === item.workshopId)))
       // 只把真正新增的计入总数；去重后的差额会在下一轮 recalcQueueTotal 里被纠正
       existing.total += existing.head.length - previousHeadSize
     }
     existing.retryFailed = existing.retryFailed || input.retryFailed === true
+    existing.includeBackfill = existing.includeBackfill || input.includeBackfill !== false
     return toQueueDto(existing)
   }
 
@@ -1037,6 +1054,8 @@ export async function startModDownloadQueue(input: {
     retryFailed: input.retryFailed === true,
     mods: [],
     eligibleIds: [],
+    requestedIds: new Set(head.map(item => item.workshopId)),
+    includeBackfill: input.includeBackfill !== false,
   }
   // 同步占位：worker 在下一个 await 之前就被登记为「已有一条队列」
   queueStates.set(instanceId, state)
@@ -1103,8 +1122,9 @@ export async function resolveModDownloadQueueState(input: {
 }): Promise<ModDownloadQueueDto> {
   const instanceId = input.instanceId.trim()
   const mods = await listInstanceModsFn(instanceId)
-  const plan = await buildBackfillPlan({ ...input, mods, now: Date.now() })
   const state = queueStates.get(instanceId)
+  const plan = await buildBackfillPlan({ ...input, mods, now: Date.now(),
+    rootIds: state?.runPromise && !state.includeBackfill ? state.requestedIds : undefined })
   if (state) {
     state.mods = mods
     state.eligibleIds = plan.eligibleIds
@@ -1180,6 +1200,24 @@ async function resolveReadyWithoutQueue(
   return toJobDto(record)
 }
 
+/** 已知依赖先于目标；显式重试只重置这个闭包，已就绪依赖不强制更新。 */
+async function prepareRequestedItems(instanceId: string, installPath: string, items: ModDownloadQueueItem[]): Promise<ModDownloadQueueItem[]> {
+  const rootIds = new Set(items.map(item => item.workshopId))
+  let mods = await listInstanceModsFn(instanceId)
+  const plan = await buildBackfillPlan({ instanceId, installPath, mods, now: Date.now(), rootIds, persistDependencies: true })
+  for (const mod of mods) {
+    if (plan.eligibleIds.includes(mod.workshopId) && !rootIds.has(mod.workshopId) && (mod.installStatus === 'failed' || mod.nextRetryAt)) {
+      await patchMod(instanceId, mod.workshopId, { installStatus: 'pending', installError: null, retryCount: 0, nextRetryAt: null })
+    }
+  }
+  mods = await listInstanceModsFn(instanceId)
+  const ordered = await buildBackfillPlan({ instanceId, installPath, mods, now: Date.now(), rootIds })
+  const explicit = new Map<string, ModDownloadQueueItem>()
+  // 同一项既是依赖又被明确选中时，保留选中项的更新意图与 payload。
+  for (const item of items) if (!explicit.has(item.workshopId) || item.payload) explicit.set(item.workshopId, item)
+  return ordered.order.map(workshopId => explicit.get(workshopId) ?? { workshopId, force: false, source: 'backfill' as const })
+}
+
 export async function enqueueModDownload(input: ModDownloadJobInput): Promise<ModInstallJobDto> {
   const workshopId = input.payload.workshopId.trim()
   const downloadIds = collectDownloadWorkshopIds(input.payload)
@@ -1217,20 +1255,21 @@ export async function enqueueModDownload(input: ModDownloadJobInput): Promise<Mo
   await upsertPendingModRecord({ ...input, force })
   for (const id of downloadIds.filter(id => id !== workshopId)) {
     const existing = await getInstanceModByWorkshopIdFn(input.instanceId, id)
-    if (existing?.installStatus === 'ready' && !force) continue
-    await upsertPendingModRecord({ ...input, force, payload: { workshopId: id, enabled: existing?.enabled ?? true } })
+    if (existing?.installStatus === 'ready') continue
+    await upsertPendingModRecord({ ...input, force: false, payload: { workshopId: id, enabled: existing?.enabled ?? true } })
   }
   beginJobRecords(input.instanceId, [workshopId])
   const head: ModDownloadQueueItem[] = downloadIds.map(id => ({
     workshopId: id,
-    force,
+    force: id === workshopId && force,
     source: 'user' as const,
     payload: id === workshopId ? input.payload : undefined,
   }))
   await startModDownloadQueue({
     instanceId: input.instanceId,
     installPath: input.installPath,
-    head,
+    head: await prepareRequestedItems(input.instanceId, input.installPath, head),
+    includeBackfill: false,
   })
   return getModInstallJob(input.instanceId, workshopId)
 }
@@ -1284,14 +1323,14 @@ export async function enqueueModDownloads(input: {
     })
     for (const id of downloadIds.filter(id => id !== workshopId)) {
       const existing = await getInstanceModByWorkshopIdFn(input.instanceId, id)
-      if (existing?.installStatus === 'ready' && !force) continue
-      await upsertPendingModRecord({ ...input, force, payload: { workshopId: id, enabled: existing?.enabled ?? true } })
+      if (existing?.installStatus === 'ready') continue
+      await upsertPendingModRecord({ ...input, force: false, payload: { workshopId: id, enabled: existing?.enabled ?? true } })
     }
     beginJobRecords(input.instanceId, [workshopId])
     for (const id of downloadIds) {
       head.push({
         workshopId: id,
-        force,
+        force: id === workshopId && force,
         source: 'user',
         payload: id === workshopId ? payload : undefined,
       })
@@ -1302,7 +1341,8 @@ export async function enqueueModDownloads(input: {
     await startModDownloadQueue({
       instanceId: input.instanceId,
       installPath: input.installPath,
-      head,
+      head: await prepareRequestedItems(input.instanceId, input.installPath, head),
+      includeBackfill: false,
     })
   }
   return jobs

@@ -5,6 +5,7 @@ import {
   createModDownloadQueuePoller,
   MOD_DOWNLOAD_QUEUE_POLL_INTERVAL_MS,
   shouldPollModDownloadQueue,
+  resolvePendingWorkshopIds,
 } from './modDownloadQueuePoller.ts'
 
 function createQueueDto(overrides: Partial<ModDownloadQueueDto> = {}): ModDownloadQueueDto {
@@ -33,6 +34,16 @@ function createQueueDto(overrides: Partial<ModDownloadQueueDto> = {}): ModDownlo
     ...overrides,
   }
 }
+
+it('only locks active queue items and submitting requests, leaving idle/paused candidates actionable', () => {
+  for (const status of ['idle', 'paused'] as const) {
+    assert.deepEqual([...resolvePendingWorkshopIds(createQueueDto({ status }), ['submitting'])], ['submitting'])
+  }
+  for (const status of ['running', 'pausing'] as const) {
+    assert.deepEqual([...resolvePendingWorkshopIds(createQueueDto({ status, currentWorkshopIds: ['1'], queueWorkshopIds: ['2'] }), ['1'])], ['1', '2'])
+  }
+  assert.deepEqual([...resolvePendingWorkshopIds(null)], [])
+})
 
 /** 冲刷 async 链，让轮询器的 await 走完 */
 function flush(): Promise<void> {

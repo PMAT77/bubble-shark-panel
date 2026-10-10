@@ -70,6 +70,23 @@ it('ZIP verifies CRC and rejects Unix symlink attributes', async () => {
     assert.equal(fs.existsSync(file), false, '损坏 ZIP 拒绝后应已关闭归档文件')
   }
 })
+it('ZIP rejects traversal, absolute paths and collisions after separator normalization', async () => {
+  for (const names of [
+    ['..\\escape'],
+    ['new_fonts\\..\\..\\escape'],
+    ['\\escape'],
+    ['C:\\escape'],
+    ['\\\\server\\share\\escape'],
+    ['a/file', 'a\\file'],
+    ['a', 'a\\child'],
+  ]) {
+    const file = path.join(root, `zip-${seq++}.zip`)
+    fs.writeFileSync(file, zipSync(Object.fromEntries(names.map(name => [name, strToU8('data')]))))
+    await assert.rejects(extractZipArchive(file, path.join(root, `extract-${seq++}`)), /path|路径|重复|冲突/)
+    fs.unlinkSync(file)
+    assert.equal(fs.existsSync(path.join(root, 'escape')), false)
+  }
+})
 it('interrupted upload closes its stream and removes the temporary record', async () => {
   const uploads = path.join(root, 'uploads')
   let sent = false

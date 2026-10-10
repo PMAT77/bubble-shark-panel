@@ -11,6 +11,12 @@ import type { ModDownloadQueueDto, ModDownloadQueueStatus } from '../api/modules
  */
 export const MOD_DOWNLOAD_QUEUE_POLL_INTERVAL_MS = 3000
 
+/** 空闲/暂停时的候选只是待下载，不能锁住单项操作。 */
+export function resolvePendingWorkshopIds(queue: ModDownloadQueueDto | null, submitting: Iterable<string> = []): Set<string> {
+  const running = queue?.status === 'running' || queue?.status === 'pausing'
+  return new Set([...submitting, ...(running ? [...queue.currentWorkshopIds, ...queue.queueWorkshopIds] : [])])
+}
+
 /**
  * 是否需要继续轮询队列。
  *

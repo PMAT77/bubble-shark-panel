@@ -97,7 +97,8 @@ const installButtonText = computed(() => {
 const installButtonDisabled = computed(() =>
   !detail.value
   || !instanceId.value
-  || isDownloading.value,
+  || isDownloading.value
+  || unsubscribing.value,
 )
 
 function pendingDownloadLabel(): string {
@@ -518,8 +519,9 @@ watch(contentLocale, () => {
             {{ installButtonText }}
           </NButton>
           <NButton
-            v-if="isSubscribedReady && hasPermission('mod:install')"
+            v-if="(isSubscribedReady || detail.subscribeStatus === 'failed') && hasPermission('mod:install')"
             :loading="unsubscribing"
+            :disabled="installButtonDisabled"
             @click="confirmUnsubscribe"
           >
             取消订阅

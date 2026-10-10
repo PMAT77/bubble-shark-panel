@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { SaveImportCandidate, SaveImportProbeResult, SaveImportResult, SaveImportTokenSource } from '@/api/modules/backup'
-import { NAlert, NButton, NInput, NModal, NProgress, NSelect, NTag, useDialog } from 'naive-ui'
+import { NAlert, NButton, NInput, NModal, NProgress, NSelect, NTag, useDialog, useThemeVars } from 'naive-ui'
 import type { SelectOption } from 'naive-ui'
+import { TriangleAlert } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import apiBackup from '@/api/modules/backup'
 import { useRouter } from 'vue-router'
 import { routeToDstModList } from '@/navigation/game-routes'
+import { collectSaveImportNotices } from './saveImportResultPresentation'
 
 defineOptions({
   name: 'SaveImportModal',
@@ -23,6 +25,7 @@ const emit = defineEmits<{
 }>()
 
 const dialog = useDialog()
+const themeVars = useThemeVars()
 const router = useRouter()
 const { auth: hasPermission } = useAppAuth()
 const canReadMods = computed(() => hasPermission('mod:read'))
@@ -46,6 +49,9 @@ const probeResult = ref<SaveImportProbeResult | null>(null)
 const selectedPath = ref<string | null>(null)
 const clusterToken = ref('')
 const importResult = ref<SaveImportResult | null>(null)
+const resultNotices = computed(() => importResult.value
+  ? collectSaveImportNotices(importResult.value)
+  : { warnings: [], notes: [] })
 
 const selectedCandidate = computed<SaveImportCandidate | null>(() => {
   const candidates = probeResult.value?.candidates ?? []
@@ -65,7 +71,7 @@ const tokenSourceLabels: Record<SaveImportTokenSource, string> = {
   provided: '使用导入时填写的令牌',
   existing: '沿用实例已有令牌',
   source: '使用源存档自带的令牌',
-  none: '未配置令牌（公网游玩需到房间设置补填）',
+  none: '未配置',
 }
 
 const canSubmit = computed(() => Boolean(props.instanceId) && Boolean(selectedCandidate.value) && !submitting.value)
@@ -315,41 +321,86 @@ watch(() => props.show, (visible) => {
       </template>
 
       <template v-else>
-        <NAlert type="success" :show-icon="false">
-          {{ importResult.missingWorkshopContent.length ? '存档已导入，部分 Mod 文件尚未准备好。' : '存档导入完成，可启动实例验证世界进度。' }}
-        </NAlert>
-        <div class="importer-result">
-          <div class="importer-candidate-row">
-            <span class="importer-label">导入世界</span>
-            <span>{{ importResult.importedShards.map(shardLabel).join('、') || '无' }}</span>
-          </div>
-          <div class="importer-candidate-row">
-            <span class="importer-label">Mod</span>
-            <span>{{ importResult.modCount }} 个已导入</span>
-          </div>
-          <div class="importer-candidate-row">
-            <span class="importer-label">令牌</span>
-            <span>{{ tokenSourceLabels[importResult.tokenSource] }}</span>
-          </div>
-          <div class="importer-candidate-row">
-            <span class="importer-label">安全备份</span>
-            <span>{{ importResult.safetyBackupId ? '已创建（导入前自动备份，可在列表恢复）' : '实例原本无存档，未创建' }}</span>
-          </div>
-          <div v-if="importResult.gamePortSynced" class="importer-candidate-row">
-            <span class="importer-label">端口</span>
-            <span>端口已自动改成这个实例能用的</span>
-          </div>
-          <div v-if="importResult.missingWorkshopContent.length > 0" class="importer-warn">
-            缺失 Mod：{{ importResult.missingWorkshopContent.join('、') }}。
-            <NButton v-if="canReadMods" size="small" @click="openMissingMods">处理缺失 Mod</NButton>
-            <span v-else>请联系有 Mod 管理权限的管理员处理。</span>
-          </div>
-          <div v-for="warning in importResult.warnings" :key="warning" class="importer-warn">
-            ⚠ {{ warning }}
-          </div>
-          <div class="importer-warn">
-            ⚠ 建议到「房间设置」核对导入的房间信息后重新保存一次。
-          </div>
+        <div
+          class="importer-result"
+          :style="{
+            '--importer-result-text': themeVars.textColor2,
+            '--importer-result-heading': themeVars.textColor1,
+            '--importer-result-muted': themeVars.textColor3,
+            '--importer-result-warning': themeVars.warningColor,
+            '--importer-result-border': themeVars.dividerColor,
+            '--importer-result-details-bg': themeVars.codeColor,
+            '--importer-result-focus': themeVars.primaryColor,
+          }"
+        >
+          <NAlert type="success" :show-icon="false">
+            存档导入完成
+          </NAlert>
+
+          <section class="importer-result-section" aria-label="导入结果">
+            <h3 class="importer-section-title">导入结果</h3>
+            <dl class="importer-result-summary">
+              <dt>导入世界</dt>
+              <dd>{{ importResult.importedShards.map(shardLabel).join('、') || '无' }}</dd>
+              <dt>Mod 配置</dt>
+              <dd>{{ importResult.modCount }} 个</dd>
+              <dt>安全备份</dt>
+              <dd>{{ importResult.safetyBackupId ? '已创建导入前备份' : '实例原本无存档，未创建' }}</dd>
+              <template v-if="importResult.tokenSource !== 'none'">
+                <dt>Klei 令牌</dt>
+                <dd>{{ tokenSourceLabels[importResult.tokenSource] }}</dd>
+              </template>
+            </dl>
+          </section>
+
+          <section
+            v-if="importResult.missingWorkshopContent.length > 0 || importResult.tokenSource === 'none'"
+            class="importer-result-section"
+            aria-label="待处理事项"
+          >
+            <h3 class="importer-section-title">待处理事项</h3>
+            <div v-if="importResult.missingWorkshopContent.length > 0" class="importer-task">
+              <div class="importer-task-title">
+                <TriangleAlert :size="16" aria-hidden="true" />
+                <span>{{ importResult.missingWorkshopContent.length }} 个 Mod 文件待补齐</span>
+              </div>
+              <NButton v-if="canReadMods" text size="small" type="primary" @click="openMissingMods">
+                前往「Mod 管理 → 已订阅」补齐文件
+              </NButton>
+              <p v-else>请联系有 Mod 管理权限的管理员处理。</p>
+              <details class="importer-mod-details">
+                <summary>查看缺失 Mod ID（{{ importResult.missingWorkshopContent.length }}）</summary>
+                <ul class="importer-mod-ids" tabindex="0" aria-label="缺失 Mod ID">
+                  <li v-for="id in importResult.missingWorkshopContent" :key="id">{{ id }}</li>
+                </ul>
+              </details>
+            </div>
+            <div v-if="importResult.tokenSource === 'none'" class="importer-task">
+              <div class="importer-task-title">
+                <TriangleAlert :size="16" aria-hidden="true" />
+                <span>未配置 Klei 集群令牌</span>
+              </div>
+              <p>公网游玩需在「房间设置」补填。</p>
+            </div>
+          </section>
+
+          <section v-if="resultNotices.warnings.length" class="importer-result-section" aria-label="其他提醒">
+            <h3 class="importer-section-title">其他提醒</h3>
+            <ul class="importer-extra-warnings">
+              <li v-for="(warning, index) in resultNotices.warnings" :key="index">
+                <TriangleAlert :size="16" aria-hidden="true" />
+                <span>{{ warning }}</span>
+              </li>
+            </ul>
+          </section>
+
+          <section class="importer-result-section importer-result-notes" aria-label="补充说明">
+            <h3 class="importer-section-title">补充说明</h3>
+            <p v-if="importResult.safetyBackupId">导入前备份可在备份列表恢复。</p>
+            <p v-for="note in resultNotices.notes" :key="note">{{ note }}</p>
+            <p v-if="importResult.gamePortSynced && !resultNotices.notes.length">游戏端口已按本机配置同步。</p>
+            <p>建议核对「房间设置」并重新保存一次。</p>
+          </section>
         </div>
       </template>
     </div>
@@ -445,7 +496,154 @@ watch(() => props.show, (visible) => {
 .importer-result {
   display: flex;
   flex-direction: column;
+  gap: 20px;
+  max-height: calc(100dvh - 180px);
+  overflow-y: auto;
+  --importer-result-warning-text: color-mix(in srgb, var(--importer-result-warning) 55%, var(--importer-result-heading));
+  --importer-result-secondary-text: color-mix(in srgb, var(--importer-result-muted) 85%, var(--importer-result-heading));
+  color: var(--importer-result-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.importer-result-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.importer-section-title {
+  margin: 0;
+  color: var(--importer-result-heading);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.importer-result-summary {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.importer-result-summary dt {
+  color: var(--importer-result-secondary-text);
+}
+
+.importer-result-summary dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.importer-task {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
+}
+
+.importer-task-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--importer-result-warning-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.importer-task-title svg,
+.importer-extra-warnings svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.importer-result p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.importer-mod-details {
+  width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--importer-result-secondary-text);
+  font-size: 12px;
+}
+
+.importer-mod-details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.importer-mod-details summary:focus-visible,
+.importer-mod-ids:focus-visible {
+  outline: 2px solid var(--importer-result-focus);
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+
+.importer-mod-ids {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
+  gap: 6px 12px;
+  box-sizing: border-box;
+  max-height: 160px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border: 1px solid var(--importer-result-border);
+  border-radius: 6px;
+  background: var(--importer-result-details-bg);
+  color: var(--importer-result-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.importer-extra-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.importer-extra-warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.importer-extra-warnings svg {
+  color: var(--importer-result-warning-text);
+}
+
+.importer-result-notes {
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--importer-result-border);
+  color: var(--importer-result-secondary-text);
+  font-size: 12px;
+}
+
+@media (max-width: 520px) {
+  .importer-result-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .importer-result-summary dt {
+    font-size: 12px;
+  }
+
+  .importer-result-summary dd:not(:last-child) {
+    margin-bottom: 8px;
+  }
 }
 
 .importer-footer {

@@ -247,6 +247,8 @@ export interface ModConfigOption {
 /** modinfo.lua 中单个配置项定义 */
 export interface ModConfigDefinition {
   name: string
+  /** 分组标题，仅展示，不写入配置 */
+  isHeader?: boolean
   label: string | null
   hover: string | null
   options: ModConfigOption[]
@@ -255,13 +257,20 @@ export interface ModConfigDefinition {
 
 export type ModConfigValues = Record<string, string | number | boolean>
 
-export interface ModConfigDto {
+export type ModConfigDefinitionStatus = 'parsed' | 'empty' | 'missing_file' | 'parse_failed' | 'timeout' | 'limit_exceeded'
+
+export interface ModConfigDefinitionResult {
+  definitions: ModConfigDefinition[]
+  definitionStatus: ModConfigDefinitionStatus
+  /** 面向用户的读取说明，不含文件路径或第三方异常原文 */
+  definitionMessage: string | null
+}
+
+export interface ModConfigDto extends ModConfigDefinitionResult {
   instanceId: string
   workshopId: string
   /** 当前生效配置值：DB 优先，为空时从现有 modoverrides.lua 导入预填 */
   options: ModConfigValues
-  /** modinfo.lua 解析出的配置定义；无定义或解析失败为空数组 */
-  definitions: ModConfigDefinition[]
 }
 
 export interface ModConfigSaveResult {

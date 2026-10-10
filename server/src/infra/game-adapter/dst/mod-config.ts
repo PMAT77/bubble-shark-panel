@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ModConfigDefinition, ModConfigOption, ModConfigValues } from '../../../../../shared/contracts/mod'
+import type { ModConfigValues } from '../../../../../shared/contracts/mod'
 import { DST_CLUSTER_NAME, DST_WORKSHOP_APP_ID } from './constants'
 import { resolveClusterPaths } from './cluster-service'
 
@@ -211,14 +211,6 @@ function parseLuaTableLiteral(source: string): LuaTable | null {
   }
 }
 
-/** 取表中数字键（1 起始）的有序值数组 */
-function orderedArrayEntries(table: LuaTable): LuaValue[] {
-  const indexes = [...table.entries.keys()]
-    .filter((key): key is number => typeof key === 'number')
-    .sort((a, b) => a - b)
-  return indexes.map(index => table.entries.get(index)).filter((value): value is LuaValue => value !== undefined)
-}
-
 function resolveDstModInfoCandidates(installPath: string, workshopId: string): string[] {
   return [
     path.join(installPath, 'steamapps', 'workshop', 'content', String(DST_WORKSHOP_APP_ID), workshopId, MOD_INFO_FILE_NAME),
@@ -237,84 +229,6 @@ export function resolveDstModInfoPath(installPath: string, workshopId: string): 
     }
   }
   return null
-}
-
-function extractConfigurationTable(content: string): LuaTable | null {
-  const match = /configuration_options\s*=\s*/.exec(content)
-  if (!match) {
-    return null
-  }
-  return parseLuaTableLiteral(content.slice(match.index + match[0].length))
-}
-
-function luaTableToDefinition(raw: LuaTable): ModConfigDefinition | null {
-  const name = raw.entries.get('name')
-  if (typeof name !== 'string' || !name.trim()) {
-    return null
-  }
-  const options: ModConfigOption[] = []
-  const optionsRaw = raw.entries.get('options')
-  if (isLuaTable(optionsRaw)) {
-    for (const entry of orderedArrayEntries(optionsRaw)) {
-      if (!isLuaTable(entry)) {
-        continue
-      }
-      const data = entry.entries.get('data')
-      if (!isLuaScalar(data)) {
-        continue
-      }
-      const description = entry.entries.get('description')
-      options.push({
-        description: typeof description === 'string' ? description : String(data),
-        data,
-      })
-    }
-  }
-  const label = raw.entries.get('label')
-  const hover = raw.entries.get('hover')
-  const fallback = raw.entries.get('default')
-  return {
-    name: name.trim(),
-    label: typeof label === 'string' ? label : null,
-    hover: typeof hover === 'string' ? hover : null,
-    options,
-    default: isLuaScalar(fallback) ? fallback : null,
-  }
-}
-
-/**
- * 启发式解析 modinfo.lua 的 configuration_options 定义。
- * 解析失败一律返回空数组（调用方退化为自由 KV 编辑），绝不抛错。
- */
-export function parseModInfoConfigurations(installPath: string, workshopId: string): ModConfigDefinition[] {
-  const modInfoPath = resolveDstModInfoPath(installPath, workshopId)
-  if (!modInfoPath) {
-    return []
-  }
-  try {
-    if (fs.statSync(modInfoPath).size > MAX_LUA_PARSE_LENGTH) {
-      return []
-    }
-    const content = fs.readFileSync(modInfoPath, 'utf8')
-    const table = extractConfigurationTable(content)
-    if (!table) {
-      return []
-    }
-    const definitions: ModConfigDefinition[] = []
-    for (const entry of orderedArrayEntries(table)) {
-      if (!isLuaTable(entry)) {
-        continue
-      }
-      const definition = luaTableToDefinition(entry)
-      if (definition) {
-        definitions.push(definition)
-      }
-    }
-    return definitions
-  }
-  catch {
-    return []
-  }
 }
 
 /**

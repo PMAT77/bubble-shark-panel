@@ -155,6 +155,34 @@ describe('ensureDstUgcModLayout', () => {
     assert.deepEqual(listTempResidue(installPath), [])
   })
 
+  it('installs legacy mods with backslash font paths into both shards and the game layout', async () => {
+    const installPath = createInstallPath()
+    writeCavesShardConfig(installPath)
+    const workshopId = '347079953'
+    const archivePath = writeLegacySource(installPath, workshopId)
+    const font = zipSync({ 'font.fnt': strToU8('font data') })
+    fs.writeFileSync(archivePath, zipSync({
+      'modinfo.lua': strToU8('name = "Display Food Values"\n'),
+      'modmain.lua': strToU8('-- main\n'),
+      'new_fonts\\belisaplumilla50.zip': font,
+      'new_fonts\\': new Uint8Array(),
+    }))
+
+    const outcomes = await ensureDstUgcModLayout(installPath, [workshopId])
+
+    assert.deepEqual(outcomes, [{ workshopId, status: 'installed' }])
+    for (const dir of [
+      resolveDstUgcModDir(installPath, 'Master', workshopId),
+      resolveDstUgcModDir(installPath, 'Caves', workshopId),
+      resolveDstLegacyModDir(installPath, workshopId),
+      resolveDstSteamWorkshopModDir(installPath, workshopId),
+    ]) {
+      assert.deepEqual(fs.readFileSync(path.join(dir, 'new_fonts', 'belisaplumilla50.zip')), Buffer.from(font))
+    }
+    assert.equal(isDstUgcModReady(installPath, workshopId), true)
+    assert.deepEqual(listTempResidue(installPath), [])
+  })
+
   it('is idempotent and skips mods that DST already installed', async () => {
     const installPath = createInstallPath()
     writeSteamappsSource(installPath, '111')

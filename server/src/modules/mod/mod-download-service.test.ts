@@ -189,6 +189,182 @@ afterEach(() => {
   }
 })
 
+describe('scoped download requests', () => {
+  it('deduplicates simultaneous requests before the worker has started', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'scoped-duplicate'
+    const downloads: string[] = []
+    setModDownloadExecutorForTest(async ({ workshopIds }) => {
+      downloads.push(...workshopIds)
+      workshopIds.forEach(id => writeWorkshopMod(installPath, id))
+      return { ok: true }
+    })
+    await Promise.all(Array.from({ length: 5 }, () => enqueueModDownload({ instanceId, installPath, payload: { workshopId: '1' } })))
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.deepEqual(downloads, ['1'])
+    assert.equal(listedMods.filter(mod => mod.workshopId === '1').length, 1)
+  })
+
+  it('waits for a pausing worker before starting a scoped request', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'scoped-pausing'
+    listedMods = ['1', '2', '3'].map(workshopId => createMockMod({ instanceId, workshopId, name: workshopId, enabled: true, installStatus: 'pending' }))
+    let release!: () => void
+    let started!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const firstStarted = new Promise<void>(resolve => { started = resolve })
+    const downloads: string[] = []
+    let active = 0
+    setModDownloadExecutorForTest(async ({ workshopIds }) => {
+      assert.equal(++active, 1)
+      downloads.push(...workshopIds)
+      if (downloads.length === 1) { started(); await gate }
+      workshopIds.forEach(id => writeWorkshopMod(installPath, id))
+      active--
+      return { ok: true }
+    })
+    await startModDownloadQueue({ instanceId, installPath, head: [{ workshopId: '1', force: false, source: 'user' }] })
+    await firstStarted
+    pauseModDownloadQueue(instanceId)
+    const next = enqueueModDownload({ instanceId, installPath, payload: { workshopId: '2' } })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(downloads, ['1'])
+    release()
+    await next
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.deepEqual(downloads, ['1', '2'])
+    assert.equal(listedMods.find(mod => mod.workshopId === '3')?.installStatus, 'pending')
+  })
+
+  it('includes known transitive dependencies, resets only their failures and reuses ready dependencies', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'scoped-deps'
+    listedMods = [
+      createMockMod({ instanceId, workshopId: '100', name: 'Target', installStatus: 'pending' }),
+      createMockMod({ instanceId, workshopId: '200', name: 'Dependency', installStatus: 'failed', retryCount: 3, nextRetryAt: '2099-01-01T00:00:00Z' }),
+      createMockMod({ instanceId, workshopId: '300', name: 'Ready dependency' }),
+      createMockMod({ instanceId, workshopId: '500', name: 'Unrelated', enabled: true, installStatus: 'pending', retryCount: 2, nextRetryAt: '2099-01-01T00:00:00Z' }),
+    ]
+    const unrelated = { ...listedMods[3] }
+    writeWorkshopMod(installPath, '300')
+    writeModDependencyMap(installPath, { '100': ['200'], '200': ['300', '400'] })
+    const downloads: string[] = []
+    setModDownloadExecutorForTest(async ({ workshopIds }) => {
+      downloads.push(...workshopIds)
+      workshopIds.forEach(id => writeWorkshopMod(installPath, id))
+      return { ok: true }
+    })
+    await enqueueModDownload({ instanceId, installPath, payload: { workshopId: '100' } })
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.deepEqual(downloads, ['400', '200', '100'])
+    assert.deepEqual(listedMods.find(mod => mod.workshopId === '500'), unrelated)
+  })
+
+  it('forces only selected updates and does not pick unrelated pending items', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'scoped-update'
+    listedMods = ['10', '11', '12'].map(workshopId => createMockMod({ instanceId, workshopId, name: workshopId,
+      enabled: true, installStatus: workshopId === '12' ? 'pending' : 'ready' }))
+    writeWorkshopMod(installPath, '10')
+    writeWorkshopMod(installPath, '11')
+    writeModDependencyMap(installPath, { '10': ['11'] })
+    const batches: Array<{ ids: string[], force: boolean | undefined }> = []
+    setModDownloadExecutorForTest(async input => {
+      batches.push({ ids: input.workshopIds, force: input.force })
+      input.workshopIds.forEach(id => writeWorkshopMod(installPath, id))
+      return { ok: true }
+    })
+    await enqueueModDownloads({ instanceId, installPath, payloads: [{ workshopId: '10', dependencyIds: ['11'] }], force: true })
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.deepEqual(batches.map(batch => batch.ids), [['10']])
+    assert.equal(batches[0].force, true)
+    assert.equal(listedMods.find(mod => mod.workshopId === '12')?.installStatus, 'pending')
+  })
+
+  it('keeps a selected dependency forced regardless of payload order', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'scoped-selected-dependency'
+    listedMods = ['1', '2'].map(workshopId => createMockMod({ instanceId, workshopId, name: workshopId, enabled: true }))
+    listedMods.forEach(mod => writeWorkshopMod(installPath, mod.workshopId))
+    writeModDependencyMap(installPath, { '1': ['2', '3'] })
+    const batches: Array<{ ids: string[], force: boolean | undefined }> = []
+    setModDownloadExecutorForTest(async ({ workshopIds, force }) => {
+      batches.push({ ids: workshopIds, force })
+      workshopIds.forEach(id => writeWorkshopMod(installPath, id))
+      return { ok: true }
+    })
+    await enqueueModDownloads({ instanceId, installPath, payloads: [{ workshopId: '2' }, { workshopId: '1', dependencyIds: ['2'] }], force: true })
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.deepEqual(batches, [{ ids: ['2'], force: true }, { ids: ['3'], force: false }, { ids: ['1'], force: true }])
+  })
+
+  for (const mode of ['scoped', 'promote', 'bulk']) {
+    it(mode === 'promote' ? 'promotes a running scoped queue when full download is requested'
+      : mode === 'bulk' ? 'keeps an existing bulk queue running when a scoped request is merged'
+        : 'merges explicit requests into one worker without adding unrelated candidates', async () => {
+      installDbHooks()
+      const installPath = createInstallPath()
+      const instanceId = `scoped-merge-${mode}`
+      listedMods = ['1', '2', '3'].map(workshopId => createMockMod({ instanceId, workshopId, name: workshopId, enabled: true, installStatus: 'pending' }))
+      let release!: () => void
+      let started!: () => void
+      const gate = new Promise<void>(resolve => { release = resolve })
+      const firstStarted = new Promise<void>(resolve => { started = resolve })
+      const downloads: string[] = []
+      let active = 0
+      setModDownloadExecutorForTest(async ({ workshopIds }) => {
+        active++
+        assert.equal(active, 1)
+        downloads.push(...workshopIds)
+        if (downloads.length === 1) { started(); await gate }
+        workshopIds.forEach(id => writeWorkshopMod(installPath, id))
+        active--
+        return { ok: true }
+      })
+      if (mode === 'bulk') await startModDownloadQueue({ instanceId, installPath, head: [{ workshopId: '1', force: false, source: 'user' }] })
+      else await enqueueModDownload({ instanceId, installPath, payload: { workshopId: '1' } })
+      await firstStarted
+      try {
+        await enqueueModDownload({ instanceId, installPath, payload: { workshopId: '2' } })
+        const queue = await resolveModDownloadQueueState({ instanceId, installPath })
+        assert.equal(queue.items.find(item => item.workshopId === '3')?.phase, mode === 'bulk' ? 'queued' : 'inactive')
+        assert.deepEqual(queue.currentWorkshopIds, ['1'])
+        assert.deepEqual(queue.queueWorkshopIds, mode === 'bulk' ? ['2', '3'] : ['2'])
+        if (mode === 'promote') await startModDownloadQueue({ instanceId, installPath })
+      }
+      finally { release() }
+      await waitForModDownloadQueueIdle(instanceId)
+      assert.deepEqual(downloads, mode === 'scoped' ? ['1', '2'] : ['1', '2', '3'])
+    })
+  }
+
+  it('starts only the requested item after a paused bulk queue has stopped', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'scoped-paused'
+    listedMods = ['1', '2', '3'].map(workshopId => createMockMod({ instanceId, workshopId, name: workshopId, enabled: true, installStatus: 'pending' }))
+    const downloads: string[] = []
+    setModDownloadExecutorForTest(async ({ workshopIds }) => {
+      downloads.push(...workshopIds)
+      if (downloads.length === 1) pauseModDownloadQueue(instanceId)
+      workshopIds.forEach(id => writeWorkshopMod(installPath, id))
+      return { ok: true }
+    })
+    await startModDownloadQueue({ instanceId, installPath, head: [{ workshopId: '1', force: false, source: 'user' }] })
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.equal(getModDownloadQueueSnapshot(instanceId)?.status, 'paused')
+    await enqueueModDownload({ instanceId, installPath, payload: { workshopId: '2' } })
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.deepEqual(downloads, ['1', '2'])
+    assert.equal(listedMods.find(mod => mod.workshopId === '3')?.installStatus, 'pending')
+  })
+})
+
 describe('mod-download-service', () => {
   it('writes pending record immediately and marks failed when download fails', async () => {
     installDbHooks()
@@ -399,7 +575,7 @@ describe('mod-download-service', () => {
     assert.equal(listedMods.find(mod => mod.workshopId === '66668')?.remoteUpdatedAt, workshopUpdatedAtIso)
   })
 
-  it('queues the subscription first and the missing backfill in its own batch', async () => {
+  it('downloads only the selected subscription and leaves unrelated pending mods untouched', async () => {
     installDbHooks()
     const installPath = createInstallPath()
     listedMods = [
@@ -424,11 +600,13 @@ describe('mod-download-service', () => {
     })
     await waitForModDownloadQueueIdle('instance-f')
 
-    // 批次由队列统一决定：用户订阅的 100 先成一批，随后补齐项 200 单独成批；已就绪的 300 不参与
-    assert.deepEqual(downloadBatches, [['100'], ['200']])
+    assert.deepEqual(downloadBatches, [['100']])
     assert.equal(getModInstallJob('instance-f', '100').status, 'success')
     assert.equal(listedMods.find(mod => mod.workshopId === '100')?.installStatus, 'ready')
-    assert.equal(listedMods.find(mod => mod.workshopId === '200')?.installStatus, 'ready')
+    assert.equal(listedMods.find(mod => mod.workshopId === '200')?.installStatus, 'pending')
+    const queue = await resolveModDownloadQueueState({ instanceId: 'instance-f', installPath })
+    assert.equal(queue.status, 'idle')
+    assert.equal(queue.eligibleCount, 1, '单项完成后仍可从批量入口下载其余候选')
   })
 
   it('keeps going when a backfill mod fails in the previous batch', async () => {
@@ -456,6 +634,7 @@ describe('mod-download-service', () => {
       installPath,
       payload: { workshopId: '111', name: 'Pending A' },
     })
+    await startModDownloadQueue({ instanceId: 'instance-g', installPath })
     await waitForModDownloadQueueIdle('instance-g')
 
     assert.equal(getModInstallJob('instance-g', '111').status, 'success')
@@ -1090,6 +1269,7 @@ describe('persistent download intent and truthful queue state', () => {
   it('downloads dependencies discovered in the downloaded content of a disabled subscription', async () => {
     installDbHooks()
     const installPath = createInstallPath()
+    listedMods = [createMockMod({ instanceId: 'new-deps', workshopId: '99', name: 'Unrelated', enabled: true, installStatus: 'pending' })]
     const downloads: string[] = []
     setModDownloadExecutorForTest(async ({ workshopIds }) => {
       downloads.push(...workshopIds)
@@ -1104,6 +1284,7 @@ describe('persistent download intent and truthful queue state', () => {
     assert.deepEqual(downloads, ['40', '41'])
     assert.equal(listedMods.find(mod => mod.workshopId === '40')?.enabled, false)
     assert.equal(listedMods.find(mod => mod.workshopId === '41')?.installStatus, 'ready')
+    assert.equal(listedMods.find(mod => mod.workshopId === '99')?.installStatus, 'pending')
   })
 
   it('reports waiting for the lock separately and cannot launch a second worker while pausing', async () => {

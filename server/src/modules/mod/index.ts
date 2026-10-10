@@ -42,11 +42,7 @@ import {
 } from '../../../../shared/contracts/mod'
 import { DST_APP_ID } from '../../infra/game-adapter/dst/constants'
 import { resolveInstanceInstallPath } from '../../infra/game-adapter/dst/cluster-service'
-import {
-  parseModInfoConfigurations,
-  parseModOverridesConfigurations,
-  parseStoredModConfig,
-} from '../../infra/game-adapter/dst/mod-config'
+import { readModConfig } from './mod-config-read-service'
 import {
   readModDependencyMap,
   writeModDependencyMap,
@@ -1093,17 +1089,7 @@ export function registerModModule(app: FastifyInstance) {
     if (!mod) {
       return businessError('Mod 不存在', request)
     }
-    const stored = parseStoredModConfig(mod.config)
-    const options = stored
-      ?? parseModOverridesConfigurations(resolved.instance.installPath).get(workshopId)
-      ?? {}
-    const definitions = parseModInfoConfigurations(resolved.instance.installPath, workshopId)
-    const payload: ModConfigDto = {
-      instanceId,
-      workshopId,
-      options,
-      definitions,
-    }
+    const payload = await readModConfig(instanceId, resolved.instance.installPath, workshopId, mod.config)
     return success(payload, request)
   })
 

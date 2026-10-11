@@ -4,8 +4,9 @@ import { LOCAL_NODE_ID } from '../../shared/dst/local-dst-instance'
 import { getGameInstanceById, listGameInstances, updateGameInstanceRuntime } from '../../shared/db/index'
 import { emitPanelEvent } from '../notify/events'
 import { isInstallJobActive } from './install-service'
-import { inspectInstanceShardRuntime, resolveInstanceContainerRef, protectExitedShardOom } from './container-lifecycle'
+import { inspectInstanceShardRuntime, resolveInstanceContainerRef, protectExitedShardOom, stopInstanceContainer, runtimeMemoryEpoch } from './container-lifecycle'
 import { getStartupSnapshot, startupIsActive } from './startup-state'
+import { reconcileCavesRuntime } from './runtime-reconciliation'
 
 const WATCH_INTERVAL_MS = 60_000
 /** 刚启动的实例不参与异常退出判定（容器注册/DB 同步存在短暂窗口） */
@@ -21,7 +22,7 @@ function isUnitTest(): boolean {
 
 /**
  * 崩溃感知对账：DB 记录 running 但运行时已无该实例进程。
- * Docker on-failure 重试耗尽 / systemd Restart 放弃后实例“静默死亡”，
+ * 分片异常退出后不会自动重启；兼容旧部署的运行时重启策略，
  * 面板若不主动对账，服主可能数天后才发现房间无人。
  * 误判保护：inspect 失败跳过、启动宽限期内跳过、安装中跳过。
  */
@@ -58,19 +59,23 @@ export async function reconcileUnexpectedExits(app: FastifyInstance): Promise<nu
       continue
     }
     if (actuallyRunning) {
+      if (await reconcileCavesRuntime(app, instance)) detected++
       continue
     }
 
+    const current = await getGameInstanceById(instance.id)
+    if (!current || runtimeMemoryEpoch(current) !== runtimeMemoryEpoch(instance) || startupIsActive(getStartupSnapshot(instance.id, current.lastStartupReport))) continue
     const exitAt = now.toISOString()
+    if (!await stopInstanceContainer(instance.id, runtimeMemoryEpoch(instance))) continue
     await updateGameInstanceRuntime(instance.id, {
       status: 'stopped',
       containerId: null,
       runtimePid: null,
       runtimeStartedAt: null,
-      lastError: `检测到实例进程异常退出（${exitAt.replace('T', ' ').slice(0, 19)}）。Docker 模式 on-failure 重试耗尽后需手动启动；Native 模式 systemd 会自动拉起。`,
+      runtimeReadyAt: null,
+      lastError: `主世界异常退出（${exitAt.replace('T', ' ').slice(0, 19)}），已停止失去依赖的洞穴，请手动启动。`,
       lastErrorPhase: 'runtime',
       unexpectedExitAt: exitAt,
-      whereStatus: 'running',
     })
     detected++
 

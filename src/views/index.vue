@@ -21,7 +21,7 @@ const useCases = ref([
   { title: '个人开服', description: '在自己电脑或云服务器上一键开服' },
   { title: '小圈子联机', description: '在面板里看日志、发指令，不用 SSH' },
   { title: '社区服运营', description: '一眼看清机器负载与游戏服务状态' },
-  { title: '进阶运维', description: 'Mod、备份恢复已内置；计划任务、告警等能力按版本路线图发布' },
+  { title: '进阶运维', description: '定时备份、管理 Mod，接收告警通知' },
 ])
 
 function open(url: string) {
@@ -150,8 +150,8 @@ function goLogin() {
             </div>
           </h1>
           <p class="text-sm text-muted-foreground leading-relaxed mb-6 max-w-prose md-text-base">
-            给自己的服务器装一个真正好用的饥荒后台。一条命令装好，3 分钟开服；在浏览器里管
-            <span class="text-foreground font-medium">世界、Mod、玩家和存档备份</span>，升级面板时玩家不掉线。
+            在浏览器里管理
+            <span class="text-foreground font-medium">世界、Mod、玩家和存档备份</span>。
           </p>
           <div class="flex flex-wrap gap-3">
             <FaButton size="lg" @click="goLogin">
@@ -172,7 +172,7 @@ function goLogin() {
           <div class="stat-enter border rounded-xl bg-neutral-950/[.012] dark:bg-white/5" :style="{ animationDelay: '100ms' }">
             <div class="p-5 flex flex-col h-full justify-between">
               <div class="text-xs text-muted-foreground tracking-widest font-medium uppercase">
-                3 分钟开服
+                安装与部署
               </div>
               <div>
                 <div class="text-3xl tracking-tight font-semibold mb-1 md-text-4xl">
@@ -251,7 +251,7 @@ function goLogin() {
                   <div class="text-sm tracking-tight font-semibold">
                     {{ capability.name }}
                   </div>
-                  <div class="text-xs text-muted-foreground leading-relaxed mt-1">
+                  <div class="text-sm text-muted-foreground leading-relaxed mt-1">
                     {{ capability.tagline }}
                   </div>
                 </div>
@@ -262,7 +262,7 @@ function goLogin() {
                     <li
                       v-for="feature in capability.features"
                       :key="feature"
-                      class="text-xs text-muted-foreground flex gap-2 items-start"
+                      class="text-sm text-muted-foreground flex gap-2 items-start"
                     >
                       <span class="text-primary mt-0.5 shrink-0">·</span>
                       <span>{{ feature }}</span>
@@ -282,9 +282,6 @@ function goLogin() {
             </div>
           </div>
         </div>
-        <p class="text-xs text-muted-foreground mt-4 text-center">
-          当前以饥荒联机版为首个完整适配游戏，之后逐步扩展到更多 Steam 专用服务器
-        </p>
       </div>
     </div>
   </div>

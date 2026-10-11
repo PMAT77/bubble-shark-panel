@@ -208,9 +208,6 @@ onMounted(() => {
       <h1 class="text-lg font-semibold">
         房间列表
       </h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        让朋友加入你的服务器：先在这里配置房间名称、密码与联机方式；公网联机需要 Klei 令牌。
-      </p>
     </div>
 
     <AdminListToolbar

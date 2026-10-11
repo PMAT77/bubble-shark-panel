@@ -235,7 +235,7 @@ onMounted(loadRoles)
     size="small"
   >
     <template #empty>
-      <NEmpty size="large" description="还没有角色。新建一个，勾上需要的权限点即可。" />
+      <NEmpty size="large" description="暂无角色" />
     </template>
   </NDataTable>
 
@@ -251,7 +251,7 @@ onMounted(loadRoles)
       :native-scrollbar="false"
     >
       <div class="flex flex-col gap-4">
-        <p v-if="memberUsageLine" class="m-0 text-xs text-muted-foreground">
+        <p v-if="memberUsageLine" class="m-0 text-sm text-muted-foreground">
           {{ memberUsageLine }}
         </p>
 
@@ -262,10 +262,10 @@ onMounted(loadRoles)
         -->
         <NForm label-placement="top">
           <NFormItem label="角色名称" required :show-feedback="false" class="mb-4">
-            <NInput v-model:value="form.name" placeholder="例如：运维、只读看板" maxlength="64" />
+            <NInput :input-props="{ 'aria-label': '角色名称' }" v-model:value="form.name" placeholder="例如：运维、只读看板" maxlength="64" />
           </NFormItem>
           <NFormItem label="备注" :show-feedback="false">
-            <NInput v-model:value="form.description" placeholder="这个角色是给谁用的" maxlength="200" />
+            <NInput :input-props="{ 'aria-label': '备注' }" v-model:value="form.description" placeholder="这个角色是给谁用的" maxlength="200" />
           </NFormItem>
         </NForm>
 

@@ -43,19 +43,18 @@ export interface CapabilityCard {
 export const HOME_CAPABILITIES: CapabilityCard[] = [
   {
     name: '监控台',
-    tagline: '机器负载一目了然，不用登录服务器查',
+    tagline: '查看服务器负载与运行状况',
     route: routeToConsoleMonitor(),
     permission: 'console.monitor:read',
     features: [
       'CPU、内存、磁盘占用',
       '游戏服务运行状态',
       '实时网络流量',
-      '和实例状态一起看',
     ],
   },
   {
     name: '实例管理',
-    tagline: '从开服到日常管理，一个页面搞定',
+    tagline: '安装、启停和维护游戏实例',
     route: routeToNodeInstance(),
     permission: 'instance:read',
     features: [
@@ -68,7 +67,7 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
   },
   {
     name: '房间管理',
-    tagline: '房间参数在这里配，改完不用登服务器',
+    tagline: '设置房间与联机方式',
     route: routeToDstRoomList(),
     permission: 'room:read',
     features: [
@@ -86,25 +85,25 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
     features: [
       '地上与洞穴两个世界分别配置',
       '地图与规则可视化调整',
-      '世界种子与重开一张图',
+      '设置种子、重新生成世界',
       '地形图：导出当前世界地形与关键地标',
     ],
   },
   {
     name: '玩家管理',
-    tagline: '名单、在线玩家与踢人封禁，一个页面办完',
+    tagline: '查看在线玩家，管理入服名单',
     route: routeToDstPlayerList(),
     permission: 'player:read',
     features: [
       '管理员、白名单、黑名单按游戏名维护',
       '查看地上与洞穴的在线玩家',
-      '踢出与封禁立刻生效，重启后仍有效',
+      '踢出在线玩家、封禁指定玩家',
       '玩家档案与备注',
     ],
   },
   {
     name: '模组管理',
-    tagline: '工坊 Mod 在线订阅，不用手改配置',
+    tagline: '订阅和配置创意工坊 Mod',
     route: routeToDstModList(),
     permission: 'mod:read',
     features: [
@@ -116,19 +115,19 @@ export const HOME_CAPABILITIES: CapabilityCard[] = [
   },
   {
     name: '备份与恢复',
-    tagline: '存档随时能找回',
+    tagline: '备份存档与面板数据',
     route: routeToOpsBackups(),
     permission: 'backup:read',
     features: [
       '存档一键备份与恢复',
-      '更新、删除、回档前自动备份',
+      '更新、删除与回档前可先备份',
       '面板数据库快照',
       '导入其他面板或裸机的存档',
     ],
   },
   {
     name: '计划任务',
-    tagline: '定时重启、备份与更新检查，不用守着点',
+    tagline: '安排日常维护任务',
     route: routeToOpsSchedules(),
     permission: 'schedule:read',
     features: [

@@ -342,11 +342,11 @@ onUnmounted(stopAllPolling)
       </div>
       <MonitorStatus :loading="loading" :info="systemInfo" />
     </FaPageMain>
-    <FaPageMain title="系统详情" class="min-w-0">
+    <FaPageMain title="系统详情" title-tag="h2" class="min-w-0">
       <MonitorSystemInfo :loading="loading" :info="systemInfo" />
     </FaPageMain>
 
-    <FaPageMain title="网络监控" class="min-w-0">
+    <FaPageMain title="网络监控" title-tag="h2" class="min-w-0">
       <div v-if="networkError" class="space-y-2">
         <NAlert type="warning" :title="networkError">
           <template v-if="networkStale">
@@ -365,9 +365,9 @@ onUnmounted(stopAllPolling)
       />
     </FaPageMain>
 
-    <FaPageMain title="刷新频率">
+    <FaPageMain title="刷新频率" title-tag="h2">
       <p class="mb-4 text-sm text-muted-foreground">
-        调整主机与网络数据的刷新频率；数值越小数据越实时、开销越高。网络采样建议不低于 4 秒。
+        刷新越频繁，资源占用越高。网络采样建议间隔至少 4 秒。
       </p>
       <div class="mb-4 flex flex-wrap items-center gap-2">
         <NButton

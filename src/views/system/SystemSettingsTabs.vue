@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { NTabPane, NTabs } from 'naive-ui'
+import { keyboardTabProps } from '@/utils/keyboardTab'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { resolveVisibleSettingsTab, visibleSettingsTabs } from './systemSettingsTabs'
@@ -90,6 +91,7 @@ onMounted(() => {
       :key="item.name"
       :name="item.name"
       :tab="item.label"
+      :tab-props="keyboardTabProps(activeTab === item.name)"
       display-directive="if"
     >
       <slot :name="item.name" />

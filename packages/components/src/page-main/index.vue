@@ -9,6 +9,7 @@ defineOptions({
 const props = withDefaults(
   defineProps<{
     title?: string
+    titleTag?: 'h1' | 'h2' | 'h3'
     collaspe?: boolean
     height?: string
     class?: HTMLAttributes['class']
@@ -17,6 +18,7 @@ const props = withDefaults(
   }>(),
   {
     title: '',
+    titleTag: 'h1',
     collaspe: false,
     height: '',
   },
@@ -41,7 +43,7 @@ function handleCollaspe() {
   >
     <div v-if="!!slots.title || title" :class="cn('border-b px-5 py-4 transition-border-color', props.titleClass)">
       <slot name="title">
-        {{ title }}
+        <component :is="titleTag" class="text-lg font-semibold leading-normal break-words">{{ title }}</component>
       </slot>
     </div>
     <div

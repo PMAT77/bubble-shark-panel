@@ -40,7 +40,7 @@ export function usePanelUpdateNotifier() {
         return
       }
       notificationRef = notification.warning({
-        title: 'Hub 有新版本可用',
+        title: '面板有新版本',
         content: buildUpdateMessage(status),
         duration: 0,
         closable: true,

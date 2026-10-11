@@ -64,7 +64,7 @@ function renderInstallStatus(row: ModItemDto) {
     {
       trigger: () => tag,
       default: () => (row.installStatus === 'ready'
-        ? 'Mod 文件已下载并放入服务器目录；是否在游戏里生效看「开关状态」'
+        ? '已下载，开启后才能在游戏中使用'
         : (row.installError?.trim() || 'Mod 文件尚未就绪，就绪后才能开启')),
     },
   )
@@ -228,12 +228,13 @@ watch(() => props.instanceId, (value) => {
 
     <AdminSettingsSection
       title="已订阅 Mod"
-      description="管理当前实例已订阅 Mod 的开启状态；新订阅默认关闭，需在此手动开启。下载未完成时请到 Mod 管理处理。"
+      description="新订阅的 Mod 默认关闭。下载失败时，可到 Mod 管理重试。"
     />
 
     <div class="flex flex-wrap items-center gap-3">
       <NSelect
         v-model:value="modEnabledFilter"
+        aria-label="筛选 Mod 状态"
         :options="modEnabledFilterOptions"
         class="w-36"
       />

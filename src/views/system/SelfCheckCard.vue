@@ -89,7 +89,7 @@ defineExpose({ runSelfCheck })
 <template>
   <div class="space-y-3">
     <p class="text-sm text-muted-foreground">
-      一次性检查运行环境、磁盘余量、数据目录可写、实例状态与通知渠道，出问题时可以先跑一遍再问人。
+      检查运行环境、磁盘、实例和通知渠道，帮助定位故障。
     </p>
 
     <div class="flex flex-wrap items-center gap-2">

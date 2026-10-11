@@ -15,9 +15,15 @@ function snapshot(overrides: Partial<InstanceStartupSnapshot> = {}): InstanceSta
 }
 
 describe('完整启动展示', () => {
+  it('洞穴失败继续查询主世界，并明确显示局部失败；单独主世界不显示全部就绪', () => {
+    const partial = snapshot({ status: 'failed', phase: 'failed', caves: { state: 'failed', memoryPeakMb: 1536 } })
+    assert.equal(startupPhaseLabel(partial), '主世界运行中 · 洞穴启动失败')
+    assert.equal(isInstanceWorldReady({ status: 'running', runtimeReadyAt: partial.startedAt, startup: partial }), true)
+    assert.equal(startupPhaseLabel(snapshot({ target: 'master', status: 'success', phase: 'ready', caves: { state: 'stopped', memoryPeakMb: null } })), '主世界已就绪')
+  })
   it('主世界ready不能遮盖洞穴加载或互联等待', () => {
     const instance = { status: 'running' as const, runtimeReadyAt: '2026-10-10T10:01:00Z', startup: snapshot() }
-    assert.equal(isInstanceWorldReady(instance), false)
+    assert.equal(isInstanceWorldReady(instance), true)
     assert.equal(shouldPollStartup(instance), true)
     assert.equal(startupPhaseLabel(instance.startup), '洞穴加载中')
     assert.equal(startupPhaseLabel(snapshot({ phase: 'connecting' })), '验证分片连接')

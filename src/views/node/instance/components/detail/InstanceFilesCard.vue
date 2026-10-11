@@ -293,24 +293,16 @@ watch(() => props.instanceId, () => {
 </script>
 
 <template>
-  <NCard title="文件管理" size="small" class="mt-4">
+  <NCard title="文件管理" size="small">
     <template #header-extra>
       <NButton size="tiny" :loading="loading" @click="loadEntries()">
         刷新
       </NButton>
     </template>
 
-    <p class="mb-3 text-xs text-muted-foreground">
-      浏览实例目录并直接编辑文本配置（房间、世界、Mod 等）。保存会先备份原文件；
-      集群令牌等敏感文件不提供查看与编辑。上传会把文件放进当前所在目录，同名文件会先备份再覆盖。
-    </p>
-
     <div v-if="keyFiles.length > 0" class="mb-4 rounded-lg border p-3">
       <p class="mb-2 text-sm font-medium">
         关键配置文件
-      </p>
-      <p class="mb-2 text-xs text-muted-foreground">
-        房间页、世界页与 Mod 页已覆盖常用项；这里用于直接改原始文件。
       </p>
       <div class="flex flex-wrap gap-2">
         <NButton
@@ -325,6 +317,8 @@ watch(() => props.instanceId, () => {
         </NButton>
       </div>
     </div>
+
+    <p v-if="hasPermission('file:upload')" class="mb-3 text-sm text-muted-foreground">同名文件会先备份再覆盖。含令牌等敏感内容的文件不可查看或编辑。</p>
 
     <div class="mb-3 flex flex-wrap items-center gap-1 text-sm">
       <template v-for="(item, index) in breadcrumbs" :key="item.path">
@@ -367,7 +361,7 @@ watch(() => props.instanceId, () => {
             />
             <button
               type="button"
-              class="truncate text-left text-sm hover:underline"
+              class="truncate text-left text-sm hover:underline focus-visible:outline-2 focus-visible:outline-primary rounded"
               @click="openEntry(entry)"
             >
               {{ entry.name }}
@@ -420,11 +414,14 @@ watch(() => props.instanceId, () => {
     </NSpin>
 
     <NModal v-model:show="editorVisible" preset="card" :title="editorPath" class="max-w-3xl">
+      <p v-if="hasPermission('file:write')" class="mb-3 text-sm text-muted-foreground">保存前会自动备份原文件。</p>
       <NAlert v-if="editorTruncated" type="warning" :bordered="false" class="mb-3">
         文件较大（{{ formatSize(editorSizeBytes) }}），这里只显示前 1 MiB 内容；直接保存会截断文件，请先自行备份。
       </NAlert>
       <NInput
         v-model:value="editorContent"
+        :readonly="!hasPermission('file:write')"
+        :input-props="{ 'aria-label': '文件内容', spellcheck: false }"
         type="textarea"
         :autosize="{ minRows: 12, maxRows: 24 }"
       />
@@ -441,7 +438,7 @@ watch(() => props.instanceId, () => {
     </NModal>
 
     <NModal v-model:show="renameVisible" preset="card" title="重命名" class="max-w-md">
-      <NInput v-model:value="renameValue" @keyup.enter="submitRename" />
+      <NInput v-model:value="renameValue" :input-props="{ 'aria-label': '新文件名' }" @keyup.enter="submitRename" />
       <template #footer>
         <div class="flex justify-end gap-2">
           <NButton @click="renameVisible = false">

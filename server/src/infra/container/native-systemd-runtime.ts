@@ -416,7 +416,7 @@ Type=simple
 ${spec.memoryParent === DST_MEMORY_SLICE ? `Slice=${DST_MEMORY_SLICE}\n` : ''}MemoryAccounting=yes
 WorkingDirectory=${systemdPath(spec.workingDir)}
 ExecStart=${systemdQuote(launcherPath)}
-Restart=on-failure
+Restart=no
 RestartSec=5
 KillMode=control-group
 TimeoutStopSec=${NATIVE_UNIT_STOP_TIMEOUT_SEC}

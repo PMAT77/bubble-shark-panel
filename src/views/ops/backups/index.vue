@@ -611,11 +611,11 @@ onActivated(() => {
 <template>
   <FaPageMain main-class="flex flex-col gap-4">
     <div>
-      <h2 class="m-0 text-lg font-semibold">
+      <h1 class="m-0 text-lg font-semibold">
         备份与恢复
-      </h2>
+      </h1>
       <p class="mt-1 text-sm text-muted-foreground">
-        备份实例存档与面板数据，可恢复、下载与清理旧备份。 恢复会整体替换实例存档，请先停止实例。 
+        恢复会替换当前存档，请先停止实例。
       </p>
     </div>
 
@@ -681,7 +681,7 @@ onActivated(() => {
           面板数据库快照
         </h2>
         <p class="mt-1 text-sm text-muted-foreground">
-          由「创建面板数据库快照」生成，包含面板账号与设置，不属于任何游戏实例。
+          包含面板账号与设置，不含游戏存档。
         </p>
         <div class="mt-3 flex flex-wrap items-center gap-2">
           <NButton type="warning" strong secondary @click="handleCreateDbBackup" v-if="hasPermission('backup:create')">

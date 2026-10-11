@@ -119,6 +119,18 @@ it('prepare 恢复发现活着的主世界时直接监控，单世界不重建�
   assert.ok(saved?.runtimeReadyAt)
 })
 
+it('单独主世界启动恢复不会补启动洞穴，保留任务目标与原期限', async t => {
+  const f = await fixture(t, 'master_loading')
+  await updateGameInstanceRuntime(f.instance.id, { lastStartupReport: { ...f.report, target: 'master', caves: { state: 'stopped', memoryPeakMb: 1536, peakLimited: true } } })
+  await f.recover(); await f.waitForSuccess()
+  assert.equal(f.create.mock.callCount(), 0)
+  assert.equal(f.network.mock.callCount(), 0)
+  const row = await getGameInstanceById(f.instance.id)
+  assert.equal(row?.lastStartupReport?.target, 'master')
+  assert.equal(row?.lastStartupReport?.caves.state, 'stopped')
+  assert.equal(row?.lastStartupReport?.caves.memoryPeakMb, 1536)
+})
+
 it('master_loading 恢复保留已过期的期限，失败关闭日志而不再等待 300 秒', async (t) => {
   const f = await fixture(t, 'master_loading')
   const expired = new Date(Date.now() - 1000).toISOString()

@@ -13,7 +13,7 @@ import { emitPanelEvent } from '../notify/events'
 import type { MemoryProtectionStop } from '../../../../shared/contracts/instance-resources'
 import { resolveInstanceResourceSettings } from './resource-settings'
 import { runStartupMonitor } from './startup-monitor'
-import { cancelStartupTask, changeStartupPhase, createStartupTask, currentStartupTask, enqueueStartupTask, isCurrentStartupTask, persistStartupTask, recordStartupSwapAdvice, releaseStartupTask, startupIsActive, type StartupTask } from './startup-state'
+import { cancelStartupTask, changeStartupPhase, createStartupTask, currentStartupTask, enqueueStartupTask, getStartupSnapshot, isCurrentStartupTask, persistStartupTask, recordStartupSwapAdvice, releaseStartupTask, startupIsActive, type StartupTask } from './startup-state'
 import { isSteamcmdAppUpdateBusy } from '../../infra/container/steamcmd-app-update-queue'
 import { resolveDockerStatus } from '../../infra/docker'
 import { createDockerClient } from '../../infra/docker-connect'
@@ -80,15 +80,15 @@ function measuredStartupDemand(report: InstanceStartupSnapshot | null | undefine
 
 /** 先写保护锁与现场，再取消旧任务。清理失败保留引用，手动重试前不能新建分片。 */
 export async function protectInstanceMemory(app: FastifyInstance, observed: DbGameInstance,
-  evidence: Omit<MemoryProtectionStop, 'at' | 'cleanupCompleted'>, observedRefs?: ContainerRef[]): Promise<void> {
+  evidence: Omit<MemoryProtectionStop, 'at' | 'cleanupCompleted'>, observedRefs?: ContainerRef[], scope: 'instance' | 'caves' = 'instance'): Promise<void> {
   const id = observed.id
   if (memoryProtectionInFlight.has(id)) return
   memoryProtectionInFlight.add(id)
   try {
     const current = await getGameInstanceById(id)
-    if (!current || current.runtimeFailureKind === 'memory_protection' || runtimeMemoryEpoch(current) !== runtimeMemoryEpoch(observed)) return
+    if (!current || current.runtimeFailureKind === 'memory_protection' || (scope === 'caves' && current.lastStartupReport?.caves.protectionStop) || runtimeMemoryEpoch(current) !== runtimeMemoryEpoch(observed)) return
     const runtime = getContainerRuntime()
-    const refs = (await Promise.all([runtime.findByName(buildMasterContainerName(id)), runtime.findByName(buildCavesContainerName(id))])).filter((r): r is ContainerRef => !!r)
+    const refs = (await Promise.all((scope === 'caves' ? [buildCavesContainerName(id)] : [buildMasterContainerName(id), buildCavesContainerName(id)]).map(name => runtime.findByName(name)))).filter((r): r is ContainerRef => !!r)
     if (observedRefs?.some(ref => !refs.some(actual => actual.id === ref.id))) return
     for (const ref of refs) {
       const before = ref.name.endsWith('-caves') ? evidence.caves : evidence.master
@@ -104,16 +104,29 @@ export async function protectInstanceMemory(app: FastifyInstance, observed: DbGa
       status: 'success', phase: 'ready', phaseDeadlineAt: null, elapsedSeconds: 0, remainingSeconds: null,
       master: { state: 'ready', memoryPeakMb: null }, caves: { state: 'disabled', memoryPeakMb: null }, diagnosis: null,
     } satisfies InstanceStartupSnapshot)
-    report.protectionStop = stop
+    if (scope === 'caves') {
+      report.caves.protectionStop = stop
+      report.caves.state = 'failed'
+      report.caves.cleanupCompleted = false
+      report.caves.diagnosis = { code: evidence.code, message: evidence.message }
+      report.caves.readyAt = null
+    }
+    else {
+      report.protectionStop = stop
+      report.master.state = 'failed'; report.master.readyAt = null
+      report.master.diagnosis = { code: evidence.code, message: evidence.message }
+      if (report.caves.state !== 'disabled') { report.caves.state = 'stopped'; report.caves.readyAt = null }
+    }
     if (startupIsActive(report)) {
       report.status = 'failed'; report.phase = 'failed'; report.phaseDeadlineAt = null
       report.diagnosis = { code: evidence.code, message: evidence.message }; report.updatedAt = at
     }
     if (task) { task.snapshot = report; await persistStartupTask(task) }
-    await updateGameInstanceRuntime(id, { status: 'error', runtimeFailureKind: 'memory_protection', runtimeWarning: evidence.message,
+    await updateGameInstanceRuntime(id, { status: scope === 'caves' ? 'running' : 'error', runtimeFailureKind: scope === 'caves' ? 'memory' : 'memory_protection', runtimeWarning: evidence.message,
       lastError: evidence.message, lastErrorPhase: 'runtime', lastStartupReport: report })
-    const generation = bumpCavesStartGeneration(id)
-    stopLogFollow(id)
+    const generation = bumpCavesStartGeneration(id, scope === 'caves' ? 'caves' : 'all')
+    if (scope === 'caves') stopShardLogFollow(id, 'caves')
+    else stopLogFollow(id)
     const stale = () => !isCurrentCavesStartGeneration(id, generation)
     const outcomes = await Promise.allSettled(refs.map(async ref => {
       if (stale()) throw new Error('保护清理轮次已失效')
@@ -132,20 +145,21 @@ export async function protectInstanceMemory(app: FastifyInstance, observed: DbGa
     if (stale()) return
     const errors = outcomes.filter(result => result.status === 'rejected').map(result => String((result as PromiseRejectedResult).reason))
     stop.cleanupCompleted = errors.length === 0
-    report.protectionStop = stop
+    if (scope === 'caves') { report.caves.protectionStop = stop; report.caves.cleanupCompleted = stop.cleanupCompleted }
+    else report.protectionStop = stop
     if (task) task.snapshot = report
-    if (stop.cleanupCompleted) await runtime.removeShardNetwork(id).catch(error => app.log.warn({ err: error, instanceId: id }, '保护停机网络清理失败'))
+    if (scope === 'instance' && stop.cleanupCompleted) await runtime.removeShardNetwork(id).catch(error => app.log.warn({ err: error, instanceId: id }, '保护停机网络清理失败'))
     await updateGameInstanceRuntime(id, { lastStartupReport: report,
-      ...(stop.cleanupCompleted ? { containerId: null, runtimePid: null, runtimeStartedAt: null } : { lastError: `${evidence.message}；清理未完成：${errors.join('；')}` }) })
+      ...(stop.cleanupCompleted ? scope === 'instance' ? { containerId: null, runtimePid: null, runtimeStartedAt: null, runtimeReadyAt: null } : {} : { lastError: `${evidence.message}；清理未完成：${errors.join('；')}` }) })
     const mb = (value: number | null | undefined) => value == null ? '未知' : `${Math.round(value)} MiB`
     emitPanelEvent({ type: 'instance_exited_unexpectedly', subjectId: id, subjectName: current.name, severity: 'critical', at, occurrenceKey: `memory:${report.taskId}:${at}`,
       message: `实例「${current.name}」内存保护停止：${evidence.message}。主世界 ${mb(evidence.master?.memoryCurrentMb)}/${mb(evidence.master?.memoryMaxMb)}，洞穴 ${mb(evidence.caves?.memoryCurrentMb)}/${mb(evidence.caves?.memoryMaxMb)}，共享预算 ${mb(evidence.host?.budget.maxMb)}，可用 swap ${mb(evidence.host?.swapFreeMb)}。请在服务器 panel.env 检查限额，或以 root 追加 swap 后手动启动。${errors.length ? '分片清理失败，请先再次停止。' : ''}` })
-    instanceConsoleLogStore.appendSystem(id, `内存保护停止：${evidence.message}${errors.length ? '；清理未完成' : '；两片已清理'}`)
+    instanceConsoleLogStore.appendSystem(id, `内存保护停止：${evidence.message}${errors.length ? '；清理未完成' : scope === 'caves' ? '；洞穴已清理，主世界继续运行' : '；两片已清理'}`)
   }
   finally { memoryProtectionInFlight.delete(id) }
 }
 
-/** 已退出的当前分片有明确 OOM 结果时，先保护两片，避免普通对账清掉主世界引用。 */
+/** 当前分片确认 OOM 时按分片隔离；主世界 OOM 才停止失去依赖的洞穴。 */
 export async function protectExitedShardOom(app: FastifyInstance, instance: DbGameInstance, ref: ContainerRef, inspected?: ContainerInspect): Promise<boolean> {
   const runtime = getContainerRuntime()
   const state = inspected ?? await runtime.inspect(ref)
@@ -155,9 +169,10 @@ export async function protectExitedShardOom(app: FastifyInstance, instance: DbGa
   const isCaves = ref.name.endsWith('-caves')
   const other = await runtime.findByName(isCaves ? buildMasterContainerName(instance.id) : buildCavesContainerName(instance.id))
   const peer = other ? await sampleRuntimeResources(runtime, other) : null
-  await protectInstanceMemory(app, instance, { code: 'oom', message: '确认当前分片因 OOM 退出，已保护停止整个实例',
-    master: isCaves ? peer : resources, caves: isCaves ? resources : peer, host: await sampleHostResources(runtime) }, [ref, ...(other ? [other] : [])])
-  return (await getGameInstanceById(instance.id))?.runtimeFailureKind === 'memory_protection'
+  await protectInstanceMemory(app, instance, { code: 'oom', message: isCaves ? '洞穴因 OOM 退出，已保护停止洞穴，主世界继续运行' : '主世界因 OOM 退出，已保护停止实例',
+    master: isCaves ? peer : resources, caves: isCaves ? resources : peer, host: await sampleHostResources(runtime) }, isCaves ? [ref] : [ref, ...(other ? [other] : [])], isCaves ? 'caves' : 'instance')
+  const saved = await getGameInstanceById(instance.id)
+  return saved?.runtimeFailureKind === 'memory_protection' || !!saved?.lastStartupReport?.caves.protectionStop
 }
 /**
  * 等待主世界就绪的默认上限（秒）。
@@ -326,9 +341,11 @@ export function findShardLuaFailure(
   instanceId: string,
   installPath?: string,
   startedAt?: string | null,
+  onlyShard?: 'master' | 'caves',
 ): string | null {
   const since = startedAt ? Date.parse(startedAt) : 0
   for (const shard of ['master', 'caves'] as const) {
+    if (onlyShard && shard !== onlyShard) continue
     const lines = instanceConsoleLogStore.listLogs(instanceId, 0, 2000)
       .filter(line => line.stream === 'stdout' && line.shard === shard && (!since || Date.parse(line.at) >= since))
       .map(line => line.text)
@@ -671,7 +688,7 @@ export async function startSingleShardContainer(
   spec: ShardContainerSpec,
   gameDstImage: string,
   runtimeMode: 'docker' | 'native',
-): Promise<{ ok: true, ref: ContainerRef, inspect: ContainerInspect } | { ok: false, message: string }> {
+): Promise<{ ok: true, ref: ContainerRef, inspect: ContainerInspect } | { ok: false, message: string, ref?: ContainerRef }> {
   let ref: ContainerRef
   try {
     ref = await runtime.createShardContainer(spec)
@@ -684,15 +701,18 @@ export async function startSingleShardContainer(
     await runtime.start(ref)
   }
   catch (error) {
-    await runtime.remove(ref)
     const raw = error instanceof Error ? error.message : '分片运行时启动失败'
+    try { await runtime.remove(ref) }
+    catch { return { ok: false, message: `${formatShardStartError(raw, gameDstImage, runtimeMode)}；分片清理未完成`, ref } }
     return { ok: false, message: formatShardStartError(raw, gameDstImage, runtimeMode) }
   }
   const inspect = await runtime.inspect(ref).catch(() => ({ ...ref, running: false, probeFailed: true } as ContainerInspect))
+  if (inspect.runtimeIdentity) ref.runtimeIdentity = inspect.runtimeIdentity
   if (!inspect.running && !inspect.probeFailed) {
     const logTail = await readRecentContainerLogs(runtime, ref)
-    await runtime.remove(ref)
     const hint = logTail || '分片启动后立即退出，请检查安装目录与分片配置'
+    try { await runtime.remove(ref) }
+    catch { return { ok: false, message: `${hint}；分片清理未完成`, ref } }
     return { ok: false, message: hint }
   }
   return { ok: true, ref, inspect }
@@ -978,6 +998,7 @@ async function startInstanceContainerUnlocked(
     instanceName: string
     gamePort: number | null
     source?: 'manual' | 'automatic'
+    target?: 'all' | 'master' | 'caves'
   },
   task: StartupTask,
   generation: number,
@@ -988,6 +1009,7 @@ async function startInstanceContainerUnlocked(
   const stale = () => !isCurrentStartupTask(task) || !isCurrentCavesStartGeneration(input.instanceId, generation) || memoryProtectionInFlight.has(input.instanceId)
   if (stale()) return { ok: false, message: '启动已取消' }
   const previous = await getGameInstanceById(input.instanceId)
+  const reuseMaster = task.snapshot.master.state === 'ready' && task.snapshot.target !== 'master'
   if (previous?.runtimeFailureKind === 'memory_protection' && input.source !== 'manual') return { ok: false, message: '实例已因内存保护停止，需要手动检查资源后启动' }
   await changeStartupPhase(task, 'prepare')
   if (isSteamcmdAppUpdateBusy()) return { ok: false, message: '当前正在安装或更新游戏文件，请完成后再启动' }
@@ -1032,7 +1054,7 @@ async function startInstanceContainerUnlocked(
       }),
     }
   }
-  const shardEnabled = readClusterShardEnabledFromInstall(input.installPath)
+  const shardEnabled = task.snapshot.target !== 'master' && readClusterShardEnabledFromInstall(input.installPath)
   if (shardEnabled && !isCavesShardConfigured(input.installPath)) {
     ensureDstCavesShardConfig(input.installPath, input.gamePort ?? undefined)
     try {
@@ -1051,10 +1073,10 @@ async function startInstanceContainerUnlocked(
   const runtimeForGuard = getContainerRuntime()
   const host = await sampleHostResources(runtimeForGuard)
   const memoryPressure = assessHostMemoryForHeavyOperation('dst-container-start', {
-    shardCount: cavesConfigured ? 2 : 1,
+    shardCount: reuseMaster ? 1 : cavesConfigured ? 2 : 1,
     modCount: await countEnabledInstanceMods(input.instanceId),
-    memoryCapMb: settings.masterMemoryMb,
-    measuredDemandMb: measuredStartupDemand(previous?.lastStartupReport, cavesConfigured),
+    memoryCapMb: reuseMaster ? settings.cavesMemoryMb : settings.masterMemoryMb,
+    measuredDemandMb: reuseMaster ? task.snapshot.planningDemand?.cavesMb : measuredStartupDemand(previous?.lastStartupReport, cavesConfigured),
   }, host ? hostGuardReading(host) : undefined)
   await recordStartupSwapAdvice(task, host, memoryPressure.requiredMb)
   if (!memoryPressure.ok) {
@@ -1105,8 +1127,8 @@ async function startInstanceContainerUnlocked(
   }
   const runtime = getContainerRuntime()
   let shardNetworkName: string | undefined
-  if (shardEnabled && cavesConfigured) {
-    const interconnectChanged = runtimeMode === 'docker'
+  if (readClusterShardEnabledFromInstall(input.installPath)) {
+    const interconnectChanged = reuseMaster ? false : runtimeMode === 'docker'
       ? ensureDockerShardInterconnectConfig(input.installPath, input.instanceId)
       : ensureNativeShardInterconnectConfig(input.installPath)
     if (interconnectChanged) {
@@ -1129,27 +1151,41 @@ async function startInstanceContainerUnlocked(
   else instanceConsoleLogStore.appendSystem(input.instanceId, host?.budget.message ?? '共享内存保护无法核验，按现有配置启动')
   masterSpec.resourceLimits = resolveDstContainerResourceLimits({ memory: (settings.masterMemoryMb ?? 0) * 1024 * 1024 }) ?? { memory: 0 }
   if (cavesSpec) cavesSpec.resourceLimits = resolveDstContainerResourceLimits({ memory: (settings.cavesMemoryMb ?? 0) * 1024 * 1024 }) ?? { memory: 0 }
-  const startedAt = new Date().toISOString()
-  await changeStartupPhase(task, 'master_loading', new Date(Date.now() + settings.shardReadyWaitSec * 1000).toISOString())
+  const startedAt = reuseMaster ? task.snapshot.master.startedAt ?? previous?.runtimeStartedAt ?? task.snapshot.startedAt : new Date().toISOString()
+  if (!reuseMaster) task.snapshot.master.startedAt = startedAt
+  await changeStartupPhase(task, reuseMaster ? 'caves_loading' : 'master_loading', new Date(Date.now() + settings.shardReadyWaitSec * 1000).toISOString())
   if (stale()) return { ok: false, message: '启动已取消' }
-  const masterStart = await startSingleShardContainer(runtime, masterSpec, gameDstImage, runtimeMode)
+  const existingMaster = reuseMaster ? await runtime.findByName(masterSpec.name) : undefined
+  if (reuseMaster && !existingMaster) {
+    task.snapshot.master.state = 'failed'; task.snapshot.master.readyAt = null
+    return { ok: false, message: '主世界已退出，请先启动主世界' }
+  }
+  const masterStart = existingMaster ? { ok: true as const, ref: existingMaster, inspect: await runtime.inspect(existingMaster) } : await startSingleShardContainer(runtime, masterSpec, gameDstImage, runtimeMode)
   if (stale()) {
     // 节点队列仍归旧任务所有；新任务尚未创建同名单元，安全清理迟到的创建结果。
-    if (masterStart.ok) await stopAndRemoveShard(runtime, masterStart.ref, input.instanceId)
+    if (masterStart.ok && !reuseMaster) await stopAndRemoveShard(runtime, masterStart.ref, input.instanceId)
     return { ok: false, message: '启动已取消' }
   }
   if (!masterStart.ok) {
+    if (masterStart.ref) task.snapshot.master.cleanupCompleted = false
     return { ok: false, message: `主世界：${masterStart.message}` }
   }
   const ref = masterStart.ref
+  if (reuseMaster && !masterStart.inspect.probeFailed) {
+    if (!masterStart.inspect.running || masterStart.inspect.restarting) {
+      task.snapshot.master.state = 'failed'; task.snapshot.master.readyAt = null
+      return { ok: false, message: '主世界已退出，请先启动主世界' }
+    }
+    if (task.snapshot.master.resources?.runtimeIdentity && masterStart.inspect.runtimeIdentity && task.snapshot.master.resources.runtimeIdentity !== masterStart.inspect.runtimeIdentity) return { ok: false, message: '主世界运行轮次已变化，请刷新后重试' }
+  }
   delete task.snapshot.protectionStop
-  task.snapshot.master.restartBaseline = masterStart.inspect.probeFailed ? null : masterStart.inspect.restarts ?? 0
+  if (!reuseMaster) task.snapshot.master.restartBaseline = masterStart.inspect.probeFailed ? null : masterStart.inspect.restarts ?? 0
   await persistStartupTask(task)
   const displayCommand = masterSpec.cmd.join(' ')
   await updateGameInstanceRuntime(input.instanceId, {
-    status: 'running', containerId: ref.id, runtimePid: null, runtimeStartedAt: startedAt,
-    lastCommand: displayCommand, lastExitCode: null, lastError: null, runtimeWarning: null,
-    runtimeReadyAt: null, runtimeFailureKind: null, unexpectedExitAt: null,
+    status: 'running', containerId: ref.id,
+    ...(!reuseMaster ? { runtimePid: null, runtimeStartedAt: startedAt, lastCommand: displayCommand, lastExitCode: null, runtimeReadyAt: null, unexpectedExitAt: null } : {}),
+    lastError: null, runtimeWarning: null, runtimeFailureKind: null,
     whereStartupTaskId: task.snapshot.taskId,
   })
   app.log.info({
@@ -1159,9 +1195,9 @@ async function startInstanceContainerUnlocked(
     command: displayCommand,
     shardEnabled,
   }, '实例运行时已启动')
-  startShardLogFollow(input.instanceId, ref, 'master')
+  if (!reuseMaster) startShardLogFollow(input.instanceId, ref, 'master')
   // 不阻塞启动：等本轮的 Mod 索引完成后，把「实际加载了几个 Mod」写进控制台
-  void reportLoadedModsAfterStart({
+  if (!reuseMaster) void reportLoadedModsAfterStart({
     instanceId: input.instanceId,
     installPath: input.installPath,
     signal: task.controller.signal,
@@ -1169,7 +1205,7 @@ async function startInstanceContainerUnlocked(
     app.log.warn({ instanceId: input.instanceId, err: error }, 'Mod 加载情况上报失败')
   })
 
-  instanceConsoleLogStore.appendSystem(input.instanceId, cavesSpec
+  instanceConsoleLogStore.appendSystem(input.instanceId, reuseMaster ? '主世界已就绪，正在启动洞穴分片' : cavesSpec
     ? '主世界正在加载，就绪后再启动洞穴分片' : '主世界正在加载，等待游戏确认就绪', 'master')
   const completion = startCavesAfterMasterReady(app, {
       instanceId: input.instanceId,
@@ -1177,7 +1213,7 @@ async function startInstanceContainerUnlocked(
       masterRef: ref,
       cavesSpec,
       generation,
-      baselineRestarts: task.snapshot.master.restartBaseline,
+      baselineRestarts: task.snapshot.master.restartBaseline ?? null,
       startedAt,
       task,
       startCaves: cavesSpec ? async () => {
@@ -1188,13 +1224,21 @@ async function startInstanceContainerUnlocked(
         }, caveHost ? hostGuardReading(caveHost) : undefined)
         await recordStartupSwapAdvice(task, caveHost, pressure.requiredMb)
         if (!pressure.ok) return { ok: false as const, message: pressure.detail }
+        task.snapshot.caves.startedAt = new Date().toISOString()
+        await persistStartupTask(task)
+        if (stale()) return { ok: false as const, message: '启动已取消' }
         const result = await startSingleShardContainer(runtime, cavesSpec, gameDstImage, runtimeMode)
         if (result.ok && stale()) {
           await stopAndRemoveShard(runtime, result.ref, input.instanceId)
           return { ok: false as const, message: '启动已取消' }
         }
-        if (result.ok) startShardLogFollow(input.instanceId, result.ref, 'caves')
-        return result.ok ? { ok: true as const, ref: result.ref, baselineRestarts: result.inspect.probeFailed ? null : result.inspect.restarts ?? 0 } : { ok: false as const, message: `洞穴：${result.message}` }
+        if (result.ok) {
+          delete task.snapshot.caves.protectionStop
+          delete task.snapshot.caves.cleanupCompleted
+          task.snapshot.caves.diagnosis = null
+          startShardLogFollow(input.instanceId, result.ref, 'caves')
+        }
+        return result.ok ? { ok: true as const, ref: result.ref, baselineRestarts: result.inspect.probeFailed ? null : result.inspect.restarts ?? 0 } : { ok: false as const, message: `洞穴：${result.message}`, ref: result.ref }
       } : undefined,
     })
   return { ok: true, ref, displayCommand, completion }
@@ -1209,10 +1253,10 @@ async function startInstanceContainerUnlocked(
  */
 const cavesStartGenerations = new Map<string, number>()
 
-export function bumpCavesStartGeneration(instanceId: string): number {
+export function bumpCavesStartGeneration(instanceId: string, target: 'all' | 'master' | 'caves' = 'all'): number {
   cancelStartupTask(instanceId)
-  shardLogProbeCache.delete(`${instanceId}:master`)
-  shardLogProbeCache.delete(`${instanceId}:caves`)
+  if (target !== 'caves') shardLogProbeCache.delete(`${instanceId}:master`)
+  if (target !== 'master') shardLogProbeCache.delete(`${instanceId}:caves`)
   const next = (cavesStartGenerations.get(instanceId) ?? 0) + 1
   cavesStartGenerations.set(instanceId, next)
   return next
@@ -1256,7 +1300,7 @@ export async function startCavesAfterMasterReady(
     startedAt: string
     task?: StartupTask
     cavesRef?: ContainerRef
-    startCaves?: () => Promise<{ ok: true, ref: ContainerRef, baselineRestarts?: number | null } | { ok: false, message: string }>
+    startCaves?: () => Promise<{ ok: true, ref: ContainerRef, baselineRestarts?: number | null } | { ok: false, message: string, ref?: ContainerRef }>
   },
 ): Promise<void> {
   const stale = () => !isCurrentCavesStartGeneration(input.instanceId, input.generation)
@@ -1268,63 +1312,137 @@ export async function startCavesAfterMasterReady(
   await runStartupMonitor(app, {
     ...input, task, runtime, waitSec: task.snapshot.settings.shardReadyWaitSec,
     isCancelled: stale,
-    luaFailure: () => findShardLuaFailure(input.instanceId, input.installPath, input.startedAt),
+    luaFailure: shard => findShardLuaFailure(input.instanceId, input.installPath, task.snapshot[shard ?? 'master'].startedAt ?? input.startedAt, shard),
     probe: (ref, shard, remoteShardId) => queryStartupShard(ref, input.instanceId, shard, task.controller.signal, remoteShardId),
-    protectOom: async () => {
+    protectOom: async shard => {
       const current = await getGameInstanceById(input.instanceId)
       if (!current || stale() || !isCurrentStartupTask(task)) return
-      const refs = [input.masterRef, ...(input.cavesRef ? [input.cavesRef] : [])]
-      await protectInstanceMemory(app, current, { code: 'oom', message: '确认本轮分片 OOM，已保护停止整个实例', master: task.snapshot.master.resources ?? null, caves: task.snapshot.caves.resources ?? null, host: await sampleHostResources(runtime) }, refs)
+      await protectInstanceMemory(app, current, { code: 'oom', message: shard === 'caves' ? '洞穴发生 OOM，已保护停止洞穴，主世界继续运行' : '主世界发生 OOM，已保护停止实例', master: task.snapshot.master.resources ?? null, caves: task.snapshot.caves.resources ?? null, host: await sampleHostResources(runtime) }, shard === 'caves' ? undefined : [input.masterRef], shard === 'caves' ? 'caves' : 'instance')
     },
     cleanup: async (refs) => {
       if (stale() || !isCurrentStartupTask(task)) return
-      stopLogFollow(input.instanceId)
+      for (const ref of refs) {
+        const shard = ref.id === input.masterRef.id ? 'master' : 'caves'
+        ref.runtimeIdentity ??= task.snapshot[shard].resources?.runtimeIdentity ?? undefined
+        stopShardLogFollow(input.instanceId, shard)
+      }
       const removed = await Promise.all(refs.map(ref => stopAndRemoveShard(runtime, ref, input.instanceId, () => stale() || !isCurrentStartupTask(task))))
       if (removed.some(value => !value)) throw new Error('分片清理未完成，保留上一轮引用')
       if (stale() || !isCurrentStartupTask(task)) return
-      await runtime.removeShardNetwork(input.instanceId)
-      shardLogProbeCache.delete(input.instanceId + ':master')
-      shardLogProbeCache.delete(input.instanceId + ':caves')
+      const remaining = await Promise.all([runtime.findByName(buildMasterContainerName(input.instanceId)), runtime.findByName(buildCavesContainerName(input.instanceId))])
+      if (stale() || !isCurrentStartupTask(task)) return
+      if (remaining.every(ref => !ref)) await runtime.removeShardNetwork(input.instanceId)
+      for (const ref of refs) shardLogProbeCache.delete(input.instanceId + (ref.id === input.masterRef.id ? ':master' : ':caves'))
     },
   })
 }
 
-export async function stopInstanceContainer(instanceId: string): Promise<void> {
+/** 运行期洞穴失败只清理该分片；保护锁与失败现场留在同一份报告中。 */
+export async function stopFailedCaves(app: FastifyInstance, observed: DbGameInstance, code: string, message: string): Promise<void> {
+  if (memoryProtectionInFlight.has(observed.id) || startupIsActive(currentStartupTask(observed.id)?.snapshot)) return
+  const current = await getGameInstanceById(observed.id)
+  if (!current || runtimeMemoryEpoch(current) !== runtimeMemoryEpoch(observed)) return
+  if (current.lastStartupReport?.caves.state === 'failed') return
+  const runtime = getContainerRuntime()
+  const ref = await resolveCavesContainerRef(current.id)
+  const inspect = ref ? await runtime.inspect(ref) : null
+  if (inspect?.probeFailed) return
+  if (ref && inspect?.runtimeIdentity) ref.runtimeIdentity = inspect.runtimeIdentity
+  const at = new Date().toISOString()
+  const report = structuredClone(current.lastStartupReport ?? {
+    taskId: randomUUID(), status: 'success', phase: 'ready', startedAt: current.runtimeStartedAt ?? at,
+    updatedAt: at, phaseStartedAt: at, phaseDeadlineAt: null, elapsedSeconds: 0, remainingSeconds: null,
+    master: { state: 'ready', memoryPeakMb: null }, caves: { state: 'ready', memoryPeakMb: null }, diagnosis: null,
+  } satisfies InstanceStartupSnapshot)
+  const recordedIdentity = report.caves.resources?.runtimeIdentity
+  if (recordedIdentity && inspect?.runtimeIdentity && recordedIdentity !== inspect.runtimeIdentity) return
+  const generation = bumpCavesStartGeneration(current.id, 'caves')
+  const stale = () => !isCurrentCavesStartGeneration(current.id, generation)
+  report.caves.state = 'failed'
+  report.caves.cleanupCompleted = false
+  report.caves.diagnosis = { code, message }
+  report.status = 'failed'; report.phase = 'failed'; report.updatedAt = at; report.phaseDeadlineAt = null
+  report.diagnosis = { code, message }
+  const cached = currentStartupTask(current.id)
+  if (cached) { cached.snapshot = report; await persistStartupTask(cached) }
+  if (stale()) return
+  await updateGameInstanceRuntime(current.id, { lastStartupReport: report, runtimeWarning: message, lastError: message, lastErrorPhase: 'runtime' })
+  stopShardLogFollow(current.id, 'caves')
+  const removed = await stopAndRemoveShard(runtime, ref, current.id, stale)
+  if (stale()) return
+  report.caves.cleanupCompleted = removed
+  if (cached) { cached.snapshot = report; await persistStartupTask(cached) }
+  await updateGameInstanceRuntime(current.id, { lastStartupReport: report, lastError: removed ? message : `${message}；洞穴清理未完成，请先停止实例` })
+  instanceConsoleLogStore.appendSystem(current.id, `${message}；主世界继续运行${removed ? '' : '；洞穴清理未完成'}`)
+  emitPanelEvent({ type: 'instance_exited_unexpectedly', subjectId: current.id, subjectName: current.name, severity: 'critical', at,
+    occurrenceKey: `caves:${report.taskId}:${recordedIdentity ?? ref?.id ?? ''}`, message: `实例「${current.name}」${message}；主世界继续运行` })
+  app.log.warn({ instanceId: current.id, code, removed }, '洞穴失败已隔离')
+}
+
+export async function stopInstanceContainer(instanceId: string, expectedEpoch?: string): Promise<boolean> {
   if (memoryProtectionInFlight.has(instanceId)) throw new Error('内存保护正在清理分片，请稍后再试')
+  if (expectedEpoch !== undefined) {
+    const observed = await getGameInstanceById(instanceId)
+    if (!observed || runtimeMemoryEpoch(observed) !== expectedEpoch || startupIsActive(getStartupSnapshot(instanceId, observed.lastStartupReport))) return false
+  }
   // 先作废还在等待中的洞穴启动任务：否则它会在实例停机之后把洞穴拉起来
   const generation = bumpCavesStartGeneration(instanceId)
   const stale = () => !isCurrentCavesStartGeneration(instanceId, generation)
   stopLogFollow(instanceId)
   try {
     const instance = await getGameInstanceById(instanceId)
-    if (stale()) return
+    if (stale()) return false
     if (startupIsActive(instance?.lastStartupReport) && !currentStartupTask(instanceId)) {
       const task = createStartupTask(instanceId, instance!.lastStartupReport!)
       cancelStartupTask(instanceId)
       await persistStartupTask(task)
-      if (stale()) return
+      if (stale()) return false
     }
     const runtime = getContainerRuntime()
     const cavesRef = await resolveCavesContainerRef(instanceId)
-    if (stale()) return
+    if (stale()) return false
     const masterRef = await resolveInstanceContainerRef(instanceId)
-    if (stale()) return
+    if (stale()) return false
+    const cleanupReport = currentStartupTask(instanceId)?.snapshot ?? instance?.lastStartupReport
+    if (cleanupReport && (masterRef || cavesRef)) {
+      cleanupReport.master.cleanupCompleted = false
+      cleanupReport.caves.cleanupCompleted = false
+      if (cleanupReport.protectionStop) cleanupReport.protectionStop.cleanupCompleted = false
+      if (cleanupReport.caves.protectionStop) cleanupReport.caves.protectionStop.cleanupCompleted = false
+      const cached = currentStartupTask(instanceId)
+      if (cached) { cached.snapshot = cleanupReport; await persistStartupTask(cached) }
+      if (stale()) return false
+      await updateGameInstanceRuntime(instanceId, { lastStartupReport: cleanupReport })
+      if (stale()) return false
+    }
     if (cavesRef) {
       instanceConsoleLogStore.appendSystem(instanceId, '正在停止并移除洞穴分片以释放内存')
     }
     const cavesRemoved = await stopAndRemoveShard(runtime, cavesRef, instanceId, stale)
-    if (stale()) return
+    if (stale()) return false
     if (masterRef) {
       instanceConsoleLogStore.appendSystem(instanceId, '正在停止并移除主世界分片以释放内存')
     }
     const masterRemoved = await stopAndRemoveShard(runtime, masterRef, instanceId, stale)
-    if (stale()) return
+    if (stale()) return false
     if (!cavesRemoved || !masterRemoved) throw new Error('分片清理未完成，请检查运行时连接与控制台后再次停止')
     if (masterRef) {
       instanceConsoleLogStore.appendSystem(instanceId, '实例运行时已删除')
     }
     await runtime.removeShardNetwork(instanceId)
-    if (stale()) return
+    if (stale()) return false
+    const report = currentStartupTask(instanceId)?.snapshot ?? instance?.lastStartupReport
+    if (report) {
+      report.master.state = 'stopped'; report.master.readyAt = null; report.master.cleanupCompleted = true
+      report.caves.state = report.caves.protectionStop ? 'failed' : report.caves.state === 'disabled' ? 'disabled' : 'stopped'
+      report.caves.readyAt = null; report.caves.cleanupCompleted = true
+      if (report.caves.protectionStop) report.caves.protectionStop.cleanupCompleted = true
+      if (report.protectionStop) report.protectionStop.cleanupCompleted = true
+      const task = currentStartupTask(instanceId)
+      if (task) { task.snapshot = report; await persistStartupTask(task); releaseStartupTask(task) }
+      if (stale()) return false
+      await updateGameInstanceRuntime(instanceId, { lastStartupReport: report, runtimeReadyAt: null })
+    }
     if (!masterRef && !cavesRef) {
       if (instance?.status === 'running' || instance?.runtimeFailureKind === 'memory_protection') {
         await updateGameInstanceRuntime(instanceId, {
@@ -1333,10 +1451,9 @@ export async function stopInstanceContainer(instanceId: string): Promise<void> {
           runtimePid: null,
           runtimeStartedAt: null,
           lastError: instance.runtimeFailureKind === 'memory_protection' ? instance.lastError : null,
-          ...(instance.runtimeFailureKind === 'memory_protection' && instance.lastStartupReport?.protectionStop ? { lastStartupReport: { ...instance.lastStartupReport, protectionStop: { ...instance.lastStartupReport.protectionStop, cleanupCompleted: true } } } : {}),
         })
       }
-      return
+      return true
     }
     await updateGameInstanceRuntime(instanceId, {
       status: 'stopped',
@@ -1344,10 +1461,10 @@ export async function stopInstanceContainer(instanceId: string): Promise<void> {
       runtimePid: null,
       runtimeStartedAt: null,
       lastError: instance?.runtimeFailureKind === 'memory_protection' ? instance.lastError : null,
-      ...(instance?.runtimeFailureKind === 'memory_protection' && instance.lastStartupReport?.protectionStop ? { lastStartupReport: { ...instance.lastStartupReport, protectionStop: { ...instance.lastStartupReport.protectionStop, cleanupCompleted: true } } } : {}),
     })
   }
-  catch (error) { if (!stale()) throw error }
+  catch (error) { if (!stale()) throw error; return false }
+  return !stale()
 }
 
 export async function removeInstanceContainer(instanceId: string): Promise<void> {
@@ -1425,11 +1542,16 @@ export async function sendInstanceContainerCommand(
 async function failPreparation(app: FastifyInstance, task: StartupTask, message: string, code = 'prepare_failed') {
   if (!isCurrentStartupTask(task)) return
   task.snapshot.diagnosis = { code, message: code === 'host_memory_pressure' ? '宿主机内存与 swap 余量不足，请按通知中的服务器命令处理后重试' : code === 'probe_unavailable' ? '运行时查询通道不可用，已超过原启动期限' : '启动准备失败，请检查服务器配置与控制台' }
+  const keepMaster = task.snapshot.master.state === 'ready'
+  task.snapshot[keepMaster ? 'caves' : 'master'].state = 'failed'
+  task.snapshot[keepMaster ? 'caves' : 'master'].diagnosis = { code, message }
+  task.snapshot[keepMaster ? 'caves' : 'master'].cleanupCompleted ??= true
   await changeStartupPhase(task, 'failed')
   if (!isCurrentStartupTask(task)) return
   instanceConsoleLogStore.appendSystem(task.instanceId, `启动失败：${message}`)
   await updateGameInstanceRuntime(task.instanceId, {
-    status: 'error', lastError: message, lastErrorPhase: 'runtime', runtimeWarning: message,
+    status: keepMaster ? 'running' : 'error', lastError: message, lastErrorPhase: 'runtime', runtimeWarning: message,
+    ...(!keepMaster ? { runtimeReadyAt: null } : {}),
     whereStartupTaskId: task.snapshot.taskId,
   })
   app.log.warn({ instanceId: task.instanceId }, message)
@@ -1448,13 +1570,53 @@ function queuePreparedStart(app: FastifyInstance, input: Parameters<typeof start
   enqueueStartupTask(task, () => queuePreparedStartRun(app, input, task, generation))
 }
 
-export async function startInstanceContainer(app: FastifyInstance, input: Parameters<typeof startInstanceContainerUnlocked>[1]): Promise<
+const acceptingStarts = new Set<string>()
+export async function startInstanceContainer(app: FastifyInstance, input: Parameters<typeof startInstanceContainerUnlocked>[1]) {
+  if (acceptingStarts.has(input.instanceId)) return { ok: false as const, message: '该实例正在受理启动请求' }
+  acceptingStarts.add(input.instanceId)
+  try { return await acceptInstanceStart(app, input) }
+  finally { acceptingStarts.delete(input.instanceId) }
+}
+
+async function acceptInstanceStart(app: FastifyInstance, input: Parameters<typeof startInstanceContainerUnlocked>[1]): Promise<
   { ok: true, accepted: true, taskId: string } | { ok: false, message: string }
 > {
+  const observedGeneration = cavesStartGenerations.get(input.instanceId) ?? 0
+  const cancelled = () => !isCurrentCavesStartGeneration(input.instanceId, observedGeneration) || memoryProtectionInFlight.has(input.instanceId)
   if (startupIsActive(currentStartupTask(input.instanceId)?.snapshot)) return { ok: false, message: '该实例正在排队或启动中' }
   const instance = await getGameInstanceById(input.instanceId)
   if (!instance) return { ok: false, message: '实例不存在' }
   if (memoryProtectionInFlight.has(input.instanceId)) return { ok: false, message: '内存保护正在清理分片，请稍后再试' }
+  if (instance.runtimeFailureKind === 'memory_protection') {
+    if (input.source !== 'manual') return { ok: false, message: '内存保护停止后只能由用户手动启动或重启' }
+    if (!instance.lastStartupReport?.protectionStop?.cleanupCompleted) return { ok: false, message: '保护停机清理未完成，请先再次停止实例' }
+  }
+  const target = input.target ?? 'all'
+  const runtime = getContainerRuntime()
+  const masterRef = await runtime.findByName(buildMasterContainerName(instance.id))
+  const masterInspect = masterRef ? await runtime.inspect(masterRef) : null
+  if (masterInspect?.probeFailed) return { ok: false, message: '无法确认主世界状态，请稍后重试' }
+  const reuseMaster = masterInspect?.running === true && !masterInspect.restarting
+  if (target === 'master' && reuseMaster) return { ok: false, message: '主世界已经运行' }
+  if (target === 'caves' && !reuseMaster) return { ok: false, message: '请先启动主世界并等待就绪' }
+  if (target !== 'master' && !readClusterShardEnabledFromInstall(input.installPath) && target === 'caves') return { ok: false, message: '尚未开启洞穴' }
+  const caveLock = instance.lastStartupReport?.caves.protectionStop
+  if (instance.lastStartupReport?.master.cleanupCompleted === false) return { ok: false, message: '主世界清理未完成，请先停止实例完成清理' }
+  if (target !== 'master' && caveLock && input.source !== 'manual') return { ok: false, message: '洞穴已内存保护停止，只能手动启动或重启' }
+  if (target !== 'master' && (caveLock?.cleanupCompleted === false || instance.lastStartupReport?.caves.cleanupCompleted === false)) return { ok: false, message: '洞穴清理未完成，请先停止实例完成清理' }
+  if (reuseMaster) {
+    await ensureInstanceContainerLogFollow(instance.id)
+    const probe = await queryStartupShard(masterRef!, instance.id, 'master', new AbortController().signal)
+    if (!probe?.worldReady) return { ok: false, message: '尚未确认主世界就绪，请稍后重试' }
+    const cavesRef = await runtime.findByName(buildCavesContainerName(instance.id))
+    if (cavesRef) {
+      const caveInspect = await runtime.inspect(cavesRef)
+      if (caveInspect.probeFailed || caveInspect.running) return { ok: false, message: '洞穴已经运行或状态暂时未知，请刷新后重试' }
+      if (cancelled()) return { ok: false, message: '启动请求已取消' }
+      if (caveInspect.runtimeIdentity) cavesRef.runtimeIdentity = caveInspect.runtimeIdentity
+      if (!await stopAndRemoveShard(runtime, cavesRef, instance.id, cancelled)) return { ok: false, message: '洞穴清理未完成，请先停止实例完成清理' }
+    }
+  }
   if (instance.runtimeFailureKind === 'memory_protection') {
     if (input.source !== 'manual') return { ok: false, message: '内存保护停止后只能由用户手动启动或重启' }
     if (!instance.lastStartupReport?.protectionStop?.cleanupCompleted) return { ok: false, message: '保护停机清理未完成，请先再次停止实例' }
@@ -1464,15 +1626,35 @@ export async function startInstanceContainer(app: FastifyInstance, input: Parame
       if (ref) return { ok: false, message: '仍存在上一轮分片，请先停止并完成清理' }
     }
   }
-  const generation = bumpCavesStartGeneration(input.instanceId)
+  if (cancelled()) return { ok: false, message: '启动请求已取消' }
+  const generation = bumpCavesStartGeneration(input.instanceId, reuseMaster ? 'caves' : target)
   const task = createStartupTask(input.instanceId)
+  task.snapshot.target = target
+  if (reuseMaster) {
+    task.snapshot.master = structuredClone(instance.lastStartupReport?.master ?? { state: 'ready', memoryPeakMb: null })
+    task.snapshot.master.state = 'ready'
+    task.snapshot.master.startedAt ??= masterInspect?.startedAt ?? instance.runtimeStartedAt ?? task.snapshot.startedAt
+    task.snapshot.master.readyAt ??= instance.runtimeReadyAt
+    task.snapshot.master.restartBaseline ??= masterInspect?.restarts ?? null
+    const resources = await sampleRuntimeResources(runtime, masterRef!)
+    if (resources) {
+      if (task.snapshot.master.resources?.runtimeIdentity && resources.runtimeIdentity && task.snapshot.master.resources.runtimeIdentity !== resources.runtimeIdentity) {
+        task.snapshot.master = { state: 'ready', startedAt: masterInspect?.startedAt ?? task.snapshot.startedAt,
+          readyAt: instance.runtimeReadyAt, memoryPeakMb: null, restartBaseline: masterInspect?.restarts ?? null }
+      }
+      task.snapshot.master.resources = resources
+      if (resources.runtimeIdentity !== task.snapshot.master.resourceBaseline?.runtimeIdentity) task.snapshot.master.resourceBaseline = resources
+    }
+  }
   task.snapshot.planningDemand = {
     masterMb: instance.lastStartupReport?.master.memoryAndSwapPeakMb ?? instance.lastStartupReport?.planningDemand?.masterMb ?? null,
     cavesMb: instance.lastStartupReport?.caves.memoryAndSwapPeakMb ?? instance.lastStartupReport?.planningDemand?.cavesMb ?? null,
   }
   if (instance.runtimeFailureKind === 'memory_protection' && instance.lastStartupReport?.protectionStop) task.snapshot.protectionStop = structuredClone(instance.lastStartupReport.protectionStop)
   task.snapshot.settings = resolveInstanceResourceSettings(instance.resourceConfig)
-  task.snapshot.caves.state = readClusterShardEnabledFromInstall(input.installPath) ? 'pending' : 'disabled'
+  task.snapshot.caves.state = readClusterShardEnabledFromInstall(input.installPath) ? target === 'master' ? 'stopped' : 'pending' : 'disabled'
+  if (target === 'master' && instance.lastStartupReport?.caves) task.snapshot.caves = structuredClone(instance.lastStartupReport.caves)
+  if (caveLock) task.snapshot.caves.protectionStop = structuredClone(caveLock)
   await persistStartupTask(task)
   queuePreparedStart(app, input, task, generation)
   return { ok: true, accepted: true, taskId: task.snapshot.taskId }
@@ -1480,10 +1662,10 @@ export async function startInstanceContainer(app: FastifyInstance, input: Parame
 
 /** 面板重启后继续原来的等待预算，不能再给卡住的世界一个完整的新超时。 */
 export async function recoverInstanceStartup(app: FastifyInstance, instance: NonNullable<Awaited<ReturnType<typeof getGameInstanceById>>>) {
-  if (instance.runtimeFailureKind === 'memory_protection') return
+  if (instance.runtimeFailureKind === 'memory_protection' || (instance.lastStartupReport?.caves.protectionStop && instance.lastStartupReport.target !== 'master')) return
   const report = instance.lastStartupReport
   if (currentStartupTask(instance.id) || !startupIsActive(report) || !report || !instance.installPath || instance.nodeId !== LOCAL_NODE_ID) return
-  const generation = bumpCavesStartGeneration(instance.id)
+  const generation = bumpCavesStartGeneration(instance.id, report.target ?? 'all')
   const task = createStartupTask(instance.id, report)
   task.snapshot.settings ??= resolveInstanceResourceSettings(instance.resourceConfig)
   if (report.phase === 'queued') {
@@ -1500,7 +1682,7 @@ export async function recoverInstanceStartup(app: FastifyInstance, instance: Non
         await queuePreparedStartRun(app, { instanceId: instance.id, gameCode: instance.gameCode, installPath: instance.installPath!, instanceName: instance.name, gamePort: instance.gamePort }, task, generation)
         return
       }
-      if (!masterRef) { await failPreparation(app, task, '原启动任务的主世界已不存在'); return }
+      if (!masterRef) { task.snapshot.master.state = 'failed'; await failPreparation(app, task, '原启动任务的主世界已不存在'); return }
       if (report.phase === 'prepare') {
         task.snapshot.phase = 'master_loading'
         task.snapshot.phaseStartedAt = instance.runtimeStartedAt ?? report.phaseStartedAt
@@ -1508,12 +1690,13 @@ export async function recoverInstanceStartup(app: FastifyInstance, instance: Non
         await persistStartupTask(task)
       }
       await ensureInstanceContainerLogFollow(instance.id)
-      const cavesRef = report.caves.state !== 'disabled' ? await runtime.findByName(buildCavesContainerName(instance.id)) : undefined
+      const wantsCaves = report.target !== 'master' && report.caves.state !== 'disabled' && report.caves.state !== 'stopped'
+      const cavesRef = wantsCaves ? await runtime.findByName(buildCavesContainerName(instance.id)) : undefined
       const { runtimeMode, gameDstImage, instancesRoot } = getServerContainerConfig()
       const installPath = instance.installPath!
       let containerGameRoot = installPath
       let hostBinds: string[] | undefined
-      const needsCavesStart = report.caves.state !== 'disabled' && !cavesRef
+      const needsCavesStart = wantsCaves && !cavesRef
       if (runtimeMode === 'docker' && needsCavesStart) {
         const plan = await resolveInstanceContainerBind(createDockerClient(), installPath, instancesRoot)
         if (plan.error) throw new Error(plan.error)
@@ -1542,13 +1725,16 @@ export async function recoverInstanceStartup(app: FastifyInstance, instance: Non
           const pressure = assessHostMemoryForHeavyOperation('dst-container-start', { shardCount: 1, modCount: await countEnabledInstanceMods(instance.id), memoryCapMb: task.snapshot.settings!.cavesMemoryMb, measuredDemandMb: report.planningDemand?.cavesMb }, host ? hostGuardReading(host) : undefined)
           await recordStartupSwapAdvice(task, host, pressure.requiredMb)
           if (!pressure.ok) return { ok: false as const, message: pressure.detail }
+          if (!isCurrentStartupTask(task)) return { ok: false as const, message: '启动已取消' }
+          task.snapshot.caves.startedAt = new Date().toISOString()
+          await persistStartupTask(task)
           const result = await startSingleShardContainer(runtime, cavesSpec, gameDstImage, runtimeMode)
           if (result.ok && !isCurrentStartupTask(task)) {
             await stopAndRemoveShard(runtime, result.ref, instance.id)
             return { ok: false as const, message: '启动已取消' }
           }
           if (result.ok) startShardLogFollow(instance.id, result.ref, 'caves')
-          return result.ok ? { ok: true as const, ref: result.ref, baselineRestarts: result.inspect.probeFailed ? null : result.inspect.restarts ?? 0 } : { ok: false as const, message: result.message }
+          return result.ok ? { ok: true as const, ref: result.ref, baselineRestarts: result.inspect.probeFailed ? null : result.inspect.restarts ?? 0 } : { ok: false as const, message: result.message, ref: result.ref }
         } : undefined,
       })
     }

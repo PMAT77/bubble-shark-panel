@@ -19,6 +19,7 @@ export function refreshStartupProgress(task: StartupTask): void {
   if (!cursor) { cursor = { lastId: 0, seen: new Set() }; progressCursors.set(task, cursor) }
   for (const line of instanceConsoleLogStore.listLogs(task.instanceId, cursor.lastId, 2000)) {
     cursor.lastId = Math.max(cursor.lastId, line.id)
+    if (line.shard && task.snapshot[line.shard].state === 'ready') continue
     if (line.stream !== 'stdout' || Date.parse(line.at) < Date.parse(task.snapshot.startedAt)
       || /SteamNetworkingSockets|IsP2PPacketAvailable|IPC function call|BSPSTART:|RemoteCommandInput/.test(line.text)) continue
     // 去除时间前缀，重复 IPC / 查询或同样的加载行不算新进展。

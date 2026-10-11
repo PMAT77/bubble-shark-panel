@@ -13,7 +13,6 @@ import type {
 import {
   NAlert,
   NButton,
-  NCard,
   NCheckbox,
   NInput,
   NModal,
@@ -31,6 +30,7 @@ import {
 import { computed, h, onActivated, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiShard from '@/api/modules/shard'
+import { keyboardTabProps } from '@/utils/keyboardTab'
 import { useHostMemoryGuidance } from '@/composables/useHostMemoryGuidance'
 import { useNarrowFormLayout } from '@/composables/useNarrowFormLayout'
 import { useUnsavedChangesGuard } from '@/composables/useUnsavedChangesGuard'
@@ -54,7 +54,7 @@ import WorldMaintenanceStatus from '@/components/WorldMaintenanceStatus.vue'
 import { useWorldMaintenance } from '@/composables/useWorldMaintenance'
 import ShardModsSection from './components/ShardModsSection.vue'
 import ShardWorldRulesSection from './components/ShardWorldRulesSection.vue'
-import AdminSettingsSection from '@/components/AdminSettingsSection.vue'
+import { refreshWorldPorts, savedWorldDraft, worldDraftChanged, type WorldDraft } from './worldDraft'
 import ShardWorldgenSection from './components/ShardWorldgenSection.vue'
 import ShardMapPanel from './components/ShardMapPanel.vue'
 import {
@@ -62,7 +62,7 @@ import {
   buildLeveldataOverridesPayload,
 } from './utils/leveldataOverrides'
 
-type ShardSubTab = 'rules' | 'worldgen' | 'network'
+type ShardSubTab = 'rules' | 'worldgen' | 'network' | 'map'
 type ShardSaveOperation = `${ShardId}:${'save' | 'restart'}`
 
 defineOptions({
@@ -75,7 +75,7 @@ const dialog = useDialog()
 const message = useMessage()
 const notification = useNotification()
 
-const { formLabelPlacement, formLabelWidth } = useNarrowFormLayout(140)
+const { isNarrowViewport, formLabelPlacement, formLabelWidth } = useNarrowFormLayout(140)
 const { guidance: hostMemoryGuidance } = useHostMemoryGuidance()
 
 const instanceId = computed(() => String(route.params.instanceId ?? ''))
@@ -134,23 +134,23 @@ const pageTitle = computed(() => shardList.value
   ? `世界设置 · ${shardList.value.instanceName}`
   : '世界设置')
 
-/** 远端快照：加载/保存成功后更新，用于脏状态判定与一键重置 */
-const savedSnapshot = ref('')
+const savedDrafts = ref<Partial<Record<ShardId, WorldDraft>>>({})
 
-function buildFormSnapshot(): string {
-  return JSON.stringify({
-    masterForm: { ...masterForm },
-    cavesForm: { ...cavesForm },
-    masterWorldRules: masterWorldRules.value,
-    cavesWorldRules: cavesWorldRules.value,
-    masterWorldgenConfig: masterWorldgenConfig.value,
-    cavesWorldgenConfig: cavesWorldgenConfig.value,
-    masterWorldSeed: masterWorldSeed.value,
-    cavesWorldSeed: cavesWorldSeed.value,
-  })
+function captureDraft(shard: ShardId): WorldDraft {
+  const master = shard === 'master'
+  return {
+    form: { ...(master ? masterForm : cavesForm) },
+    rules: { ...(master ? masterWorldRules.value : cavesWorldRules.value) },
+    worldgen: { ...(master ? masterWorldgenConfig.value : cavesWorldgenConfig.value) },
+    seed: master ? masterWorldSeed.value : cavesWorldSeed.value,
+  }
 }
 
-const formDirty = computed(() => savedSnapshot.value !== '' && buildFormSnapshot() !== savedSnapshot.value)
+function shardDirty(shard: ShardId, configOnly = false) {
+  return worldDraftChanged(captureDraft(shard), savedDrafts.value[shard],
+    Boolean(shardList.value?.shards.find(item => item.id === shard)?.worldGenerated), configOnly)
+}
+const formDirty = computed(() => shardDirty('master') || shardDirty('caves'))
 
 useUnsavedChangesGuard(formDirty)
 
@@ -161,6 +161,21 @@ const clusterShardEnabled = computed(() => Boolean(shardList.value?.clusterShard
 const instanceRunning = computed(() => shardList.value?.instanceStatus === 'running')
 const masterShard = computed(() => shardList.value?.shards.find(s => s.id === 'master'))
 const cavesShard = computed(() => shardList.value?.shards.find(s => s.id === 'caves'))
+const currentShard = computed(() => currentShardId.value === 'master' ? masterShard.value : cavesShard.value)
+const currentConfigDirty = computed(() => shardDirty(currentShardId.value, true))
+const showSaveBar = computed(() => mainTab.value !== 'mods'
+  && (mainTab.value !== 'caves' || clusterShardEnabled.value)
+  && (mainTab.value !== 'surface' || surfaceSubTab.value !== 'map'))
+const draftBusy = computed(() => isSaving.value || resetting.value || maintenanceBusy.value || allocatingPorts.value)
+const configReadOnly = computed(() => !hasPermission('world:write') || draftBusy.value)
+const seedPending = (shard: ShardId) => Boolean(shardList.value?.shards.find(item => item.id === shard)?.worldGenerated
+  && savedDrafts.value[shard] && captureDraft(shard).seed !== savedDrafts.value[shard]?.seed)
+const saveStatus = computed(() => {
+  const name = currentShardId.value === 'master' ? '地上' : '洞穴'
+  const status = currentConfigDirty.value ? '有未保存的修改'
+    : currentShard.value?.configDirty ? '已保存，重启后生效' : '已保存'
+  return `${name}：${status}${seedPending(currentShardId.value) ? ' · 新种子尚未应用' : ''}`
+})
 
 const masterSeedDisplay = computed(() => masterWorldSeed.value)
 const cavesSeedDisplay = computed(() => cavesWorldSeed.value)
@@ -174,7 +189,7 @@ const seedResetLoading = (shard: ShardId) => maintenanceKey.value === `seed-${sh
 const autoProbedShards = new Set<ShardId>()
 
 /**
- * 顶部只承载「现在需要处理」的信息：异常警告，以及实例运行中这条会影响保存行为的条件提示。
+ * 顶部只承载需要处理的异常；重启生效提示放在保存栏。
  * 静态说明（世界已生成、放行端口、洞穴未开启）一律内联到对应页签与控件旁，避免同一信息重复出现。
  */
 const configAlerts = computed(() => {
@@ -182,10 +197,8 @@ const configAlerts = computed(() => {
   if (!list) {
     return { warnings: [] as string[], hints: [] as string[] }
   }
-  const running = list.shards.some(s => s.configDirty)
   return {
     warnings: list.warnings,
-    hints: running ? ['实例运行中，配置变更需重启实例后生效'] : [],
   }
 })
 
@@ -252,33 +265,30 @@ function applyShardToForm(shard: ShardSummaryDto) {
   }
 }
 
-async function loadConfig(preserveSeedDrafts = false) {
+async function loadConfig() {
   if (!instanceId.value) {
     return
   }
   loading.value = true
-  const seedDrafts = preserveSeedDrafts
-    ? [...editedSeedShards].filter(shard => shardList.value?.shards.find(item => item.id === shard)?.worldGenerated)
-      .map(shard => ({ shard, value: shard === 'master' ? masterWorldSeed.value : cavesWorldSeed.value }))
-    : []
+  const requestedInstanceId = instanceId.value
   try {
+    const response = await apiShard.getShardList(requestedInstanceId)
+    if (requestedInstanceId !== instanceId.value) return
     resetLocalWorldRules()
-    const response = await apiShard.getShardList(instanceId.value)
     shardList.value = response.data
+    savedDrafts.value = {}
     for (const shard of response.data.shards) {
       applyShardToForm(shard)
+      savedDrafts.value[shard.id] = captureDraft(shard.id)
     }
-    savedSnapshot.value = buildFormSnapshot()
-    for (const draft of seedDrafts) updateWorldSeedDraft(draft.shard, draft.value)
     // 实例在运行、但当前世界的种子还没记录过：进页面就自动补读一次
     void autoProbeMissingSeeds()
   }
   catch {
-    message.error('加载世界配置失败，请确认实例已安装后重试')
-    shardList.value = null
+    if (requestedInstanceId === instanceId.value) message.error('世界配置加载失败，请重试')
   }
   finally {
-    loading.value = false
+    if (requestedInstanceId === instanceId.value) loading.value = false
   }
 }
 
@@ -293,11 +303,7 @@ function adoptCurrentWorldSeed(shard: ShardId, seed: string) {
   if (editedSeedShards.has(shard)) return
   const draft = shard === 'master' ? masterWorldSeed : cavesWorldSeed
   draft.value = seed
-  if (savedSnapshot.value) {
-    const baseline = JSON.parse(savedSnapshot.value)
-    baseline[`${shard}WorldSeed`] = seed
-    savedSnapshot.value = JSON.stringify(baseline)
-  }
+  if (savedDrafts.value[shard]) savedDrafts.value[shard]!.seed = seed
 }
 
 /** 世界种子草稿；空串 = 用户选择随机，点击重置前不改变当前存档。 */
@@ -462,13 +468,9 @@ watch(() => maintenanceOperation.value?.state, async (state, previous) => {
     for (const shard of latest.shards) {
       if (shard.currentWorldSeed) adoptCurrentWorldSeed(shard.id, shard.currentWorldSeed)
     }
-    if (savedSnapshot.value) {
-      const persisted = JSON.parse(savedSnapshot.value)
-      const master = latest.shards.find(item => item.id === 'master')
-      const caves = latest.shards.find(item => item.id === 'caves')
-      persisted.masterWorldSeed = master?.currentWorldSeed ?? master?.worldSeed ?? ''
-      persisted.cavesWorldSeed = caves?.currentWorldSeed ?? caves?.worldSeed ?? ''
-      savedSnapshot.value = JSON.stringify(persisted)
+    for (const shard of latest.shards) {
+      const saved = savedDrafts.value[shard.id]
+      if (saved) saved.seed = shard.currentWorldSeed ?? shard.worldSeed ?? ''
     }
   }
   catch { /* 查询失败保留已有草稿和读数 */ }
@@ -496,6 +498,16 @@ async function resetConfig() {
   }
 }
 
+function confirmDiscardDrafts() {
+  dialog.warning({
+    title: '放弃全部修改？',
+    content: '地上和洞穴尚未保存的配置与未应用的种子将一起丢弃。',
+    positiveText: '放弃全部修改',
+    negativeText: '继续编辑',
+    onPositiveClick: resetConfig,
+  })
+}
+
 async function saveShard(shard: ShardId, restart: boolean) {
   if (isSaving.value || allocatingPorts.value || maintenanceBusy.value) {
     return
@@ -507,6 +519,7 @@ async function saveShard(shard: ShardId, restart: boolean) {
   catch {
     return
   }
+  if (draftBusy.value) return
   if (shard === 'caves' && cavesForm.serverPort === masterForm.serverPort) {
     message.error('洞穴游戏端口不能与地上世界相同，请在「网络」页签中修改后保存')
     return
@@ -518,14 +531,43 @@ async function saveShard(shard: ShardId, restart: boolean) {
     return
   }
   const operation = getSaveOperation(shard, restart)
+  const submitted = captureDraft(shard)
+  const generated = Boolean(shardList.value?.shards.find(item => item.id === shard)?.worldGenerated)
+  const targetId = instanceId.value
+  function acceptSave() {
+    const previous = savedDrafts.value[shard]
+    if (targetId !== instanceId.value || !previous) return
+    savedDrafts.value[shard] = savedWorldDraft(submitted, previous, generated)
+    const overrides = shard === 'master' ? persistedMasterOverrides : persistedCavesOverrides
+    overrides.value = { ...overrides.value, ...payload.worldRuleOverrides, ...payload.worldgenOverrides }
+  }
+  async function refreshSavedStatus(syncAllocatedPorts = false) {
+    try {
+      const latest = (await apiShard.getShardList(targetId)).data
+      if (targetId !== instanceId.value) return
+      if (syncAllocatedPorts) {
+        for (const remote of latest.shards) {
+          const saved = savedDrafts.value[remote.id]
+          if (saved) refreshWorldPorts(remote.id === 'master' ? masterForm : cavesForm, saved.form, remote)
+        }
+      }
+      shardList.value = latest
+    }
+    catch { message.warning('配置已保存，状态刷新失败，请稍后重试') }
+  }
   activeSaveOperation.value = operation
   try {
     await apiShard.saveShardConfig(payload)
-    message.success(restart ? '世界配置已保存并触发重启' : '世界配置已保存')
-    await loadConfig(true)
+    if (targetId !== instanceId.value) return
+    acceptSave()
+    message.success(restart ? '已保存，正在重启' : `${shard === 'master' ? '地上' : '洞穴'}配置已保存`)
+    await refreshSavedStatus()
   }
   catch (error: unknown) {
+    if (targetId !== instanceId.value) return
     if (restart && isInstancePortConflictError(error)) {
+      acceptSave()
+      await refreshSavedStatus()
       const labels = getPortConflictDialogLabels('restart')
       dialog.warning({
         title: labels.title,
@@ -538,9 +580,9 @@ async function saveShard(shard: ShardId, restart: boolean) {
         negativeText: '留在本页修改端口',
         onPositiveClick: async () => {
           try {
-            await apiInstance.restartInstance(instanceId.value, { autoAllocatePorts: true })
+            await apiInstance.restartInstance(targetId, { autoAllocatePorts: true })
             message.success('已自动分配端口并完成重启')
-            await loadConfig(true)
+            await refreshSavedStatus(true)
           }
           catch (retryError: unknown) {
             const description = retryError instanceof Error
@@ -581,8 +623,8 @@ async function saveShard(shard: ShardId, restart: boolean) {
 function confirmSaveAndRestart(shard: ShardId) {
   dialog.warning({
     title: '保存并重启',
-    content: '将保存当前世界配置并重启实例，在线玩家会被断开。是否继续？',
-    positiveText: '继续',
+    content: `保存${shard === 'master' ? '地上' : '洞穴'}配置并重启整个实例，在线玩家会断开连接。另一世界的未保存修改不会提交。`,
+    positiveText: '保存并重启',
     negativeText: '取消',
     onPositiveClick: () => saveShard(shard, true),
   })
@@ -634,6 +676,8 @@ async function autoAllocatePorts() {
 
 watch(instanceId, (id) => {
   if (id) {
+    savedDrafts.value = {}
+    shardList.value = null
     void loadConfig()
   }
 }, { immediate: true })
@@ -648,7 +692,7 @@ onMounted(() => {
 
 onActivated(() => {
   applyRouteTabFromQuery()
-  if (instanceId.value && !formDirty.value) {
+  if (instanceId.value && !formDirty.value && !loading.value) {
     void loadConfig()
   }
 })
@@ -686,10 +730,6 @@ onActivated(() => {
       </NEmpty>
 
       <div v-else class="space-y-4">
-        <AdminSettingsSection
-          title="世界配置"
-          description="分别调整地上与洞穴的地图规则、端口与 Mod。"
-        />
         <NAlert v-if="configAlerts.warnings.length" type="warning" title="需要处理" class="mb-2">
           <ul class="list-disc pl-4 space-y-1">
             <li v-for="(w, i) in configAlerts.warnings" :key="`w-${i}`">
@@ -697,35 +737,23 @@ onActivated(() => {
             </li>
           </ul>
         </NAlert>
-        <NAlert
-          v-for="(hint, i) in configAlerts.hints"
-          :key="`h-${i}`"
-          type="info"
-          :title="hint"
-          class="mb-2"
-        />
-
-        <NCard size="small" title="洞穴开关">
-          <p class="text-sm text-muted-foreground mb-2">
-            是否在房间中同时运行地上与洞穴，请在房间设置中配置。
-          </p>
-          <div class="flex flex-wrap items-center gap-2">
+          <div class="flex flex-wrap items-center gap-3 text-sm">
             <NTag :type="shardList.clusterShardEnabled ? 'info' : 'default'" size="small" :bordered="false">
               {{ shardList.clusterShardEnabled ? '洞穴已开启' : '洞穴未开启' }}
             </NTag>
             <!-- 目标页在「房间管理」模块下（room:read），无权时该路由不存在，按名跳转会抛 No match -->
             <NButton v-if="hasPermission('room:read')" size="small" text @click="goClusterSettings">
-              前往房间设置
+              房间设置
               <FaIcon name="i-lucide:arrow-right" class="size-4" />
             </NButton>
           </div>
-        </NCard>
 
         <NTabs v-model:value="mainTab" type="card" animated>
-          <NTabPane name="surface">
+          <NTabPane :tab-props="keyboardTabProps(mainTab === 'surface')" name="surface">
             <template #tab>
               <span class="inline-flex items-center gap-2">
                 地上
+                <span v-if="shardDirty('master')" class="text-xs text-muted-foreground">未保存</span>
                 <NTag size="tiny" :bordered="false" :type="statusTagType(masterShardStatus.tone)">
                   {{ masterShardStatus.label }}
                 </NTag>
@@ -738,20 +766,22 @@ onActivated(() => {
               :rules="portRules"
               :label-placement="formLabelPlacement"
               :label-width="formLabelWidth"
+              :disabled="configReadOnly"
             >
-              <NTabs v-model:value="surfaceSubTab" type="card" placement="left" size="small" display-directive="show" class="mt-2">
-                <NTabPane name="rules" tab="世界规则">
-                  <p v-if="masterShard?.worldGenerated" class="mt-2 mb-4 text-xs text-muted-foreground">
-                    地上世界已生成：世界规则的改动只在重新生成地图时生效，不会改变现有存档。
+              <NTabs v-model:value="surfaceSubTab" type="line" :placement="isNarrowViewport ? 'top' : 'left'" size="small" display-directive="show" class="mt-2">
+                <NTabPane :tab-props="keyboardTabProps(surfaceSubTab === 'rules')" name="rules" tab="世界规则">
+                  <p v-if="masterShard?.worldGenerated" class="mt-2 mb-4 text-sm text-muted-foreground">
+                    改动用于下次生成地图，现有存档不变。
                   </p>
                   <ShardWorldRulesSection
                     v-model="masterWorldRules"
                     shard="master"
                     shard-folder="Master"
+                    :disabled="configReadOnly"
                   />
                 </NTabPane>
 
-                <NTabPane name="worldgen" tab="世界生成">
+                <NTabPane :tab-props="keyboardTabProps(surfaceSubTab === 'worldgen')" name="worldgen" tab="世界生成">
                   <ShardWorldgenSection
                     :key="`master-${instanceId}`"
                     v-model="masterForm.worldgenPreset"
@@ -762,7 +792,8 @@ onActivated(() => {
                     :instance-running="instanceRunning"
                     :reading="readingShards.includes('master')"
                     :resetting="seedResetLoading('master')"
-                    :busy="maintenanceBusy || isSaving"
+                    :busy="draftBusy"
+                    :seed-pending="seedPending('master')"
                     :world-generated="masterShard?.worldGenerated"
                     @update:world-seed="updateWorldSeedDraft('master', $event)"
                     @read="readCurrentWorldSeed('master')"
@@ -770,7 +801,7 @@ onActivated(() => {
                   />
                 </NTabPane>
 
-                <NTabPane name="map" tab="地形图">
+                <NTabPane :tab-props="keyboardTabProps(surfaceSubTab === 'map')" name="map" tab="地形图">
                   <ShardMapPanel
                     v-if="instanceId"
                     :instance-id="instanceId"
@@ -778,19 +809,19 @@ onActivated(() => {
                   />
                 </NTabPane>
 
-                <NTabPane name="network" tab="网络">
+                <NTabPane :tab-props="keyboardTabProps(surfaceSubTab === 'network')" name="network" tab="网络">
                   <div class="flex flex-wrap items-center gap-2 mb-4">
                     <NButton
                       size="small"
                       :loading="allocatingPorts"
-                      :disabled="isSaving"
+                      :disabled="draftBusy"
                       @click="autoAllocatePorts"
                       v-if="hasPermission('instance:ports')"
                     >
-                      自动分配未占用端口
+                      自动分配端口
                     </NButton>
-                    <span class="text-xs text-muted-foreground">
-                      与同节点其它实例冲突时可一键换用新端口块；保存后生效，运行中需重启。
+                    <span class="text-sm text-muted-foreground">
+                      为地上和洞穴分配可用端口，分别保存后生效。运行中需重启。
                     </span>
                   </div>
                   <ShardNetworkSection
@@ -805,10 +836,11 @@ onActivated(() => {
 
           </NTabPane>
 
-          <NTabPane name="caves">
+          <NTabPane :tab-props="keyboardTabProps(mainTab === 'caves')" name="caves">
             <template #tab>
               <span class="inline-flex items-center gap-2">
                 洞穴
+                <span v-if="shardDirty('caves')" class="text-xs text-muted-foreground">未保存</span>
                 <NTag
                   v-if="clusterShardEnabled"
                   size="tiny"
@@ -825,7 +857,7 @@ onActivated(() => {
 
             <template v-if="!clusterShardEnabled">
               <p class="text-sm text-muted-foreground mt-2 mb-4">
-                需先在房间设置中开启洞穴，才能调整洞穴的世界规则与世界生成。
+                洞穴未开启
               </p>
               <NButton v-if="hasPermission('room:read')" size="small" @click="goClusterSettings">
                 前往房间设置
@@ -839,20 +871,22 @@ onActivated(() => {
                 :rules="portRules"
                 :label-placement="formLabelPlacement"
                 :label-width="formLabelWidth"
+                :disabled="configReadOnly"
               >
-                <NTabs v-model:value="cavesSubTab" type="card" placement="left" size="small" display-directive="show" class="mt-2">
-                  <NTabPane name="rules" tab="世界规则">
-                    <p v-if="cavesShard?.worldGenerated" class="mt-2 mb-4 text-xs text-muted-foreground">
-                      洞穴世界已生成：世界规则的改动只在重新生成地图时生效，不会改变现有存档。
+                <NTabs v-model:value="cavesSubTab" type="line" :placement="isNarrowViewport ? 'top' : 'left'" size="small" display-directive="show" class="mt-2">
+                  <NTabPane :tab-props="keyboardTabProps(cavesSubTab === 'rules')" name="rules" tab="世界规则">
+                    <p v-if="cavesShard?.worldGenerated" class="mt-2 mb-4 text-sm text-muted-foreground">
+                      改动用于下次生成地图，现有存档不变。
                     </p>
                     <ShardWorldRulesSection
                       v-model="cavesWorldRules"
                       shard="caves"
                       shard-folder="Caves"
+                      :disabled="configReadOnly"
                     />
                   </NTabPane>
 
-                  <NTabPane name="worldgen" tab="世界生成">
+                  <NTabPane :tab-props="keyboardTabProps(cavesSubTab === 'worldgen')" name="worldgen" tab="世界生成">
                     <ShardWorldgenSection
                       :key="`caves-${instanceId}`"
                       v-model="cavesForm.worldgenPreset"
@@ -863,7 +897,8 @@ onActivated(() => {
                       :instance-running="instanceRunning"
                       :reading="readingShards.includes('caves')"
                       :resetting="seedResetLoading('caves')"
-                      :busy="maintenanceBusy || isSaving"
+                      :busy="draftBusy"
+                      :seed-pending="seedPending('caves')"
                       :world-generated="cavesShard?.worldGenerated"
                       @update:world-seed="updateWorldSeedDraft('caves', $event)"
                       @read="readCurrentWorldSeed('caves')"
@@ -871,7 +906,7 @@ onActivated(() => {
                     />
                   </NTabPane>
 
-                  <NTabPane name="network" tab="网络">
+                  <NTabPane :tab-props="keyboardTabProps(cavesSubTab === 'network')" name="network" tab="网络">
                     <ShardNetworkSection
                       v-model:server-port="cavesForm.serverPort"
                       v-model:steam-auth-port="cavesForm.steamAuthPort"
@@ -886,7 +921,7 @@ onActivated(() => {
             </template>
           </NTabPane>
 
-          <NTabPane name="mods" tab="模组">
+          <NTabPane :tab-props="keyboardTabProps(mainTab === 'mods')" name="mods" tab="模组">
             <ShardModsSection
               :instance-id="instanceId"
               :memory-warning="hostMemoryGuidance?.modsWarning ?? null"
@@ -895,11 +930,15 @@ onActivated(() => {
         </NTabs>
 
         <WorldMaintenanceStatus :operation="maintenanceOperation" :submitting="maintenanceSubmitting" @continue="continueWithoutBackup" @verify="recheck" />
-        <NModal v-model:show="seedModalVisible" preset="card" title="重新生成所选世界" class="max-w-lg" :mask-closable="false">
-          <p class="text-sm mb-3">目标：{{ selectedSeed?.shard === 'master' ? '地上世界' : '洞穴世界' }}；{{ selectedSeed?.seed ? `指定种子 ${selectedSeed.seed}` : '随机种子' }}。保存本次种子后重新生成所选地图，保留其他已保存的生成配置。页面其他草稿不会自动提交。</p>
-          <p class="text-sm mb-3">该世界旧快照、建筑、物品和玩家进度会丢失。游戏的分片同步可能使另一分片重载或调整保存进度，玩家连接可能中断。相同种子不能恢复玩家进度，地图还受预设、模组和游戏版本影响。</p>
-          <NCheckbox v-model:checked="backupBefore" class="mb-3">执行前自动创建整个房间的安全备份（失败会暂停）</NCheckbox>
-          <NInput v-model:value="seedConfirmName" :placeholder="`请输入实例名称：${shardList?.instanceName ?? ''}`" />
+        <NModal v-model:show="seedModalVisible" preset="card" :title="selectedSeed?.shard === 'master' ? '重新生成地上' : '重新生成洞穴'" class="max-w-lg" :mask-closable="false">
+          <div class="space-y-3 text-sm mb-4">
+            <p>{{ selectedSeed?.seed ? `种子：${selectedSeed.seed}` : '使用随机种子' }}。其他设置使用已保存的配置，未保存修改不会提交。</p>
+            <p>所选世界的建筑、物品、玩家进度和旧存档点会被清除。另一个世界也可能重新加载或调整存档进度，玩家可能断线。</p>
+            <p class="text-muted-foreground">相同种子不能恢复游戏进度；地图还受预设、Mod 和游戏版本影响。</p>
+            <NCheckbox v-model:checked="backupBefore">先备份整个房间，备份失败时暂停</NCheckbox>
+          </div>
+          <label for="seed-confirm-name" class="block text-sm mb-2">输入实例名称「{{ shardList?.instanceName }}」确认</label>
+          <NInput v-model:value="seedConfirmName" :input-props="{ id: 'seed-confirm-name' }" placeholder="实例名称" />
           <NSpace justify="end" class="mt-4">
             <NButton @click="seedModalVisible = false">取消</NButton>
             <NButton type="error" :disabled="maintenanceBusy || !shardList?.instanceName || seedConfirmName.trim() !== shardList.instanceName.trim()" @click="resetWorldWithSeed">确认重新生成</NButton>
@@ -907,8 +946,12 @@ onActivated(() => {
         </NModal>
 
         <ConfigActionBar
-          :dirty="formDirty"
-          :busy="isSaving || resetting || maintenanceBusy"
+          :dirty="currentConfigDirty"
+          :reset-dirty="formDirty"
+          :status-text="saveStatus"
+          :restart-needed="currentShard?.configDirty"
+          reset-label="放弃全部修改"
+          :busy="draftBusy"
           :saving="savingCurrentShard"
           :restarting="restartingCurrentShard"
           :resetting="resetting"
@@ -916,10 +959,10 @@ onActivated(() => {
           :restart-disabled-title="saveAndRestartDisabledTitle"
           :show-restart="hasPermission('instance:lifecycle')"
           :save-label="mainTab === 'caves' ? '保存洞穴' : '保存地上'"
-          @reset="resetConfig"
+          @reset="confirmDiscardDrafts"
           @save="saveShard(currentShardId, false)"
           @save-and-restart="confirmSaveAndRestart(currentShardId)"
-          v-if="hasPermission('world:write')"
+          v-if="hasPermission('world:write') && showSaveBar"
         />
       </div>
     </template>

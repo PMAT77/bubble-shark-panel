@@ -143,9 +143,6 @@ onMounted(() => {
       <h1 class="text-lg font-semibold">
         玩家列表
       </h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        每个房间的玩家都在自己的页面里管理：查看在线玩家、踢出或封禁，以及维护管理员 / 白名单 / 黑名单名单。
-      </p>
     </div>
 
     <AdminListToolbar

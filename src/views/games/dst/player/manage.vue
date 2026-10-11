@@ -309,10 +309,6 @@ watch(instanceId, () => {
         </div>
       </div>
 
-      <p class="text-sm text-muted-foreground">
-        在这里集中管理玩家：看谁在线、踢人、封禁，以及维护管理员 / 白名单 / 黑名单三份名单。
-        名单里显示的是玩家名字，保存时写入的仍是玩家 ID。
-      </p>
 
       <NAlert v-if="rosterError" type="error" :bordered="false" title="读取在线玩家失败">
         {{ rosterError }}

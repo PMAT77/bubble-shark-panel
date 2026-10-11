@@ -44,6 +44,7 @@ function onKeywordUpdate(value: string) {
         :value="props.keyword"
         class="w-full md:w-64"
         :placeholder="keywordPlaceholder"
+        :input-props="{ 'aria-label': keywordPlaceholder }"
         clearable
         @update:value="onKeywordUpdate"
         @keydown.enter="emit('search')"

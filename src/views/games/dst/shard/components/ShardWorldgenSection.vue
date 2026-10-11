@@ -24,6 +24,7 @@ const props = defineProps<{
   resetting?: boolean
   busy?: boolean
   worldGenerated?: boolean
+  seedPending?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -34,7 +35,7 @@ const emit = defineEmits<{
   'reset': []
 }>()
 
-const worldgenLocked = computed(() => Boolean(props.worldGenerated))
+const worldgenLocked = computed(() => Boolean(props.worldGenerated || props.busy || !hasPermission('world:write')))
 
 const isMaster = computed(() => props.shard === 'master')
 
@@ -60,7 +61,7 @@ function updateWorldSeed(value: string) {
 }
 
 const seedHint = computed(() => props.worldGenerated
-  ? '修改种子后需点击重置世界才生效；留空表示随机，未修改则沿用当前种子。'
+  ? '新种子在重新生成时应用。留空使用随机种子，未修改则沿用当前种子。'
   : '首次启动按已保存的生成配置创建地图；留空表示随机。')
 </script>
 
@@ -73,13 +74,13 @@ const seedHint = computed(() => props.worldGenerated
         <h3 class="text-sm font-medium text-foreground">
           地图预设
         </h3>
-        <NTag v-if="worldgenLocked" size="small" :bordered="false" type="warning">
-          世界已生成，预设已锁定
+        <NTag v-if="worldGenerated" size="small" :bordered="false">
+          已生成，预设不可修改
         </NTag>
       </div>
 
       <p v-if="isMaster" class="text-sm text-muted-foreground">
-        地上世界固定使用官方「联机生存」预设。
+        联机生存
       </p>
       <div v-else class="grid gap-3 sm:grid-cols-3">
         <button
@@ -87,14 +88,15 @@ const seedHint = computed(() => props.worldGenerated
           :key="option.id"
           type="button"
           :disabled="worldgenLocked"
-          class="flex items-center gap-3 rounded-lg border bg-card p-3 text-left transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
+          :aria-pressed="modelValue === option.preset"
+          class="flex items-center gap-3 rounded-lg border bg-card p-3 text-left transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60"
           :class="modelValue === option.preset
             ? 'border-primary ring-2 ring-primary/40'
             : 'border-border hover:border-primary/50'"
           @click="selectPreset(option.preset as CavesWorldgenPreset)"
         >
           <span class="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted/30">
-            <img :src="option.image" :alt="option.label" class="max-h-full max-w-full object-contain" loading="lazy">
+            <img :src="option.image" alt="" width="48" height="48" class="max-h-full max-w-full object-contain" loading="lazy">
           </span>
           <span class="text-sm font-medium">{{ option.label }}</span>
         </button>
@@ -104,13 +106,14 @@ const seedHint = computed(() => props.worldGenerated
     <section class="flex flex-col gap-3">
       <h3 class="text-sm font-medium">世界种子</h3>
       <div class="flex flex-wrap items-center gap-3">
-        <NInput :value="worldSeed" class="w-full! sm:w-80!" :disabled="busy || (!hasPermission('world:write') && !hasPermission('world:reset'))" :input-props="{ inputmode: 'numeric', 'aria-label': '世界种子' }" placeholder="留空 = 随机" @update:value="updateWorldSeed" />
+        <NInput :value="worldSeed" class="w-full! sm:w-80!" :disabled="busy || (worldGenerated ? !hasPermission('world:reset') : !hasPermission('world:write') && !hasPermission('world:reset'))" :input-props="{ inputmode: 'numeric', 'aria-label': '世界种子' }" placeholder="留空使用随机种子" @update:value="updateWorldSeed" />
         <div class="flex flex-wrap items-center gap-2">
-          <NButton v-if="instanceRunning && hasPermission('world:read')" :loading="reading" :disabled="reading" @click="emit('read')">读取</NButton>
-          <NButton v-if="hasPermission('world:reset')" type="warning" :loading="resetting" :disabled="busy" @click="emit('reset')">重置世界</NButton>
+          <NButton v-if="instanceRunning && hasPermission('world:read')" :loading="reading" :disabled="reading || busy" @click="emit('read')">读取当前种子</NButton>
+          <NButton v-if="hasPermission('world:reset')" type="error" secondary :loading="resetting" :disabled="busy" @click="emit('reset')">{{ isMaster ? '重新生成地上' : '重新生成洞穴' }}</NButton>
         </div>
       </div>
-      <p class="text-xs leading-relaxed text-muted-foreground">{{ seedHint }}</p>
+      <p class="text-sm leading-relaxed text-muted-foreground">{{ seedHint }}</p>
+      <p v-if="seedPending" class="text-sm" role="status">新种子尚未应用</p>
     </section>
 
     <ShardWorldRulesSection

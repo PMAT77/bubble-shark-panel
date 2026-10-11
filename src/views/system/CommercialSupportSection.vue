@@ -100,12 +100,12 @@ onMounted(loadSupport)
                 <span class="font-medium">{{ item.name }}</span>
                 <span class="ml-auto font-medium tabular-nums">{{ item.priceRange }}</span>
               </div>
-              <p class="mt-1 text-xs text-muted-foreground">
+              <p class="mt-1 text-sm text-muted-foreground">
                 {{ item.detail }}
               </p>
             </li>
           </ul>
-          <p class="text-xs text-muted-foreground">
+          <p class="text-sm text-muted-foreground">
             参考价按常规环境估算，实际报价沟通后确认。
           </p>
         </div>
@@ -121,7 +121,7 @@ onMounted(loadSupport)
             </NButton>
             <span class="text-muted-foreground">QQ 群：{{ support.contact.qqGroup }}</span>
           </div>
-          <p class="text-xs text-muted-foreground">
+          <p class="text-sm text-muted-foreground">
             {{ support.contact.noteHint }}
           </p>
           <a

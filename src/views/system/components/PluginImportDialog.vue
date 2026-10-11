@@ -117,8 +117,7 @@ function readErrorMessage(error: unknown, fallback: string): string {
   >
     <div class="space-y-3 text-sm">
       <p class="text-muted-foreground">
-        选择从面板之外拿到的插件包（.zip 或 .tar.gz）。面板会先校验清单与签名，
-        通过后才会写入插件目录；导入完成默认停用，确认无误再启用。
+        支持 .zip 和 .tar.gz 插件包。通过校验后可导入，导入后默认停用，需手动启用。
       </p>
 
       <input

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { InstanceItem } from '@/api/modules/instance'
-import { NButton, NCard, NStatistic, NTooltip, useMessage } from 'naive-ui'
+import { NButton, NCard, NModal, NStatistic, NTooltip, useMessage } from 'naive-ui'
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { routeToInstanceConsole } from '@/navigation/game-routes'
 import { statusBadgeClass } from '@/constants/statusDictionary'
@@ -24,6 +24,8 @@ import { canRetryInstanceInstall, resolveInstanceUpdateState, buildInstanceUpdat
 import { waitForInstanceUpdateCheckJob } from '../../composables/instanceUpdateCheckJob'
 import { formatDateTime } from '../../utils'
 import { isStartupActive } from '../../startupPresentation'
+import { useInstanceAnomalyNotice } from '../../composables/useInstanceAnomalyNotice'
+import { instanceAnomalyText } from '../../instanceAnomalies'
 
 defineOptions({
   name: 'InstanceDetailControlCard',
@@ -49,7 +51,8 @@ const route = useRoute()
 const installLogVisible = ref(false)
 const updateCheckLoading = ref(false)
 let updateCheckController: AbortController | undefined
-let pageActive = false
+const pageActive = ref(false)
+const { anomalies, detailsVisible, showDetails } = useInstanceAnomalyNotice(computed(() => props.instance), pageActive)
 
 const {
   isActionLoading,
@@ -73,10 +76,10 @@ const {
   getMetricsForInstance,
 } = useInstanceRuntimeObservability(instanceListRef)
 
-watch(() => props.instance?.status, () => { if (pageActive) syncRuntimeObservabilityPolling() })
+watch(() => props.instance?.status, () => { if (pageActive.value) syncRuntimeObservabilityPolling() })
 function activateObservability() {
-  pageActive = route.name === 'nodeInstanceDetail'
-  if (pageActive) syncRuntimeObservabilityPolling()
+  pageActive.value = route.name === 'nodeInstanceDetail'
+  if (pageActive.value) syncRuntimeObservabilityPolling()
 }
 onMounted(activateObservability)
 /**
@@ -87,7 +90,7 @@ onMounted(activateObservability)
  */
 onActivated(activateObservability)
 function deactivateObservability() {
-  pageActive = false
+  pageActive.value = false
   stopRuntimeObservability()
   installLogVisible.value = false
   updateCheckController?.abort()
@@ -101,22 +104,11 @@ watch(() => props.instance?.id, () => updateCheckController?.abort())
 
 const state = computed(() => (props.instance ? getInstanceState(props.instance) : null))
 
-/**
- * 运行期异常（进程反复重启、分片残留）。独立字段：lastError 会被启动失败与
- * 状态对账反复覆盖，实测出现过刚写入就被清空、服主永远看不到的情况。
- * 老数据里这类文案曾写在 lastError，保留前缀兼容，避免升级后旧告警消失。
- */
-const runtimeWarning = computed(() => {
-  const warning = props.instance?.runtimeWarning?.trim()
-  if (warning) {
-    return warning
-  }
-  const legacy = props.instance?.lastError?.trim() ?? ''
-  return legacy.startsWith('实例进程反复重启') || legacy.startsWith('主世界分片已停止') ? legacy : null
-})
-
 /** 世界是否已就绪：运行中不等于能接客（玩家要等世界加载完才搜得到房间） */
-const readiness = computed(() => (props.instance ? resolveRuntimeReadinessView(props.instance) : null))
+const readiness = computed(() => {
+  const view = props.instance ? resolveRuntimeReadinessView(props.instance) : null
+  return view?.label === state.value?.label ? null : view
+})
 
 const message = useMessage()
 
@@ -167,7 +159,7 @@ function canStart() {
   }
   return !actionRunning.value
     && !isStartupActive(props.instance.startup)
-    && props.instance.status !== 'running'
+    && (props.instance.status !== 'running' || (props.instance.startup?.master.state === 'ready' && ['failed', 'stopped'].includes(props.instance.startup.caves.state)))
     && props.instance.status !== 'pending_install'
     && props.instance.status !== 'installing'
 }
@@ -228,6 +220,7 @@ function goConsole() {
         >
           {{ state.label }}
         </span>
+        <NButton v-if="anomalies.length" size="tiny" quaternary @click="showDetails">异常详情</NButton>
         <span v-if="updateState === 'available'" class="text-xs text-amber-600 dark:text-amber-400">
           服务端需要更新
         </span>
@@ -245,43 +238,27 @@ function goConsole() {
         </span>
       </div>
 
-      <p
-        v-if="runtimeWarning"
-        class="mb-4 rounded-md px-3 py-2 text-xs leading-relaxed break-all bg-amber-500/10 text-amber-700 dark:text-amber-400"
-      >
-        {{ runtimeWarning }}
-      </p>
+      <p v-if="isInstalling" class="mb-4 text-sm text-muted-foreground">正在安装</p>
 
-      <p
-        v-if="instance.lastError?.trim() && !isInstalling"
-        class="mb-4 rounded-md px-3 py-2 text-xs leading-relaxed break-all bg-muted/50 text-muted-foreground"
-      >
-        {{ instance.lastError }}
-      </p>
-
-      <p v-if="isInstalling" class="mb-4 text-xs text-muted-foreground">安装中，当前阶段请查看日志。</p>
-
-      <div class="grid grid-cols-3 gap-x-4 gap-y-3 mb-4">
-        <NStatistic label="CPU（单核基准）">
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 mb-4">
+        <NStatistic label="CPU（单核）">
           {{ instance.status === 'running' && metrics?.cpuUsageRate != null ? `${metrics.cpuUsageRate.toFixed(1)}%` : '—' }}
         </NStatistic>
-        <NStatistic label="内存（主世界进程）">
+        <NStatistic label="内存（地上）">
           {{ instance.status === 'running' ? formatMemoryMb(metrics?.memoryMb) : '—' }}
         </NStatistic>
         <NStatistic label="运行时长">
           {{ formatUptime(uptimeSeconds) }}
         </NStatistic>
       </div>
-
       <div class="flex flex-wrap gap-2">
-        <NButton size="small" secondary :loading="updateCheckLoading" :disabled="isInstalling || actionRunning" @click="checkUpdates" v-if="hasPermission('instance:update')">检查更新</NButton>
-        <NButton size="small" secondary @click="installLogVisible = true" v-if="hasPermission('instance.install-log:read')">
-          查看日志
+        <NButton size="small" quaternary :loading="updateCheckLoading" :disabled="isInstalling || actionRunning" @click="checkUpdates" v-if="hasPermission('instance:update')">检查更新</NButton>
+        <NButton size="small" quaternary @click="installLogVisible = true" v-if="hasPermission('instance.install-log:read')">
+          安装日志
         </NButton>
         <NButton
           size="small"
           type="primary"
-          secondary
           :loading="isActionLoading(instance.id, 'start')"
           :disabled="!canStart()"
           @click="confirmStartInstance(instance)"
@@ -331,7 +308,8 @@ function goConsole() {
         <NButton
           size="small"
           type="error"
-          secondary
+          quaternary
+          class="ml-2"
           :disabled="!canDelete()"
           @click="requestDangerous('delete')"
           v-if="hasPermission('instance:delete')"
@@ -343,6 +321,23 @@ function goConsole() {
     <p v-else class="text-sm text-muted-foreground">
       未找到实例。
     </p>
+
+    <NModal
+      v-model:show="detailsVisible"
+      preset="card"
+      :title="`${instance?.name ?? '实例'} · 异常详情`"
+      class="w-[calc(100%_-_32px)] max-w-xl"
+      :auto-focus="true"
+    >
+      <div class="space-y-3 max-h-[60vh] overflow-auto text-sm leading-relaxed break-words whitespace-pre-wrap">
+        <p v-for="anomaly in anomalies" :key="instanceAnomalyText(anomaly)">{{ instanceAnomalyText(anomaly) }}</p>
+      </div>
+      <template #footer>
+        <div class="flex justify-end">
+          <NButton size="small" @click="detailsVisible = false">关闭</NButton>
+        </div>
+      </template>
+    </NModal>
 
     <InstanceInstallLogModal
       v-if="instance && hasPermission('instance.install-log:read')"

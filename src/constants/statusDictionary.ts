@@ -1,4 +1,5 @@
 import type { ShardContainerStatus } from '@/api/modules/shard'
+import type { InstanceStartupSnapshot } from '../../shared/contracts/instance-resources'
 
 /**
  * 全站状态词典（唯一出处）。
@@ -103,6 +104,9 @@ export const SHARD_CONTAINER_STATUS: Record<ShardContainerStatus, StatusDescript
 }
 
 export const SHARD_UNCONFIGURED: StatusDescriptor = SHARD_CONTAINER_STATUS.not_created
+export const SHARD_LOADING: StatusDescriptor = { label: '加载中', tone: 'warning', icon: 'i-lucide:loader-circle' }
+export const SHARD_FAILED: StatusDescriptor = { label: '启动失败', tone: 'error', icon: 'i-lucide:triangle-alert' }
+export const SHARD_PROTECTED: StatusDescriptor = { label: '保护停止', tone: 'error', icon: 'i-lucide:shield-alert' }
 
 /** 分片展示状态的判定输入（世界列表 / 实例详情 / 世界设置复用的最小字段集） */
 export interface ShardDisplayFacts {
@@ -120,7 +124,10 @@ export interface ShardDisplayFacts {
  * 容器状态只表示「运行容器是否存在」——面板停止实例时会连同容器一起删除以释放内存，
  * 因此容器不存在并不代表没有配置或没有存档；仅当两者皆无时才显示「未配置」。
  */
-export function resolveShardDisplayStatus(shard: ShardDisplayFacts | null | undefined): StatusDescriptor {
+export function resolveShardDisplayStatus(shard: ShardDisplayFacts | null | undefined, startup?: InstanceStartupSnapshot['master']): StatusDescriptor {
+  if (startup?.protectionStop) return SHARD_PROTECTED
+  if (startup?.state === 'failed') return SHARD_FAILED
+  if (startup?.state === 'loading') return SHARD_LOADING
   if (!shard || shard.containerStatus === 'unknown') {
     return SHARD_CONTAINER_STATUS.unknown
   }

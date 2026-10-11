@@ -299,7 +299,7 @@ onMounted(loadAll)
     size="small"
   >
     <template #empty>
-      <NEmpty size="large" description="还没有成员。新建一个子账号并分配角色即可。" />
+      <NEmpty size="large" description="暂无成员" />
     </template>
   </NDataTable>
 
@@ -312,16 +312,16 @@ onMounted(loadAll)
   >
     <NForm label-placement="top">
       <NFormItem label="账号" required>
-        <NInput v-model:value="form.account" :disabled="Boolean(editingUserId)" placeholder="登录用的账号名" maxlength="128" />
+        <NInput :input-props="{ 'aria-label': '账号' }" v-model:value="form.account" :disabled="Boolean(editingUserId)" placeholder="登录用的账号名" maxlength="128" />
       </NFormItem>
       <NFormItem v-if="!editingUserId" label="初始密码" required>
-        <NInput v-model:value="form.password" type="password" show-password-on="click" placeholder="8-64 位，含大小写字母、数字与特殊字符" />
+        <NInput :input-props="{ 'aria-label': '初始密码' }" v-model:value="form.password" type="password" show-password-on="click" placeholder="8-64 位，含大小写字母、数字与特殊字符" />
       </NFormItem>
       <NFormItem label="角色" required>
-        <NSelect v-model:value="form.roleId" :options="roleOptions" placeholder="选择角色" />
+        <NSelect aria-label="角色" v-model:value="form.roleId" :options="roleOptions" placeholder="选择角色" />
       </NFormItem>
       <NFormItem label="可见实例">
-        <NSelect
+        <NSelect aria-label="可见实例"
           v-model:value="form.instanceIds"
           multiple
           filterable
@@ -330,16 +330,16 @@ onMounted(loadAll)
         />
       </NFormItem>
       <NFormItem v-if="!editingUserId" label="首次登录须改密">
-        <NSwitch v-model:value="form.mustChangePassword" />
+        <NSwitch aria-label="首次登录须改密" v-model:value="form.mustChangePassword" />
       </NFormItem>
       <NFormItem v-else-if="!editingMember?.isAdminAccount" label="启用">
-        <NSwitch
+        <NSwitch aria-label="启用"
           :value="form.status === 1"
           @update:value="(value: boolean) => { form.status = value ? 1 : 0 }"
         />
       </NFormItem>
-      <p v-else class="mt-0 mb-2 text-xs text-muted-foreground">
-        超级管理员账号不能被停用，所以这里没有启用开关。
+      <p v-else class="mt-0 mb-2 text-sm text-muted-foreground">
+        超级管理员账号不能停用。
       </p>
     </NForm>
 
@@ -358,13 +358,13 @@ onMounted(loadAll)
   <NModal v-model:show="passwordVisible" preset="card" title="重置密码" class="max-w-lg" :mask-closable="false">
     <NForm label-placement="top">
       <NFormItem label="账号">
-        <NInput :value="passwordForm.account" disabled />
+        <NInput :input-props="{ 'aria-label': '账号' }" :value="passwordForm.account" disabled />
       </NFormItem>
       <NFormItem label="新密码" required>
-        <NInput v-model:value="passwordForm.password" type="password" show-password-on="click" placeholder="8-64 位，含大小写字母、数字与特殊字符" />
+        <NInput :input-props="{ 'aria-label': '新密码' }" v-model:value="passwordForm.password" type="password" show-password-on="click" placeholder="8-64 位，含大小写字母、数字与特殊字符" />
       </NFormItem>
       <NFormItem label="要求下次登录改密">
-        <NSwitch v-model:value="passwordForm.mustChangePassword" />
+        <NSwitch aria-label="要求下次登录改密" v-model:value="passwordForm.mustChangePassword" />
       </NFormItem>
     </NForm>
     <template #footer>

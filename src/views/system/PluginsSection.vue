@@ -211,9 +211,6 @@ onMounted(loadPlugins)
 
 <template>
   <div class="space-y-3">
-    <p class="text-sm text-muted-foreground">
-      插件以独立进程运行，崩溃或停用都不影响面板与正在运行的游戏实例。
-    </p>
 
     <div v-if="list" class="rounded-md border px-3 py-2 text-xs text-muted-foreground break-all">
       插件目录：{{ list.pluginsRoot }}
@@ -252,7 +249,7 @@ onMounted(loadPlugins)
       <NTabPane name="installed" :tab="`已安装 (${installedCount})`">
         <NSpin :show="loading">
           <p v-if="installedEntries.length === 0" class="text-sm text-muted-foreground">
-            还没有安装任何插件。到「可获取」看看能装什么，或把插件包放进上面的目录。
+            尚未安装插件，可在「可获取」中选择，或导入插件包。
           </p>
 
           <div v-else class="grid gap-2 lg:grid-cols-2">

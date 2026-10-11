@@ -29,9 +29,13 @@ function isInstallPhaseFailure(instance: Pick<InstanceItem, 'lastErrorPhase'>) {
 export function getInstanceState(
   instance: Pick<InstanceItem, 'status' | 'lastErrorPhase'> & Partial<Pick<InstanceItem, 'runtimeFailureKind' | 'runtimeReadyAt' | 'lastError' | 'installLogStatus' | 'installTask' | 'startup'>>,
 ): StatusDescriptor & { key: keyof typeof INSTANCE_STATE } {
+  // 新启动摘要可能先于 status 与旧失败字段更新，以本轮任务为准。
+  if (isStartupActive(instance.startup) && !isInstanceInstallingStatus(instance.status)) return { ...INSTANCE_STARTING, key: 'running' }
   if (instance.runtimeFailureKind === 'memory_protection') return { ...INSTANCE_STATE.runtime_error, key: 'runtime_error', label: '内存保护停止' }
-  if (isStartupActive(instance.startup) && instance.status !== 'error' && !isInstanceInstallingStatus(instance.status)) return { ...INSTANCE_STARTING, key: 'running' }
-  if (instance.startup?.status === 'failed' && instance.status === 'running') return { ...INSTANCE_START_FAILED, key: 'runtime_error' }
+  if (instance.status === 'running' && instance.startup?.master?.state === 'ready' && instance.startup.caves?.state === 'failed') return { ...INSTANCE_STATE.running, key: 'running', label: startupPhaseLabel(instance.startup), tone: 'warning' }
+  if (instance.startup?.status === 'failed' && instance.status === 'running') return instance.startup.master.state === 'ready'
+    ? { ...INSTANCE_STATE.running, key: 'running', label: startupPhaseLabel(instance.startup), tone: 'warning' }
+    : { ...INSTANCE_START_FAILED, key: 'runtime_error' }
   if (instance.status === 'error') {
     if (!isInstallPhaseFailure(instance) && instance.lastError?.startsWith('启动失败：')) {
       return { ...INSTANCE_START_FAILED, key: 'runtime_error' }
@@ -66,10 +70,11 @@ export function resolveRuntimeReadinessView(
   instance: Pick<InstanceItem, 'status' | 'runtimeReadyAt' | 'runtimeStartedAt' | 'runtimeFailureKind'> & Partial<Pick<InstanceItem, 'startup'>>,
   nowMs = Date.now(),
 ): { label: string, tone: 'ok' | 'warn' } | null {
-  if (instance.runtimeFailureKind === 'memory_protection') return { label: '内存保护停止，请检查资源后手动启动', tone: 'warn' }
+  if (instance.runtimeFailureKind === 'memory_protection' && !isStartupActive(instance.startup)) return { label: '内存保护停止，请检查资源后手动启动', tone: 'warn' }
   if (instance.startup && (isStartupActive(instance.startup) || instance.status === 'running')) {
     const snapshot = instance.startup
-    if (snapshot.status === 'success') return { label: '全部世界已就绪', tone: 'ok' }
+    if (snapshot.status === 'success') return { label: startupPhaseLabel(snapshot), tone: snapshot.caves.state === 'failed' ? 'warn' : 'ok' }
+    if (snapshot.status === 'failed' && snapshot.master.state === 'ready') return { label: startupPhaseLabel(snapshot), tone: 'warn' }
     const remaining = snapshot.remainingSeconds === null ? '' : `，本阶段剩余 ${snapshot.remainingSeconds} 秒`
     return { label: `${startupPhaseLabel(snapshot)}（已等待 ${snapshot.elapsedSeconds} 秒${remaining}）`, tone: snapshot.diagnosis || snapshot.status === 'failed' ? 'warn' : 'ok' }
   }

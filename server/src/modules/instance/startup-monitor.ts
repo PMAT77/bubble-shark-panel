@@ -7,9 +7,10 @@ import { emptyResourceSnapshot } from '../../infra/container/dst-container-resou
 import { sampleHostResources, sampleRuntimeResources } from '../../infra/container/memory-budget'
 import { formatMemoryCapHint } from '../../infra/container/exit-reason'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
-import { updateGameInstanceRuntime } from '../../shared/db'
+import { getGameInstanceById, updateGameInstanceRuntime } from '../../shared/db'
 import { changeStartupPhase, isCurrentStartupTask, persistStartupTask, recordStartupSwapAdvice, refreshStartupProgress, type StartupTask } from './startup-state'
 import { confirmedOom } from './memory-pressure'
+import { emitPanelEvent } from '../notify/events'
 
 type Shard = 'master' | 'caves'
 const label = (shard: Shard) => shard === 'master' ? '主世界' : '洞穴'
@@ -24,11 +25,11 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
   startedAt: string
   waitSec: number
   isCancelled: () => boolean
-  luaFailure: () => string | null
+  luaFailure: (shard?: Shard) => string | null
   probe: (ref: ContainerRef, shard: Shard, remoteShardId?: string) => Promise<DstStartupProbe | null>
-  startCaves?: () => Promise<{ ok: true, ref: ContainerRef, baselineRestarts?: number | null } | { ok: false, message: string }>
+  startCaves?: () => Promise<{ ok: true, ref: ContainerRef, baselineRestarts?: number | null } | { ok: false, message: string, ref?: ContainerRef }>
   cleanup: (refs: ContainerRef[]) => Promise<void>
-  protectOom?: () => Promise<void>
+  protectOom?: (shard: Shard) => Promise<void>
   pollIntervalMs?: number
 }): Promise<void> {
   const { task, runtime } = input
@@ -39,6 +40,7 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
   const restoredPhase = task.snapshot.phase
   const restoredDeadline = task.snapshot.phaseDeadlineAt
   const restoredPhaseStartedAt = task.snapshot.phaseStartedAt
+  const preserveMasterPeak = task.snapshot.master.state === 'ready'
   let masterBaselineRestarts = task.snapshot.master.restartBaseline ?? input.baselineRestarts
   let cavesBaselineRestarts = task.snapshot.caves.restartBaseline ?? task.snapshot.caves.resources?.restarts ?? null
   const pollInterval = input.pollIntervalMs ?? 5000
@@ -60,7 +62,12 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
 
   const fail = async (code: string, message: string, raw = message, inspect?: ContainerInspect | null, sampledExitCode?: number | null) => {
     if (cancelled()) return
-    if (code === 'oom' && input.protectOom) { await input.protectOom(); return }
+    const shard = task.snapshot.master.state === 'ready' ? 'caves' : 'master'
+    const keepMaster = shard === 'caves'
+    task.snapshot[shard].state = 'failed'
+    task.snapshot[shard].diagnosis = { code, message }
+    task.snapshot[shard].cleanupCompleted = false
+    if (code === 'oom' && input.protectOom) { await input.protectOom(shard); return }
     const exitCode = sampledExitCode ?? inspect?.exitCode
     task.snapshot.diagnosis = { code, message }
     await changeStartupPhase(task, 'failed')
@@ -69,17 +76,25 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
     instanceConsoleLogStore.appendSystem(task.instanceId, `启动失败：${raw}${exitDetails ? `（${exitDetails}）` : ''}`)
     // 现场先持久化，再结束日志和清理本轮运行时。
     let cleaned = true
-    try { await input.cleanup([...(cavesRef ? [cavesRef] : []), input.masterRef]) }
+    try { await input.cleanup([...(cavesRef ? [cavesRef] : []), ...(!keepMaster ? [input.masterRef] : [])]) }
     catch (error) { cleaned = false; app.log.warn({ instanceId: task.instanceId, err: error }, '启动失败清理未完成') }
     if (cancelled()) return
+    task.snapshot[shard].cleanupCompleted = cleaned
+    await persistStartupTask(task)
+    if (cancelled()) return
     await updateGameInstanceRuntime(task.instanceId, {
-      status: 'error', ...(cleaned ? { containerId: null, runtimePid: null, runtimeStartedAt: null } : {}),
-      runtimeReadyAt: null, lastError: `启动失败：${message}`, lastErrorPhase: 'runtime',
+      status: keepMaster ? 'running' : 'error', ...(!keepMaster && cleaned ? { containerId: null, runtimePid: null, runtimeStartedAt: null } : {}),
+      ...(!keepMaster ? { runtimeReadyAt: null } : {}), lastError: `${label(shard)}启动失败：${message}`, lastErrorPhase: 'runtime',
       runtimeWarning: message, runtimeFailureKind: code === 'oom' ? 'memory' : 'not_ready',
-      ...(exitCode != null ? { lastExitCode: exitCode } : {}),
+      ...(!keepMaster && exitCode != null ? { lastExitCode: exitCode } : {}),
       whereStartupTaskId: task.snapshot.taskId,
     })
     app.log.warn({ instanceId: task.instanceId, code, exitResult: inspect?.exitResult, exitCode }, message)
+    const instance = await getGameInstanceById(task.instanceId)
+    if (cancelled()) return
+    emitPanelEvent({ type: 'instance_exited_unexpectedly', subjectId: task.instanceId, subjectName: instance?.name ?? task.instanceId, severity: 'critical',
+      occurrenceKey: `startup:${task.snapshot.taskId}:${shard}`, at: task.snapshot.updatedAt,
+      message: `${label(shard)}启动失败：${message}${keepMaster ? '；主世界继续运行' : ''}` })
   }
 
   const captureResources = (shard: Shard, resources: RuntimeResourceSnapshot | null, inspect: ContainerInspect | null, baseline: RuntimeResourceSnapshot | null) => {
@@ -93,9 +108,11 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
     if (inspected?.memOomKillCount != null) current.oomKillCount = Math.max(current.oomKillCount ?? 0, inspected.memOomKillCount)
     if (inspected?.oomKilled === true || inspected?.exitResult === 'oom-kill') current.oomKilled = true
     task.snapshot[shard].resources = current
-    task.snapshot[shard].memoryPeakMb = Math.max(task.snapshot[shard].memoryPeakMb ?? 0, current.memoryPeakMb ?? 0, current.memoryCurrentMb ?? 0) || null
-    task.snapshot[shard].memoryAndSwapPeakMb = Math.max(task.snapshot[shard].memoryAndSwapPeakMb ?? 0, current.memoryAndSwapPeakMb ?? 0) || null
-    task.snapshot[shard].peakLimited ||= current.peakLimited === true
+    if (!preserveMasterPeak || shard !== 'master') {
+      task.snapshot[shard].memoryPeakMb = Math.max(task.snapshot[shard].memoryPeakMb ?? 0, current.memoryPeakMb ?? 0, current.memoryCurrentMb ?? 0) || null
+      task.snapshot[shard].memoryAndSwapPeakMb = Math.max(task.snapshot[shard].memoryAndSwapPeakMb ?? 0, current.memoryAndSwapPeakMb ?? 0) || null
+      task.snapshot[shard].peakLimited ||= current.peakLimited === true
+    }
     // 先保存现场增量，再判失败；失败报告不能沿用上一轮的 0 次 OOM。
     const reference = baseline ?? current
     task.snapshot[shard].resourceBaseline = reference
@@ -153,7 +170,9 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
     let worldSeen = responded
     while (Date.now() < deadline && !cancelled()) {
       const tick = Date.now()
-      const luaFailure = input.luaFailure()
+      const masterLuaFailure = shard === 'caves' ? input.luaFailure('master') : null
+      if (masterLuaFailure) { task.snapshot.master.state = 'failed'; await fail('lua_error', '主世界出现 Lua 致命错误，请查看控制台', masterLuaFailure); return false }
+      const luaFailure = input.luaFailure(shard)
       if (luaFailure) { task.snapshot[shard].state = 'failed'; await fail('lua_error', `${label(shard)}出现 Lua 致命错误，请查看控制台`, luaFailure); return false }
       let inspect: ContainerInspect | null = null
       let resources: RuntimeResourceSnapshot | null = null
@@ -207,16 +226,20 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
         const probeDeadline = Math.min(deadline, tick + pollInterval)
         const probe = await bounded(input.probe(ref, shard), probeDeadline)
         if (cancelled()) return false
+        if (probe) task.snapshot[shard].lastProbe = { ...probe, at: new Date().toISOString() }
         responded ||= probe !== null
         worldSeen ||= probe?.worldReady === true
         let connected = shard === 'master'
         if (shard === 'caves' && probe?.worldReady && probe.shardId) {
           const masterProbe = await bounded(input.probe(input.masterRef, 'master', probe.shardId), probeDeadline)
           if (cancelled()) return false
+          if (masterProbe) task.snapshot.master.lastProbe = { ...masterProbe, at: new Date().toISOString() }
           connected = masterProbe?.worldReady === true && masterProbe.remoteConnected === true
         }
         if (Date.now() < deadline && probe?.worldReady && connected) {
           task.snapshot[shard].state = 'ready'
+          task.snapshot[shard].readyAt = new Date().toISOString()
+          task.snapshot[shard].diagnosis = null
           task.snapshot.diagnosis = null
           await persistStartupTask(task)
           return true
@@ -264,6 +287,7 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
         }
         const probe = inspect?.running && !inspect.probeFailed ? await bounded(input.probe(input.masterRef, 'master'), deadline) : null
         if (cancelled()) return
+        if (probe) task.snapshot.master.lastProbe = { at: new Date().toISOString(), worldReady: probe.worldReady, shardId: probe.shardId ?? null, remoteConnected: probe.remoteConnected ?? null }
         if (Date.now() < deadline && probe?.worldReady) break
         if (Date.now() >= deadline) { await fail(restoredPhase === 'connecting' ? 'shard_connect_timeout' : 'probe_unavailable', '恢复启动超过原等待期限，请检查分片与查询通道'); return }
         await sleep(Math.min(pollInterval, deadline - Date.now()), undefined, { signal }).catch(() => {})
@@ -280,6 +304,7 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
         const deadline = restoredPhase === 'caves_loading' || restoredPhase === 'connecting' ? restoredDeadline : new Date(Date.now() + input.waitSec * 1000).toISOString()
         await changeStartupPhase(task, 'caves_loading', deadline)
         const result = await input.startCaves!()
+        cavesRef = result.ref
         if (result.ok) {
           cavesRef = result.ref
           cavesBaselineRestarts = result.baselineRestarts ?? null
@@ -287,15 +312,15 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
           await persistStartupTask(task)
         }
         if (cancelled()) return
-        if (!result.ok) { await fail('caves_start_failed', '洞穴启动失败，请检查资源与控制台', result.message); return }
+        if (!result.ok) { await fail('caves_start_failed', `洞穴启动失败：${result.message}`, result.message); return }
       }
       if (!cavesRef || !await waitShard(cavesRef, 'caves', cavesBaselineRestarts)) return
     }
-    else task.snapshot.caves.state = 'disabled'
+    else if (task.snapshot.target !== 'master') task.snapshot.caves.state = 'disabled'
     if (cancelled()) return
     task.snapshot.diagnosis = null
     await changeStartupPhase(task, 'ready')
-    if (!cancelled()) instanceConsoleLogStore.appendSystem(task.instanceId, '实例已就绪，所有启用的分片已完成加载和连接')
+    if (!cancelled()) instanceConsoleLogStore.appendSystem(task.instanceId, task.snapshot.target === 'master' ? '主世界已就绪' : task.snapshot.target === 'caves' ? '洞穴已就绪并连接主世界' : '实例已就绪，所有启用的分片已完成加载和连接')
   }
   catch (error) {
     if (!cancelled()) await fail('startup_internal_error', '启动监控发生异常，请查看控制台', String(error))

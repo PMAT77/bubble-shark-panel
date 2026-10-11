@@ -8,10 +8,10 @@ import { DST_MEMORY_SLICE, sampleHostResources, sampleRuntimeResources } from '.
 import { readBrandEnv } from '../../../../shared/brand-env'
 import { LOCAL_NODE_ID } from '../../shared/dst/local-dst-instance'
 import { currentStartupTask, getStartupSnapshot, refreshStartupProgress, startupIsActive } from './startup-state'
-import { protectInstanceMemory, runtimeMemoryEpoch, protectExitedShardOom } from './container-lifecycle'
+import { protectInstanceMemory, protectExitedShardOom } from './container-lifecycle'
 import { MemoryPressureWindow, confirmedOom, shardPressure } from './memory-pressure'
 
-const windows = new Map<string, { epoch: string, master: MemoryPressureWindow, caves: MemoryPressureWindow, masterBaseline: ResourceSnapshot | null, cavesBaseline: ResourceSnapshot | null }>()
+const windows = new Map<string, { masterIdentity: string | null, cavesIdentity: string | null, master: MemoryPressureWindow, caves: MemoryPressureWindow, masterBaseline: ResourceSnapshot | null, cavesBaseline: ResourceSnapshot | null }>()
 const poolWindow = new MemoryPressureWindow()
 const hostWindow = new MemoryPressureWindow()
 let timer: NodeJS.Timeout | undefined
@@ -35,28 +35,40 @@ export async function inspectMemoryProtection(app: FastifyInstance): Promise<voi
       progress: loading ? Date.parse(snapshot?.lastProgressAt ?? snapshot?.phaseStartedAt ?? '') : undefined })
   }
   const at = Date.now()
-  const stop = async (sample: Sample, code: MemoryProtectionStop['code'], message: string) => protectInstanceMemory(app, sample.instance,
-    { code, message, master: sample.master, caves: sample.caves, host }, sample.refs)
+  const stop = async (sample: Sample, code: MemoryProtectionStop['code'], message: string, scope: 'instance' | 'caves' = 'instance') => protectInstanceMemory(app, sample.instance,
+    { code, message, master: sample.master, caves: sample.caves, host }, scope === 'caves' ? sample.refs.filter(ref => ref.name.endsWith('-caves')) : sample.refs, scope)
   for (const sample of samples) {
-    const epoch = `${runtimeMemoryEpoch(sample.instance)}|${sample.master?.runtimeIdentity ?? ''}|${sample.caves?.runtimeIdentity ?? ''}`
     let state = windows.get(sample.instance.id)
-    if (!state || state.epoch !== epoch) {
-      state = { epoch, master: new MemoryPressureWindow(), caves: new MemoryPressureWindow(),
+    if (!state) {
+      state = { masterIdentity: sample.master?.runtimeIdentity ?? null, cavesIdentity: sample.caves?.runtimeIdentity ?? null, master: new MemoryPressureWindow(), caves: new MemoryPressureWindow(),
         masterBaseline: matchingBaseline(sample.master, sample.instance.lastStartupReport?.master.resourceBaseline),
         cavesBaseline: matchingBaseline(sample.caves, sample.instance.lastStartupReport?.caves.resourceBaseline) }
       windows.set(sample.instance.id, state)
     }
-    if (confirmedOom(sample.master, state.masterBaseline) || confirmedOom(sample.caves, state.cavesBaseline)) {
-      await stop(sample, 'oom', '确认本轮分片 OOM，已保护停止整个实例'); return
+    for (const role of ['master', 'caves'] as const) {
+      const identity = sample[role]?.runtimeIdentity ?? null
+      if (identity !== state[`${role}Identity`]) {
+        state[role].reset(); state[`${role}Identity`] = identity
+        state[`${role}Baseline`] = matchingBaseline(sample[role], sample.instance.lastStartupReport?.[role].resourceBaseline)
+      }
+    }
+    if (confirmedOom(sample.master, state.masterBaseline)) {
+      await stop(sample, 'oom', '主世界发生 OOM，已保护停止实例'); return
+    }
+    if (!sample.instance.lastStartupReport?.caves.protectionStop && confirmedOom(sample.caves, state.cavesBaseline)) {
+      await stop(sample, 'oom', '洞穴发生 OOM，已保护停止洞穴，主世界继续运行', 'caves'); return
     }
     for (const ref of sample.refs) {
+      if (ref.name.endsWith('-caves') && sample.instance.lastStartupReport?.caves.protectionStop) continue
       const resources = ref.name.endsWith('-caves') ? sample.caves : sample.master
       if (resources?.oomKilled === true && await protectExitedShardOom(app, sample.instance, ref)) return
     }
     for (const role of ['master', 'caves'] as const) {
+      if (role === 'caves' && sample.instance.lastStartupReport?.caves.protectionStop) continue
       const pressure = shardPressure(sample[role])
-      if (state[role].observe({ at, ...pressure, requireReclaim: true, lastProgressAt: sample.progress })) {
-        await stop(sample, 'shard_memory_pressure', `${role === 'master' ? '主世界' : '洞穴'}持续触及实际限额、回收内存并严重停顿至少 15 秒`); return
+      const loadingRole = getStartupSnapshot(sample.instance.id, sample.instance.lastStartupReport)?.[role].state === 'loading'
+      if (state[role].observe({ at, ...pressure, requireReclaim: true, lastProgressAt: loadingRole ? sample.progress : undefined })) {
+        await stop(sample, 'shard_memory_pressure', `${role === 'master' ? '主世界' : '洞穴'}持续触及实际限额、回收内存并严重停顿至少 15 秒`, role === 'caves' ? 'caves' : 'instance'); return
       }
     }
   }

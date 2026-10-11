@@ -28,7 +28,10 @@ import { ensureDstLayout } from '../../infra/game-adapter/dst/cluster-config'
 import { redactSteamcmdLogLine } from '../../infra/container/steamcmd-errors'
 
 const app = Fastify({ logger: false })
-const root = fs.mkdtempSync(path.join(process.cwd(), '.bsp-update-regression-'))
+// test-results 不受开发服务监听，安装目录仍需避开系统临时目录黑名单。
+const fixtureParent = path.join(process.cwd(), 'test-results')
+fs.mkdirSync(fixtureParent, { recursive: true })
+const root = fs.mkdtempSync(path.join(fixtureParent, '.bsp-update-regression-'))
 const envKeys = ['DB_PATH', 'BSP_RUNTIME_MODE', 'BSP_INSTANCES_ROOT', 'BSP_PANEL_CONTAINER_NAME', 'BSP_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'BSP_UNIT_TEST', 'BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS', 'BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS', 'BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS'] as const
 const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]))
 process.env.DB_PATH = path.join(root, 'test.sqlite')
@@ -96,7 +99,7 @@ async function waitForInstall(id: string) {
   }
   assert.equal(isInstallJobActive(id), false, '安装任务应结束')
   const current = await getGameInstanceById(id)
-  assert.equal(current?.status, 'stopped', current?.lastError ?? current?.lastCommand ?? undefined)
+  assert.equal(current?.status, 'stopped', `${current?.lastError ?? current?.lastCommand ?? ''}\n${new InstanceInstallLogWriter(getInstallLogsDirPath(), id).readContent()}`)
   assert.equal(readInstallProgress(getInstallLogsDirPath(), id)?.phaseCode, 'complete')
 }
 
@@ -583,7 +586,7 @@ describe('installation progress and raw log routes', () => {
       assert.equal(failed?.installLogStatus, 'failed')
       assert.equal(failed?.lastErrorPhase, 'install')
       assert.notEqual(failed?.installPercent, 100)
-      assert.match(failed?.lastError ?? '', /镜像|仓库/)
+      assert.match(failed?.lastError ?? '', /镜像|仓库/, new InstanceInstallLogWriter(getInstallLogsDirPath(), current.id).readContent())
     }
     finally { image.mock.restore(); pull.mock.restore() }
   })

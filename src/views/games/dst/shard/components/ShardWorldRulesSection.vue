@@ -81,19 +81,21 @@ function isCustomized(overrideKey: string): boolean {
         {{ section.title }}
       </h3>
 
-      <div class="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+      <div class="world-rule-grid">
         <div
           v-for="item in section.items"
           :key="`${section.sectionId}-${item.overrideKey}`"
-          class="flex items-stretch gap-3 rounded-lg border border-border bg-card p-3"
+          class="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-3"
         >
           <div
-            class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted/30 sm:size-[4.5rem]"
+            class="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted/30"
           >
             <img
               v-if="item.image"
               :src="item.image"
-              :alt="item.labelZh"
+              alt=""
+              width="48"
+              height="48"
               class="max-h-full max-w-full object-contain"
               loading="lazy"
             >
@@ -106,7 +108,7 @@ function isCustomized(overrideKey: string): boolean {
           </div>
 
           <div class="flex min-w-0 flex-1 flex-col justify-between gap-2">
-            <p class="text-center text-sm leading-snug font-medium text-foreground">
+            <p :id="`${shard}-${activeTab}-${item.overrideKey}-label`" class="text-sm leading-snug font-medium text-foreground">
               {{ item.labelZh }}
               <NTag
                 v-if="isCustomized(item.overrideKey)"
@@ -121,6 +123,8 @@ function isCustomized(overrideKey: string): boolean {
 
             <div class="flex items-center justify-center gap-1">
               <NSelect
+                :aria-labelledby="`${shard}-${activeTab}-${item.overrideKey}-label`"
+                :input-props="{ 'aria-labelledby': `${shard}-${activeTab}-${item.overrideKey}-label` }"
                 :value="ruleLevel(item.overrideKey)"
                 :options="toSelectOptions(resolveRowLevelProfile(item).levels)"
                 :disabled="disabled"
@@ -131,7 +135,8 @@ function isCustomized(overrideKey: string): boolean {
               <button
                 v-if="isCustomized(item.overrideKey) && !disabled"
                 type="button"
-                class="shrink-0 rounded px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+                class="shrink-0 size-8 rounded text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary cursor-pointer"
+                :aria-label="`恢复${item.labelZh}默认值`"
                 title="恢复默认档位"
                 @click="setRuleLevel(item.overrideKey, 'default')"
               >
@@ -144,3 +149,11 @@ function isCustomized(overrideKey: string): boolean {
     </section>
   </div>
 </template>
+
+<style scoped>
+.world-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+}
+</style>

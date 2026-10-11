@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { NTooltip } from 'naive-ui'
-
 defineOptions({ name: 'ConfigActionBar' })
 
 withDefaults(defineProps<{
   dirty?: boolean
+  resetDirty?: boolean
+  statusText?: string
+  restartNeeded?: boolean
   /** 任一操作进行中：三个按钮一律置灰，避免并发提交 */
   busy?: boolean
   /** 「保存」按钮自身的 loading */
@@ -20,10 +21,12 @@ withDefaults(defineProps<{
   showRestart?: boolean
   saveLabel?: string
   restartLabel?: string
+  resetLabel?: string
 }>(), {
   showRestart: true,
   saveLabel: '保存配置',
   restartLabel: '保存并重启',
+  resetLabel: '放弃修改',
 })
 
 const emit = defineEmits<{
@@ -36,25 +39,23 @@ const emit = defineEmits<{
 <template>
   <FaFixedBar position="bottom">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <span class="text-sm text-muted-foreground">
-        {{ dirty ? '存在未保存的修改' : '所有修改已保存' }}
+      <span class="text-sm text-muted-foreground" role="status" aria-live="polite">
+        {{ statusText ?? (dirty ? '有未保存的修改' : '已保存') }}
       </span>
       <div class="flex flex-wrap gap-2">
-        <FaButton variant="outline" :loading="resetting" :disabled="!dirty || busy" @click="emit('reset')">
-          重置
+        <FaButton variant="ghost" :loading="resetting" :disabled="!(resetDirty ?? dirty) || busy" @click="emit('reset')">
+          {{ resetLabel }}
         </FaButton>
         <FaButton :loading="saving" :disabled="!dirty || busy" @click="emit('save')">
           {{ saveLabel }}
         </FaButton>
-        <NTooltip v-if="showRestart" :disabled="!restartDisabled || !restartDisabledTitle">
-          <template #trigger>
-            <FaButton :loading="restarting" :disabled="!dirty || busy || restartDisabled" @click="emit('saveAndRestart')">
-              {{ restartLabel }}
-            </FaButton>
-          </template>
-          {{ restartDisabledTitle }}
-        </NTooltip>
+        <FaButton v-if="showRestart" variant="outline" :loading="restarting" :disabled="(!dirty && !restartNeeded) || busy || restartDisabled" @click="emit('saveAndRestart')">
+          {{ restartLabel }}
+        </FaButton>
       </div>
+      <p v-if="showRestart && restartDisabled && restartDisabledTitle" class="w-full text-sm text-muted-foreground">
+        {{ restartDisabledTitle }}
+      </p>
     </div>
   </FaFixedBar>
 </template>

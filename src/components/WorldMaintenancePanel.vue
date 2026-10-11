@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import { NButton, NCheckbox, NInput, NInputNumber, NModal, NSpace, useDialog } from 'naive-ui'
 import apiShard from '@/api/modules/shard'
 import type { ShardSnapshotsDto, ShardSnapshotDto } from '@/api/modules/shard'
@@ -35,7 +35,11 @@ function confirmRollback(n: number, key: string) {
   // 固定确认时的目标对象；刷新列表或自动保存都不会把确认目标偷偷换成另一个。
   const target: ShardSnapshotDto = { ...selected }
   dialog.warning({ title: `确认整个房间回档 ${n} 步？`,
-    content: `目标：${target.worldDay === null ? '游戏天数未知' : `第 ${target.worldDay} 天`}，${savedTime(target.savedAt)}，存档点 #${target.snapshotId}。地上和已配置洞穴一起回档，玩家连接可能中断。${backupBefore.value ? '执行前备份已落盘的存档，不额外保存；未保存进度不包含在备份中。' : '本次不创建安全备份。'}`,
+    content: () => h('div', { class: 'space-y-3 text-sm' }, [
+      h('p', `目标：${target.worldDay === null ? '游戏天数未知' : `第 ${target.worldDay} 天`}，${savedTime(target.savedAt)}，存档点 #${target.snapshotId}。`),
+      h('p', '地上和已配置洞穴一起回档，此后的进度会丢失，玩家连接可能中断。'),
+      h('p', backupBefore.value ? '执行前备份已保存的存档；尚未保存的进度不包含在备份中。' : '本次不创建安全备份。'),
+    ]),
     positiveText: '回到此存档点', negativeText: '取消',
     onPositiveClick: () => submit({ action: 'rollback', sessionId: target.sessionId, cavesSessionId: target.cavesSessionId, snapshotId: target.snapshotId }, key) })
 }
@@ -55,16 +59,16 @@ watch(() => operation.value?.state, (state, previous) => {
 </script>
 <template>
   <div class="space-y-3">
-    <p class="text-xs text-muted-foreground">保存、回档和重置作用于整个房间。回档按存档点计步，同一天可以有多个存档点。</p>
+    <p class="text-sm text-muted-foreground">保存、回档和重新生成作用于整个房间。回档按存档点计步，同一天可以有多个存档点。</p>
     <NSpace wrap>
       <NButton v-if="hasPermission('console:command')" size="small" :disabled="!running || busy" :loading="isLoading('save')" @click="submit({ action: 'save' }, 'save')">保存存档</NButton>
       <template v-if="hasPermission('world:rollback')">
         <NButton v-for="n in [1, 2, 3]" :key="n" size="small" :disabled="!running || busy || !targetForStep(n)" :loading="isLoading(`rollback-${n}`)" @click="confirmRollback(n, `rollback-${n}`)">回档 {{ n }} 步</NButton>
       </template>
-      <NButton v-if="hasPermission('world:reset')" size="small" type="warning" :disabled="busy" :loading="isLoading('reset')" @click="openReset">重置整个房间</NButton>
+      <NButton v-if="hasPermission('world:reset')" size="small" type="warning" secondary class="ml-2" :disabled="busy" :loading="isLoading('reset')" @click="openReset">重新生成整个房间</NButton>
     </NSpace>
     <div v-if="hasPermission('world:rollback')" class="flex flex-wrap items-center gap-2">
-      <NInputNumber v-model:value="steps" :min="1" :max="Math.max(1, available.length)" :precision="0" size="small" class="w-32" :disabled="busy || !available.length" />
+      <NInputNumber v-model:value="steps" :input-props="{ 'aria-label': '回档步数' }" :min="1" :max="Math.max(1, available.length)" :precision="0" size="small" class="w-32" :disabled="busy || !available.length" />
       <span class="text-xs">步</span>
       <NButton size="small" :disabled="!running || busy || !steps || !targetForStep(steps)" :loading="isLoading('rollback-custom')" @click="confirmRollback(steps || 1, 'rollback-custom')">自定义回档</NButton>
     </div>
@@ -74,7 +78,7 @@ watch(() => operation.value?.state, (state, previous) => {
         <span>已保留 {{ snapshots?.snapshots.length ?? 0 }} 个游戏快照，可整房间回档 {{ available.length }} 步。</span>
         <NButton size="tiny" :loading="refreshing" :disabled="refreshing" @click="refreshSnapshots">刷新存档点</NButton>
       </div>
-      <p v-if="loadError" class="text-xs text-rose-500">{{ loadError }}</p>
+      <p v-if="loadError" class="text-sm text-destructive" role="alert">{{ loadError }}</p>
       <ol v-else-if="snapshots?.snapshots.length" class="max-h-56 overflow-y-auto space-y-1 text-xs">
         <li v-for="item in snapshots.snapshots" :key="item.id" class="rounded border border-border p-2">
           <span>{{ item.rollbackSteps === null ? '不可整房间回档' : `回档 ${item.rollbackSteps} 步` }} · #{{ item.snapshotId }} · {{ item.worldDay === null ? '游戏天数未知' : `第 ${item.worldDay} 天` }} · {{ savedTime(item.savedAt) }}</span>
@@ -84,10 +88,12 @@ watch(() => operation.value?.state, (state, previous) => {
       </ol>
     </div>
     <WorldMaintenanceStatus :operation="operation" :submitting="submitting" @continue="continueWithoutBackup" @verify="recheck" />
-    <NModal v-model:show="resetVisible" preset="card" title="重置整个房间" class="max-w-lg" :mask-closable="false">
-      <p class="text-sm mb-3">地上和洞穴将一起重新生成，旧地图、建筑、物品和玩家进度会丢失，旧游戏快照也会删除。保留已保存的生成配置和指定种子；种子为空时随机。玩家连接可能中断。</p>
-      <p class="text-sm mb-3">{{ backupBefore ? '执行前创建整个房间的安全备份，失败会暂停。' : '本次不创建安全备份。' }} 相同种子不能恢复玩家进度，地图还受预设、模组与版本影响。</p>
-      <NInput v-model:value="confirmName" :placeholder="`请输入实例名称：${instanceName}`" />
+    <NModal v-model:show="resetVisible" preset="card" title="重新生成整个房间" class="max-w-lg" :mask-closable="false">
+      <p class="text-sm mb-3">将重新生成「{{ instanceName }}」的地上和洞穴，使用已保存的生成配置与种子；种子为空时随机。</p>
+      <p class="text-sm mb-3">旧地图、建筑、物品、玩家进度和旧存档点将被删除，玩家连接可能中断。</p>
+      <p class="text-sm mb-3">{{ backupBefore ? '执行前备份整个房间，备份失败时暂停。' : '本次不创建安全备份。' }} 相同种子不能恢复玩家进度，地图还受预设、Mod 与版本影响。</p>
+      <label for="room-reset-confirm" class="block text-sm mb-2">输入实例名称「{{ instanceName }}」以确认</label>
+      <NInput v-model:value="confirmName" :input-props="{ id: 'room-reset-confirm' }" placeholder="实例名称" />
       <NSpace justify="end" class="mt-4">
         <NButton @click="resetVisible = false">取消</NButton>
         <NButton type="error" :disabled="busy || !instanceName || confirmName.trim() !== instanceName.trim()" @click="resetRoom">确认重新生成</NButton>

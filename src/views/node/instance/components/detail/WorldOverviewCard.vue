@@ -7,6 +7,8 @@ import { computed, ref } from 'vue'
 import { routeToDstWorldSettings } from '@/navigation/game-routes'
 import { resolveShardDisplayStatus, statusTagType } from '@/constants/statusDictionary'
 import { dstSeasonLabel } from '../../instanceCommandShortcuts'
+import { isInstanceWorldReady, isStartupActive } from '../../startupPresentation'
+import { trackStartupAccepted } from '../../composables/useInstanceStartup'
 
 /** 世界运行时状态（P1：指令注入查询，实例未运行时 available=false） */
 export interface InstanceWorldState {
@@ -34,6 +36,7 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const initCavesLoading = ref(false)
+const startingShard = ref<ShardId | null>(null)
 
 /** 当前账号的权限判定；按钮级隐藏用，后端仍是唯一的安全边界 */
 const { auth: hasPermission } = useAppAuth()
@@ -42,6 +45,29 @@ const canViewWorld = computed(() => hasPermission('world:read'))
 const cavesShard = computed(() => props.shardList?.shards.find(shard => shard.id === 'caves') ?? null)
 
 const cavesEnabled = computed(() => props.shardList?.clusterShardEnabled === true)
+const masterReady = computed(() => !!props.instance && isInstanceWorldReady(props.instance))
+
+function startDisabled(shard: ShardId) {
+  const instance = props.instance
+  const info = props.shardList?.shards.find(item => item.id === shard)
+  return !instance || !!startingShard.value || isStartupActive(instance.startup)
+    || instance.status === 'installing' || instance.status === 'pending_install'
+    || info?.containerStatus === 'running' || (shard === 'caves' && (!cavesEnabled.value || !masterReady.value))
+}
+
+async function startShard(shard: ShardId) {
+  if (!props.instance || startDisabled(shard)) return
+  startingShard.value = shard
+  const startedAfter = Date.now() - 1000
+  try {
+    const response = await apiShard.startShard(props.instance.id, shard)
+    trackStartupAccepted(props.instance.id, startedAfter, response.data.taskId)
+    faToast.success(shard === 'master' ? '正在启动主世界' : '正在启动洞穴')
+    emit('refreshed')
+  }
+  catch (error) { faToast.error(error instanceof Error ? error.message : '分片启动失败，请重试') }
+  finally { startingShard.value = null }
+}
 
 const worldStateText = computed(() => {
   const ws = props.worldState
@@ -60,7 +86,7 @@ function shardStatus(shardId: ShardId) {
   if (!shard) {
     return null
   }
-  const descriptor = resolveShardDisplayStatus(shard)
+  const descriptor = resolveShardDisplayStatus(shard, props.instance?.startup?.[shardId])
   return {
     shard,
     descriptor,
@@ -91,7 +117,7 @@ async function initCaves() {
   initCavesLoading.value = true
   try {
     await apiShard.initCaves(props.instance.id)
-    faToast.success('洞穴已初始化，可在世界设置中调整参数')
+    faToast.success('洞穴已准备好')
     emit('refreshed')
   }
   catch (error) {
@@ -118,7 +144,7 @@ function goWorldSettings() {
         用 v-if 把整行收掉会让卡片高度塌一下再弹回来。
       -->
       <p class="mb-3 text-xs text-muted-foreground">
-        世界进程：<span class="text-foreground">{{ worldStateText ?? '—' }}</span>
+        游戏进度：<span class="text-foreground">{{ worldStateText ?? '—' }}</span>
         <span v-if="worldState && !worldState.available && worldState.message" class="ml-1">{{ worldState.message }}</span>
       </p>
 
@@ -131,10 +157,18 @@ function goWorldSettings() {
         >
           <template v-if="view">
             <div class="flex items-center justify-between gap-2">
-              <span class="text-sm font-medium">{{ view.shard.isMaster ? '主世界（地上）' : '洞穴' }}</span>
-              <NTag size="small" :bordered="false" :type="view.tagType">
-                {{ view.descriptor.label }}
-              </NTag>
+              <span class="text-sm font-medium">{{ view.shard.isMaster ? '地上' : '洞穴' }}</span>
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <NTag size="small" :bordered="false" :type="view.tagType">
+                  {{ view.descriptor.label }}
+                </NTag>
+                <NButton v-if="hasPermission('instance:lifecycle')" size="tiny" secondary
+                  :loading="startingShard === view.shard.id" :disabled="startDisabled(view.shard.id)"
+                  :title="view.shard.id === 'caves' && !masterReady ? '请先启动主世界并等待就绪' : undefined"
+                  @click="startShard(view.shard.id)">
+                  启动{{ view.shard.isMaster ? '地上' : '洞穴' }}
+                </NButton>
+              </div>
             </div>
             <dl class="text-xs text-muted-foreground space-y-1">
               <div class="flex justify-between gap-2">
@@ -157,16 +191,16 @@ function goWorldSettings() {
       <div v-if="!cavesEnabled" class="mt-3 rounded-md bg-muted/50 px-3 py-2.5 flex flex-wrap items-center justify-between gap-2">
         <span class="text-xs text-muted-foreground">未开启洞穴</span>
         <NButton v-if="canViewWorld" size="tiny" secondary @click="goWorldSettings">
-          去世界设置
+          世界设置
         </NButton>
       </div>
       <div
         v-else-if="cavesEnabled && cavesShard && !cavesShard.configured"
         class="mt-3 rounded-md bg-muted/50 px-3 py-2.5 flex flex-wrap items-center justify-between gap-2"
       >
-        <span class="text-xs text-muted-foreground">洞穴还没准备好，初始化后即可使用</span>
+        <span class="text-sm text-muted-foreground">洞穴尚未准备好</span>
         <NButton size="tiny" type="primary" secondary :loading="initCavesLoading" @click="initCaves" v-if="hasPermission('world:write')">
-          初始化洞穴
+          准备洞穴
         </NButton>
       </div>
     </template>
@@ -176,7 +210,7 @@ function goWorldSettings() {
         没有权限时这里必然是空的——写成"请稍后重试"会让人一直点刷新。
       -->
       <NEmpty
-        :description="canViewWorld ? '世界配置读取失败，请稍后重试' : '当前账号没有「查看世界配置」权限，看不到世界信息'"
+        :description="canViewWorld ? '世界配置读取失败，请重试' : '无权查看世界配置'"
         size="small"
       />
     </template>

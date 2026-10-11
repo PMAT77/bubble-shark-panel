@@ -291,7 +291,7 @@ describe('NativeSystemdRuntime serialization', () => {
    */
   it('appends stdout and stderr to a file the panel can always read', () => {
     const unit = buildNativeSystemdUnit(buildSpec(), LAUNCHER, CONSOLE_LOG)
-    assert.match(unit, /Restart=on-failure/)
+    assert.match(unit, /Restart=no/)
     assert.match(unit, /StandardOutput=append:\/srv\/bsp\/runtime\/console-logs\/shard\.log/)
     assert.match(unit, /StandardError=append:\/srv\/bsp\/runtime\/console-logs\/shard\.log/)
     assert.doesNotMatch(unit, /StandardOutput=journal/)

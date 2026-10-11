@@ -414,7 +414,6 @@ watch(contentLocale, () => {
         <NCard size="small" class="shrink-0">
           <AdminSettingsSection
             title="基本信息"
-            description="创意工坊元数据与当前实例的订阅状态。"
           />
           <div class="mt-4 flex flex-col gap-4 lg:flex-row">
             <div class="shrink-0">
@@ -494,7 +493,6 @@ watch(contentLocale, () => {
         >
           <AdminSettingsSection
             title="描述"
-            description="创意工坊原文说明，用于确认 Mod 功能与兼容性。"
           />
           <NScrollbar class="mt-4 min-h-0 flex-1">
             <p

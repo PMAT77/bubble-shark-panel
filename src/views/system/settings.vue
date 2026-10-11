@@ -62,7 +62,7 @@ const portFieldDescription = computed(() => (isProductionDeployment.value ? '面
 
 /** 服务器上保存会真的写进部署配置，本地则由重启开发服务器决定 */
 const portRestartHint = computed(() => (isProductionDeployment.value
-  ? '保存后会写入服务器配置，重启面板后生效；请记得在安全组或防火墙放行新端口。'
+  ? '重启面板后生效，请先在安全组或防火墙放行新端口。'
   : '修改端口保存后，需重启面板才能生效。'))
 
 /** 正在生效的端口：生产看服务端判定值，本地开发就是浏览器所在的 Vite 端口 */
@@ -447,9 +447,9 @@ onMounted(async () => {
 <template>
   <FaPageMain class="h-full gap-4">
     <div>
-      <h2 class="m-0 text-lg font-semibold">
+      <h1 class="m-0 text-lg font-semibold">
         系统设置
-      </h2> 
+      </h1>
     </div>
     <SystemSettingsTabs>
       <template #settings>
@@ -481,8 +481,8 @@ onMounted(async () => {
               >
                 当前实际端口：{{ activePort }}
               </p>
-              <NInputNumber v-model:value="form.panelPort" :min="1" :max="65535" class="max-w-80 mt-3" placeholder="请输入端口号" />
-              <p class="text-xs text-muted-foreground mt-2">
+              <NInputNumber v-model:value="form.panelPort" :input-props="{ 'aria-label': portFieldTitle }" :disabled="!hasPermission('settings:write') || saveLoading" :min="1" :max="65535" class="max-w-80 mt-3" placeholder="请输入端口号" />
+              <p class="text-sm text-muted-foreground mt-2">
                 {{ portRestartHint }}
               </p>
             </AdminSettingsSection>
@@ -491,7 +491,7 @@ onMounted(async () => {
               title="界面主题"
               description="保存后立即生效。"
             >
-              <NSelect v-model:value="form.theme" :options="themeOptions" class="max-w-80" />
+              <NSelect v-model:value="form.theme" aria-label="界面主题" :disabled="!hasPermission('settings:write') || saveLoading" :options="themeOptions" class="max-w-80" />
             </AdminSettingsSection>
 
             <AdminSettingsSection
@@ -506,7 +506,7 @@ onMounted(async () => {
                 </p>
                 <p
                   v-if="updateView.phaseLine"
-                  class="text-xs whitespace-pre-wrap"
+                  class="text-sm whitespace-pre-wrap"
                   :class="updateView.updateFailed ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
                 >
                   {{ updateView.phaseLine }}
@@ -526,7 +526,7 @@ onMounted(async () => {
                     更新说明
                   </a>
                 </p>
-                <p v-if="normalizedCheckError" class="text-xs text-amber-600 dark:text-amber-400">
+                <p v-if="normalizedCheckError" class="text-sm text-amber-600 dark:text-amber-400">
                   检查提示：{{ normalizedCheckError }}
                 </p>
               </div>
@@ -564,7 +564,7 @@ onMounted(async () => {
 
               <div v-if="updateStatus?.runtimeMode !== 'native'" class="space-y-2 max-w-80 pt-1">
                 <label class="text-sm text-muted-foreground">更新下载源</label>
-                <NSelect v-model:value="form.updateSource" :options="updateSourceOptions" />
+                <NSelect v-model:value="form.updateSource" aria-label="更新下载源" :disabled="!hasPermission('settings:write') || saveLoading" :options="updateSourceOptions" />
                 <p class="text-xs text-muted-foreground">
                   {{ updateSourceHint }}
                 </p>
@@ -598,11 +598,11 @@ onMounted(async () => {
               title="自动检查更新"
             >
               <div class="flex gap-3 items-center">
-                <FaSwitch v-model="form.autoUpdate" />
+                <FaSwitch v-model="form.autoUpdate" aria-label="自动检查更新" :disabled="!hasPermission('settings:write') || saveLoading" />
               </div>
               <div class="space-y-2 max-w-80">
                 <label class="text-sm text-muted-foreground">检查间隔（小时）</label>
-                <NInputNumber v-model:value="form.updateCheckIntervalHours" :min="1" :max="168" placeholder="1-168" class="w-full" />
+                <NInputNumber v-model:value="form.updateCheckIntervalHours" :input-props="{ 'aria-label': '检查间隔（小时）' }" :disabled="!hasPermission('settings:write') || saveLoading" :min="1" :max="168" placeholder="1-168" class="w-full" />
               </div>
             </AdminSettingsSection>
 
@@ -610,7 +610,7 @@ onMounted(async () => {
               title="启动前检查游戏更新"
             >
               <div class="flex gap-3 items-center">
-                <FaSwitch v-model="form.checkUpdateBeforeStart" />
+                <FaSwitch v-model="form.checkUpdateBeforeStart" aria-label="启动前检查游戏更新" :disabled="!hasPermission('settings:write') || saveLoading" />
               </div>
             </AdminSettingsSection>
 

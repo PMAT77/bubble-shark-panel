@@ -67,6 +67,9 @@ it('preserves all running fields on unknown probes, then reconciles confirmed st
   await reconcileInstanceRuntimeState(app)
   assert.equal(probes, 2, 'unknown results must not be cached')
   mode = 'stopped'
+  t.mock.method(runtime, 'stop', async () => {})
+  t.mock.method(runtime, 'remove', async () => {})
+  t.mock.method(runtime, 'removeShardNetwork', async () => {})
   await reconcileInstanceRuntimeState(app)
   const stopped = await getGameInstanceById(instance.id)
   assert.equal(stopped?.status, 'stopped')
@@ -215,7 +218,7 @@ it('实际就绪超时会中止日志跟随、清理主世界并保存启动错�
   assert.equal(failed?.runtimeReadyAt, null)
   assert.equal(failed?.lastErrorPhase, 'runtime')
   assert.match(failed?.lastError ?? '', /主世界等待就绪超时（1 秒）/)
-  assert.equal(failed?.lastError, `启动失败：${failed?.runtimeWarning}`)
+  assert.equal(failed?.lastError, `主世界启动失败：${failed?.runtimeWarning}`)
   assert.equal(failed?.lastStartupReport?.status, 'failed')
   assert.equal(failed?.lastStartupReport?.diagnosis?.code, 'probe_unavailable')
   assert.equal(failed?.lastStartupReport?.master.state, 'failed')

@@ -47,7 +47,7 @@ export async function restartInstanceCore(
   if (!current) {
     return businessError('实例不存在', request)
   }
-  if (current.runtimeFailureKind === 'memory_protection' && options?.source === 'automatic') return businessError('实例已内存保护停止，只能手动启动或重启', request)
+  if ((current.runtimeFailureKind === 'memory_protection' || current.lastStartupReport?.caves.protectionStop) && options?.source === 'automatic') return businessError('分片已内存保护停止，只能手动启动或重启', request)
   if (current.nodeId !== LOCAL_NODE_ID) {
     return businessError('当前仅支持本地节点执行实例命令', request)
   }

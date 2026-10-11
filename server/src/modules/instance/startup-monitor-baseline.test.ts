@@ -212,7 +212,7 @@ it('uses the cave actual cap and saves its OOM evidence before cleaning up diffe
       : caveResources,
   } as unknown as ContainerRuntime
   const cleanup = t.mock.fn(async (refs: Array<{ id: string, name: string }>) => {
-    assert.deepEqual(refs, [cavesRef, input.masterRef])
+    assert.deepEqual(refs, [cavesRef])
     const saved = (await getGameInstanceById(input.task.instanceId))?.lastStartupReport
     assert.equal(saved?.diagnosis?.code, 'oom')
     assert.match(saved?.diagnosis?.message ?? '', /洞穴.*实际内存硬上限 2048 MiB/)
@@ -236,7 +236,8 @@ it('uses the cave actual cap and saves its OOM evidence before cleaning up diffe
   const row = await getGameInstanceById(input.task.instanceId)
   assert.equal(cleanup.mock.callCount(), 1)
   assert.equal(row?.runtimeFailureKind, 'memory')
-  assert.equal(row?.lastExitCode, 9)
+  assert.equal(row?.lastExitCode, null)
+  assert.equal(row?.lastStartupReport?.caves.resources?.exitCode, 9)
   assert.match(row?.runtimeWarning ?? '', /洞穴.*实际内存硬上限 2048 MiB/)
 })
 

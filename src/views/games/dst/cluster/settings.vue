@@ -23,12 +23,10 @@ import {
   NSpace,
   NSpin,
   NSwitch,
-  NTooltip,
   useDialog,
   useMessage,
   useNotification,
 } from 'naive-ui'
-import AdminSettingsSection from '@/components/AdminSettingsSection.vue'
 import ConfigActionBar from '@/components/ConfigActionBar.vue'
 import { useUnsavedChangesGuard } from '@/composables/useUnsavedChangesGuard'
 import { computed, nextTick, onActivated, reactive, ref, shallowRef, watch } from 'vue'
@@ -152,15 +150,14 @@ const NETWORK_MODE_HINTS: Record<ClusterNetworkMode, string> = {
 
 const networkModeHint = computed(() => NETWORK_MODE_HINTS[formModel.networkMode])
 
-/** 顶部只承载异常警告与「实例运行中」这条影响保存行为的条件提示。 */
+/** 顶部承载异常警告；重启生效提示跟随保存状态。 */
 const configAlerts = computed(() => {
   const config = serverConfig.value
   if (!config) {
-    return { warnings: [] as string[], hints: [] as string[] }
+    return { warnings: [] as string[] }
   }
   return {
     warnings: config.warnings,
-    hints: config.configDirty ? ['实例运行中，配置变更需重启实例后生效'] : [],
   }
 })
 
@@ -463,10 +460,6 @@ onActivated(() => {
       </NButton>
     </div>
     <div v-else class="space-y-4">
-      <AdminSettingsSection
-        title="房间配置"
-        description="设置联网方式、房间信息与洞穴开关。"
-      />
       <div class="space-y-4">
         <NAlert v-if="configAlerts.warnings.length" type="warning" title="需要处理" class="mb-2">
           <ul class="list-disc pl-4 space-y-1">
@@ -475,24 +468,18 @@ onActivated(() => {
             </li>
           </ul>
         </NAlert>
-        <NAlert
-          v-for="(hint, index) in configAlerts.hints"
-          :key="`hint-${index}`"
-          type="info"
-          :title="hint"
-          class="mb-2"
-        />
         <NForm
           ref="formRef"
           :model="formModel"
           :rules="formRules"
+          :disabled="!hasPermission('room:write') || isSaving || resetting"
           :label-placement="formLabelPlacement"
           :label-width="formLabelWidth"
           require-mark-placement="right-hanging"
         >
           <NCard title="联网模式" size="small">
             <NFormItem label="模式">
-              <NRadioGroup v-model:value="formModel.networkMode">
+              <NRadioGroup aria-label="模式" v-model:value="formModel.networkMode">
                 <NSpace>
                   <NRadio value="offline">
                     离线 
@@ -510,16 +497,10 @@ onActivated(() => {
               </template>
             </NFormItem>
             <NFormItem label="网络刷新率" path="tickRate">
-              <NInputNumber v-model:value="formModel.tickRate" :min="15" :max="60" :step="15" class="w-40" />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>客户端与服务器之间每秒通信的次数，<br>性能满足的情况下，通信频率越高，游戏越流畅、体验越好。</p>
-              </NTooltip>
-              <span class="ml-2 text-sm text-muted-foreground">15–60，默认 15</span>
+              <NInputNumber :input-props="{ 'aria-label': '网络刷新率' }" v-model:value="formModel.tickRate" :min="15" :max="60" :step="15" class="w-40" />
+              <template #feedback>
+                每秒通信次数。提高刷新率会增加资源占用，默认 15。
+              </template>
             </NFormItem>
           </NCard>
           <NCard v-if="showPublicTokenSection" title="Klei 集群令牌" size="small" class="mt-4">
@@ -538,7 +519,7 @@ onActivated(() => {
               path="clusterToken"
               :required="formModel.networkMode === 'public' && !serverConfig?.clusterTokenConfigured"
             >
-              <NInput
+              <NInput :input-props="{ 'aria-label': 'Klei 集群令牌' }"
                 v-model:value="formModel.clusterToken"
                 type="password"
                 show-password-on="click"
@@ -549,10 +530,10 @@ onActivated(() => {
 
           <NCard title="房间信息" size="small" class="mt-4">
             <NFormItem label="房间名称" path="clusterName">
-              <NInput v-model:value="formModel.clusterName" placeholder="游戏大厅显示的名称" />
+              <NInput :input-props="{ 'aria-label': '房间名称' }" v-model:value="formModel.clusterName" placeholder="游戏大厅显示的名称" />
             </NFormItem>
             <NFormItem label="房间描述">
-              <NInput
+              <NInput :input-props="{ 'aria-label': '房间描述' }"
                 v-model:value="formModel.clusterDescription"
                 type="textarea"
                 placeholder="可选"
@@ -560,7 +541,7 @@ onActivated(() => {
               />
             </NFormItem>
             <NFormItem label="房间密码">
-              <NInput
+              <NInput :input-props="{ 'aria-label': '房间密码' }"
                 v-model:value="formModel.clusterPassword"
                 placeholder="留空则无需密码"
                 show-password-on="click"
@@ -571,73 +552,38 @@ onActivated(() => {
 
           <NCard title="玩法设置" size="small" class="mt-4">
             <NFormItem label="游戏模式">
-              <NSelect v-model:value="formModel.gameMode" :options="gameModeOptions" class="max-w-xs" />
+              <NSelect aria-label="游戏模式" v-model:value="formModel.gameMode" :options="gameModeOptions" class="max-w-xs" />
               <template v-if="gameModeHint" #feedback>
                 {{ gameModeHint }}
               </template>
             </NFormItem>
             <NFormItem label="最大玩家" path="maxPlayers">
-              <NInputNumber v-model:value="formModel.maxPlayers" :min="1" :max="64" class="w-40" />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>1核2G服务器推荐4人，<br> 2核4G服务器推荐6-8人</p>
-              </NTooltip>
+              <NInputNumber :input-props="{ 'aria-label': '最大玩家' }" v-model:value="formModel.maxPlayers" :min="1" :max="64" class="w-40" />
+              <template #feedback>
+                可参考：1 核 2 GB 配置设 4 人，2 核 4 GB 设 6–8 人。
+              </template>
             </NFormItem>
             <NFormItem label="白名单预留位" path="whitelistSlots">
-              <NInputNumber v-model:value="formModel.whitelistSlots" :min="0" :max="formModel.maxPlayers" class="w-40" />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>给白名单玩家保留的席位数量。<br>填 0 表示不使用白名单，此时白名单名单不会生效。</p>
-              </NTooltip>
+              <NInputNumber :input-props="{ 'aria-label': '白名单预留位' }" v-model:value="formModel.whitelistSlots" :min="0" :max="formModel.maxPlayers" class="w-40" />
+              <template #feedback>
+                填 0 时，白名单不生效。
+              </template>
             </NFormItem>
-            <NFormItem label="PVP">
-              <NSwitch v-model:value="formModel.pvp" />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>是否开启玩家对战</p>
-              </NTooltip>
+            <NFormItem label="玩家对战（PVP）">
+              <NSwitch aria-label="玩家对战（PVP）" v-model:value="formModel.pvp" />
             </NFormItem>
             <NFormItem label="无人暂停">
-              <NSwitch v-model:value="formModel.pauseWhenEmpty" /> 
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>无人时暂停游戏</p>
-              </NTooltip>
+              <NSwitch aria-label="无人暂停" v-model:value="formModel.pauseWhenEmpty" />
             </NFormItem>
             <NFormItem label="投票功能">
-              <NSwitch v-model:value="formModel.voteEnabled" />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>开启后，可通过投票进行踢出玩家、回档、重置世界操作</p>
-              </NTooltip>
+              <NSwitch aria-label="投票功能" v-model:value="formModel.voteEnabled" />
+              <template #feedback>
+                玩家可投票踢人、回档或重新生成世界。
+              </template>
             </NFormItem>
           </NCard>
 
           <NCard title="玩家名单" size="small" class="mt-4">
-            <p class="text-sm text-muted-foreground">
-              管理员、白名单与黑名单已经集中到「玩家管理」页面：那里能看到在线玩家、按游戏名添加名单、踢出或封禁玩家。
-              白名单是否生效仍由上面的「白名单预留位」决定，填 0 就是不用白名单。
-            </p>
             <NButton
               v-if="hasPermission('player:read')"
               class="mt-3"
@@ -649,17 +595,12 @@ onActivated(() => {
             </NButton>
           </NCard>
 
-          <NCard title="存档与快照" size="small" class="mt-4">
-            <NFormItem label="最大快照数">
-              <NInputNumber v-model:value="formModel.maxSnapshots" :min="1" :max="99" class="w-40" />
-              <NTooltip :style="{ maxWidth: '300px' }" >
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>服务器保留的快照数量上限，<br>默认情况下，服务器会在新的一天开始时对服务器存档，生成一份快照。保留的快照数量决定了可回档的天数上限。 在世界内有玩家存在时，服务器不会清理该世界的快照。</p>
-              </NTooltip>
+          <NCard title="游戏存档点" size="small" class="mt-4">
+            <NFormItem label="最多保留存档点">
+              <NInputNumber :input-props="{ 'aria-label': '最多保留存档点' }" v-model:value="formModel.maxSnapshots" :min="1" :max="99" class="w-40" />
+              <template #feedback>
+                存档点决定可回档步数，不等于天数；同一天可有多个存档点。有玩家在场时，游戏不会清理该世界的快照。
+              </template>
             </NFormItem>
           </NCard>
 
@@ -670,25 +611,20 @@ onActivated(() => {
               :message="cavesMemoryAlert"
             />
             <NFormItem label="启用洞穴">
-              <NSwitch v-model:value="formModel.shardEnabled" />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>开启后地上与洞穴各运行一个服务器；保存后将自动准备洞穴默认配置，请到「世界设置」调整地图与端口。</p>
-              </NTooltip>
+              <NSwitch aria-label="启用洞穴" v-model:value="formModel.shardEnabled" />
+              <template #feedback>
+                开启后会准备洞穴配置；地图和端口可在「世界设置」调整。
+              </template>
             </NFormItem>
             <template v-if="formModel.shardEnabled">
               <NFormItem label="内部通信端口" path="masterPort">
-                <NInputNumber v-model:value="formModel.masterPort" :min="1" :max="65535" class="w-40" />
+                <NInputNumber :input-props="{ 'aria-label': '内部通信端口' }" v-model:value="formModel.masterPort" :min="1" :max="65535" class="w-40" />
                 <template #feedback>
                   地上与洞穴服务器之间的通信端口，默认 10888，两处须保持一致
                 </template>
               </NFormItem>
               <NFormItem label="互联密钥">
-                <NInput
+                <NInput :input-props="{ 'aria-label': '互联密钥' }"
                   v-model:value="formModel.clusterKey"
                   type="password"
                   show-password-on="click"
@@ -713,43 +649,25 @@ onActivated(() => {
 
           <NCard title="Steam 组（可选）" size="small" class="mt-4">
             <NFormItem label="Steam 组 ID" path="steamGroupId">
-              <NInput
+              <NInput :input-props="{ 'aria-label': 'Steam 组 ID' }"
                 v-model:value="formModel.steamGroupId"
                 placeholder="纯数字，留空表示不绑定"
                 class="w-48"
                 inputmode="numeric"
                 :allow-input="allowSteamGroupIdInput"
               />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>每个steam群组都有唯一的一串数字与其对应，在这里填写群组编号用于绑定steam群组。 绑定后服务器将在群组成员的大厅中优先显示，并附有红色、黄色或白色小旗子标志。</p>
-              </NTooltip>
+              <template #feedback>
+                绑定后，房间会在组成员的游戏大厅优先显示。
+              </template>
             </NFormItem>
-            <NFormItem label="仅 Steam 组">
-              <NSwitch v-model:value="formModel.steamGroupOnly" />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>是否仅允许steam群组成员加入服务器</p>
-              </NTooltip>
+            <NFormItem label="仅允许组成员加入">
+              <NSwitch aria-label="仅允许组成员加入" v-model:value="formModel.steamGroupOnly" />
             </NFormItem>
             <NFormItem label="组管理员权限">
-              <NSwitch v-model:value="formModel.steamGroupAdmins" />
-              <NTooltip :style="{ maxWidth: '300px' }">
-                <template #trigger>
-                  <NButton text class="ml-2">
-                    <FaIcon name="i-lucide:info" class="size-4" />
-                  </NButton>
-                </template>
-                <p>是否将steam群组管理员设为游戏管理员</p>
-              </NTooltip>
+              <NSwitch aria-label="组管理员权限" v-model:value="formModel.steamGroupAdmins" />
+              <template #feedback>
+                开启后，Steam 组管理员同时获得游戏管理员权限。
+              </template>
             </NFormItem>
           </NCard>
         </NForm>
@@ -757,6 +675,8 @@ onActivated(() => {
         <AppAuth value="room:write">
           <ConfigActionBar
             :dirty="formDirty"
+            :restart-needed="serverConfig.configDirty"
+            :status-text="formDirty ? '有未保存的修改' : serverConfig.configDirty ? '已保存，重启后生效' : '已保存'"
             :busy="isSaving || resetting"
             :saving="activeSaveOperation === 'save'"
             :restarting="activeSaveOperation === 'restart'"
@@ -772,7 +692,7 @@ onActivated(() => {
         <!-- 只有 room:read 的角色：配置照常可看，但不给保存入口，也不留一堆点了报错的按钮 -->
         <AppAuth value="room:write" #no-auth>
           <div class="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-            你可以查看这份房间配置，但没有修改权限，保存与重置入口已隐藏。需要修改请联系管理员。
+            当前为只读。如需修改，请联系管理员。
           </div>
         </AppAuth>
       </div>

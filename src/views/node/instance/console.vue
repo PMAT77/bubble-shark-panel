@@ -141,8 +141,8 @@ function streamClass(line: InstanceConsoleLogLine) {
   }
 }
 
-function scrollToBottom() {
-  if (!autoScroll.value) {
+function scrollToBottom(force = false) {
+  if (!force && !autoScroll.value) {
     return
   }
   nextTick(() => {
@@ -777,8 +777,8 @@ onBeforeUnmount(() => {
               <span class="text-muted-foreground ml-1">（{{ connectInfo.hostSourceLabel }}）</span>
             </NDescriptionsItem>
           </NDescriptions>
-          <p class="text-xs text-muted-foreground mb-3 leading-relaxed">
-            在游戏内按 ~ 打开控制台，粘贴下方命令。命令框右侧可复制当前命令，或切换公网 / 本机 / 局域网直连。
+          <p class="text-sm text-muted-foreground mb-3 leading-relaxed">
+            在游戏内按 ~ 打开控制台，粘贴下方连接命令。
           </p>
 
           <template v-if="connectDisplayBlock">
@@ -854,26 +854,31 @@ onBeforeUnmount(() => {
               <NRadioButton value="game" label="游戏输出" />
             </NRadioGroup>
           </div>
-          <div
-            ref="logViewportRef"
-            class="font-mono text-xs leading-5 p-3 border rounded-lg bg-zinc-950 text-zinc-100 h-[min(52vh,560px)] overflow-y-auto"
-          >
-            <p v-if="displayedLogs.length === 0" class="text-zinc-500">
-              {{ emptyLogHint }}
-            </p>
+          <div class="relative">
             <div
-              v-for="line in displayedLogs"
-              :key="line.id"
-              class="whitespace-pre-wrap break-all"
-              :class="isCommandEcho(line) ? 'border-l-2 border-amber-400/70 pl-2 -ml-2' : ''"
+              ref="logViewportRef"
+              class="font-mono text-xs leading-5 p-3 pb-14 border rounded-lg bg-zinc-950 text-zinc-100 h-[min(52vh,560px)] overflow-y-auto"
             >
-              <span class="text-zinc-500 mr-2">{{ formatDateTime(line.at) }}</span>
-              <span
-                v-if="line.shard"
-                class="text-amber-400/90 mr-1.5"
-              >[{{ consoleLogShardLabel(line.shard) }}]</span>
-              <span :class="streamClass(line)">{{ line.text }}</span>
+              <p v-if="displayedLogs.length === 0" class="text-zinc-500">
+                {{ emptyLogHint }}
+              </p>
+              <div
+                v-for="line in displayedLogs"
+                :key="line.id"
+                class="whitespace-pre-wrap break-all"
+                :class="isCommandEcho(line) ? 'border-l-2 border-amber-400/70 pl-2 -ml-2' : ''"
+              >
+                <span class="text-zinc-500 mr-2">{{ formatDateTime(line.at) }}</span>
+                <span
+                  v-if="line.shard"
+                  class="text-amber-400/90 mr-1.5"
+                >[{{ consoleLogShardLabel(line.shard) }}]</span>
+                <span :class="streamClass(line)">{{ line.text }}</span>
+              </div>
             </div>
+            <FaButton v-if="displayedLogs.length" size="sm" class="absolute bottom-3 right-3" @click="scrollToBottom(true)">
+              回到底部
+            </FaButton>
           </div>
           <div class="flex flex-wrap gap-2 items-center mt-3">
             <FaButton size="sm" variant="outline" @click="clearLogs" v-if="hasPermission('console:clear')">
@@ -896,7 +901,7 @@ onBeforeUnmount(() => {
 
           <div class="mt-6 pt-4 border-t border-border">
             <p class="text-xs text-muted-foreground mb-3">
-              向游戏服务器发送控制台命令。命令回显与执行结果都会出现在上方日志里；把上方「显示」切到「游戏输出」即可只看游戏原始日志。
+              命令的执行结果会显示在上方日志中。
             </p>
             <WorldMaintenancePanel :instance-id="instanceId" :instance-name="instanceName" :running="running" class="mb-5" @busy="maintenanceBusy = $event" @refreshed="loadInstanceMeta" />
             <div class="flex flex-wrap gap-2 items-center mb-3">
@@ -913,12 +918,13 @@ onBeforeUnmount(() => {
                 （{{ cavesCommandDisabledHint }}）
               </span>
             </div>
-            <p class="text-xs text-muted-foreground mb-4 leading-relaxed">
-              改玩家属性、刷物品等命令需在玩家当前所在世界执行（人在洞穴时选「洞穴」）。
+            <p class="text-sm text-muted-foreground mb-4 leading-relaxed">
+              修改玩家属性、生成物品时，请选择玩家所在的世界。
             </p>
             <form class="flex gap-2 items-start" @submit.prevent="sendCommand()">
               <FaInput
                 v-model="commandInput"
+                aria-label="游戏控制台命令"
                 class="flex-1 font-mono"
                 placeholder="例如 c_save() 或 TheNet:Announce('hello')"
                 :disabled="!running || commandSending || maintenanceBusy"

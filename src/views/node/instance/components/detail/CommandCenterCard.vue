@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { InstanceConnectInfo, InstanceConsoleCommandShard, InstanceItem, InstanceMaintenancePushLog } from '@/api/modules/instance'
 import apiInstance from '@/api/modules/instance'
+import { keyboardTabProps } from '@/utils/keyboardTab'
 import { NButton, NCard, NEmpty, NInput, NRadioButton, NRadioGroup, NTabPane, NTabs, NTag, useDialog } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
 import { routeToInstanceConsole } from '@/navigation/game-routes'
@@ -214,11 +215,11 @@ defineExpose({
 <template>
   <NCard title="游戏指令" size="small">
     <NTabs v-model:value="activeTab" type="line" size="small" @update:value="onTabChange">
-      <NTabPane display-directive="show" name="quick" tab="快捷指令">
+      <NTabPane display-directive="show" :tab-props="keyboardTabProps(activeTab === 'quick')" name="quick" tab="快捷指令">
         <WorldMaintenancePanel v-if="instance" :instance-id="instance.id" :instance-name="instance.name" :running="running" @refreshed="emit('refreshed')" @busy="maintenanceBusy = $event" />
       </NTabPane>
 
-      <NTabPane v-if="hasPermission('console:command')" name="custom" tab="自定义指令">
+      <NTabPane v-if="hasPermission('console:command')" :tab-props="keyboardTabProps(activeTab === 'custom')" name="custom" tab="自定义指令">
         <div class="flex flex-wrap gap-2 items-center mt-3 mb-3">
           <span class="text-xs text-muted-foreground">发送到：</span>
           <NRadioGroup v-model:value="commandShard" size="small">
@@ -232,6 +233,7 @@ defineExpose({
         <form class="flex gap-2 items-start" @submit.prevent="sendCustomCommand">
           <NInput
             v-model:value="customCommand"
+            :input-props="{ 'aria-label': '游戏控制台命令', spellcheck: false }"
             class="flex-1"
             placeholder="例如 c_listallplayers() 或 TheNet:Announce('hello')"
             :disabled="!running || commandSending || maintenanceBusy"
@@ -255,12 +257,13 @@ defineExpose({
         </p>
       </NTabPane>
 
-      <NTabPane v-if="hasPermission('instance.console:read')" name="announce" tab="世界公告">
+      <NTabPane v-if="hasPermission('instance.console:read')" :tab-props="keyboardTabProps(activeTab === 'announce')" name="announce" tab="世界公告">
         <NInput
           v-model:value="maintenanceMessage"
+          :input-props="{ 'aria-label': '世界公告' }"
           type="textarea"
           placeholder="例如：10 分钟后面板升级，游戏服保持在线，暂无法打开管理页"
-          :disabled="maintenanceLoading || maintenanceSaving || maintenancePushing"
+          :disabled="!hasPermission('maintenance:write') || maintenanceLoading || maintenanceSaving || maintenancePushing"
           :maxlength="500"
           show-count
           :autosize="{ minRows: 4, maxRows: 8 }"

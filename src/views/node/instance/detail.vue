@@ -10,8 +10,6 @@ import apiShard from '@/api/modules/shard'
 import { NButton, NCard, NEmpty, NSpin } from 'naive-ui'
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { routeToNodeInstance } from '@/navigation/game-routes'
-import { statusBadgeClass } from '@/constants/statusDictionary'
-import { getInstanceState } from './instanceDisplay'
 import { isInstanceWorldReady } from './startupPresentation'
 import { useInstanceStartup } from './composables/useInstanceStartup'
 import { planInstanceDetailRequests } from './detailRequestPermissions'
@@ -44,7 +42,7 @@ const loading = ref(false)
 const instance = ref<InstanceItem | null>(null)
 const { syncStartupPolling, stopStartupPolling } = useInstanceStartup(computed(() => instance.value ? [instance.value] : []), (id, startup) => {
   if (instance.value?.id === id) instance.value = { ...instance.value, startup }
-}, () => { if (ownsCurrentPage()) void loadDetail({ silent: true }) })
+}, () => { if (ownsCurrentPage()) void loadDetail({ silent: true }) }, { notifyFailure: false })
 const cluster = ref<ClusterConfigDto | null>(null)
 const shardList = ref<ShardListDto | null>(null)
 const onlinePlayers = ref<ClusterOnlinePlayersDto | null>(null)
@@ -56,7 +54,6 @@ const pageTitle = computed(() => instance.value
   ? `实例详情 · ${instance.value.name}`
   : '实例详情')
 
-const state = computed(() => (instance.value ? getInstanceState(instance.value) : null))
 
 /**
  * 有权限就拉，没有就不发；单项失败给 `null`（不阻塞其余区块）。
@@ -273,15 +270,6 @@ onBeforeUnmount(() => {
             </template>
             返回列表
           </NButton>
-          <template v-if="instance && state">
-            <span class="font-medium truncate">{{ instance.name }}</span>
-            <span
-              class="text-xs px-2 py-0.5 rounded-full"
-              :class="statusBadgeClass(state.tone)"
-            >
-              {{ state.label }}
-            </span>
-          </template>
         </div>
         <div class="flex flex-wrap gap-2">
           <NButton size="small" secondary :loading="loading" @click="() => loadDetail()">
@@ -327,8 +315,8 @@ onBeforeUnmount(() => {
           @refreshed="() => loadDetail({ silent: true })"
         />
         <template #no-auth>
-          <NCard size="small" title="指令中心">
-            <NEmpty size="small" description="当前账号没有「查看控制台」权限，指令与维护公告不可用" />
+          <NCard size="small" title="游戏指令">
+            <NEmpty size="small" description="无权使用游戏指令" />
           </NCard>
         </template>
       </AppAuth>
@@ -340,7 +328,7 @@ onBeforeUnmount(() => {
         />
         <template #no-auth>
           <NCard size="small" title="文件管理">
-            <NEmpty size="small" description="当前账号没有「浏览文件」权限，文件管理不可用" />
+            <NEmpty size="small" description="无权浏览文件" />
           </NCard>
         </template>
       </AppAuth>
@@ -357,7 +345,7 @@ onBeforeUnmount(() => {
             size="small"
             title="迁移到其他机器"
           >
-            <NEmpty size="small" description="当前账号没有「查看迁移报告」权限，迁移报告不可用" />
+            <NEmpty size="small" description="无权查看迁移报告" />
           </NCard>
         </template>
       </AppAuth>

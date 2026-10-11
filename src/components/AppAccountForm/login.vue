@@ -334,7 +334,7 @@ function testAccount(account: string) {
           <span>以游客身份预览</span>
         </FaButton>
         <p class="mt-2 text-xs text-muted-foreground">
-          游客为只读账号：能查看面板内容，所有操作入口都已隐藏。
+          游客只能查看，不能修改。
         </p>
       </div>
       <div v-if="SHOW_DEMO_ACCOUNT_ENTRY" class="mt-4 text-center -mb-4">

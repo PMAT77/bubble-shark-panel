@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NCheckbox, NSpin, NTooltip, useMessage } from 'naive-ui'
+import { NAlert, NButton, NCard, NCheckbox, NSpin, useMessage } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
 import type { MigrationContentSummary } from '../../../../../../shared/contracts/migration'
 import apiBackup from '@/api/modules/backup'
@@ -111,24 +111,18 @@ async function copyReport() {
 
 <template>
   <NCard title="迁移到其他机器" size="small">
-    <template #header-extra>
-      <NTooltip :style="{ maxWidth: '300px' }">
-        <template #trigger>
-          <NButton text>
-            <FaIcon name="i-lucide:info" class="size-4" />
-          </NButton>
-        </template>
-        <p>
-          把这个实例的存档、房间配置与 Mod 清单整理成压缩包，在新机器上创建实例后用「备份与恢复 → 导入存档」导入。<br>
-          可选择包含 Mod 文件，供新机器离线恢复。包内不含游戏本体；缺失的 Mod 可恢复后手动下载。导出 24 小时后自动清理，不进入备份列表。
-        </p>
-      </NTooltip>
-    </template>
-
     <div class="space-y-3">
       <p class="text-sm text-muted-foreground">
-        搬到另一台机器用；它不能用来回档。
+        用于在另一台机器恢复实例。回档请使用「备份与恢复」。
       </p>
+      <details class="text-sm text-muted-foreground">
+        <summary class="cursor-pointer w-fit rounded focus-visible:outline-2 focus-visible:outline-primary">迁移包内容与使用</summary>
+        <div class="mt-2 space-y-2">
+          <p>包含存档、房间配置与 Mod 清单。在新机器创建实例后，通过「备份与恢复 → 导入存档」恢复。</p>
+          <p>可包含 Mod 文件供离线恢复，不含游戏本体；缺失的 Mod 可在恢复后下载。</p>
+          <p>迁移包会在导出 24 小时后自动清理，不进入备份列表，请及时下载。</p>
+        </div>
+      </details>
       <NCheckbox v-model:checked="includeMods" :disabled="exporting || loadingReport">包含 Mod 文件（离线迁移，需停服）</NCheckbox>
       <NAlert v-if="includeMods && !stopped" type="warning">请先停止实例再导出包含 Mod 的迁移包。</NAlert>
       <p v-if="modContent" class="text-sm">可包含 {{ modContent.includedModCount }} 个 Mod，预计 {{ (modContent.estimatedContentBytes / 1024 ** 2).toFixed(2) }} MiB</p>

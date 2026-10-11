@@ -1,6 +1,7 @@
 import { computed, onActivated, onDeactivated, onBeforeUnmount, ref, watch, type MaybeRefOrGetter, toValue } from 'vue'
 import api from '@/api/modules/world-maintenance'
 import type { WorldMaintenanceOperation, WorldMaintenancePayload } from '@/api/modules/world-maintenance'
+import { createRequestId } from '@/utils/requestId'
 
 type ActionInput = WorldMaintenancePayload extends infer P ? P extends WorldMaintenancePayload ? Omit<P, 'instanceId' | 'requestId' | 'backupBefore'> : never : never
 export function useWorldMaintenance(instanceId: MaybeRefOrGetter<string>, enabled: MaybeRefOrGetter<boolean> = true) {
@@ -29,10 +30,16 @@ export function useWorldMaintenance(instanceId: MaybeRefOrGetter<string>, enable
   }
   async function submit(action: ActionInput, key: string) {
     if (busy.value) return
+    let requestId: string
+    try { requestId = createRequestId() }
+    catch (error) {
+      faToast.error('无法发起世界维护', { description: error instanceof Error ? error.message : '请刷新页面后重试。' })
+      return
+    }
     submitting.value = true
     activeKey.value = key
     try {
-      const { data } = await api.begin({ ...action, instanceId: toValue(instanceId), requestId: crypto.randomUUID(), backupBefore: backupBefore.value } as WorldMaintenancePayload)
+      const { data } = await api.begin({ ...action, instanceId: toValue(instanceId), requestId, backupBefore: backupBefore.value } as WorldMaintenancePayload)
       operation.value = data
       clearTimeout(timer)
       await refresh()

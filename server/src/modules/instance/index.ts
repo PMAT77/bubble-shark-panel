@@ -1,5 +1,7 @@
 import { reconcileInstanceRuntimeState } from './runtime-reconciliation'
 import { instanceStartSource } from './start-source'
+import { shardStartPayloadSchema } from '../../../../shared/contracts/shard'
+import { readClusterShardEnabledFromInstall } from '../../infra/game-adapter/dst/shard-service'
 import { startMemoryProtectionWatch, stopMemoryProtectionWatch } from './memory-watch'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { withInstanceContentActivity } from '../../shared/instance-content/operation'
@@ -817,14 +819,23 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     }
   })
 
-  async function handleInstanceStart(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> {
+  app.post('/app/instance/shards/start', async (request) => {
+    const body = shardStartPayloadSchema.safeParse(request.body ?? {})
+    if (!body.success) return businessError('请求参数无效', request)
+    const authorized = await authorizeInstance(request, body.data.instanceId, 'instance:lifecycle')
+    if (authorized.error) return authorized.error
+    request.body = { ...body.data, id: body.data.instanceId }
+    return handleInstanceStart(request, { target: body.data.shard })
+  })
+
+  async function handleInstanceStart(request: FastifyRequest, options?: { skipAuth?: boolean, target?: 'master' | 'caves' }): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> {
     const id = (request.body as { id?: string } | undefined)?.id
     if (!id) return handleInstanceStartUnlocked(request, options)
     try { return await withInstanceContentActivity(id, () => handleInstanceStartUnlocked(request, options)) }
     catch (error) { return businessError(error instanceof Error ? error.message : '启动实例失败', request) }
   }
 
-  async function handleInstanceStartUnlocked(request: FastifyRequest, options?: { skipAuth?: boolean }): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> {
+  async function handleInstanceStartUnlocked(request: FastifyRequest, options?: { skipAuth?: boolean, target?: 'master' | 'caves' }): Promise<ApiSuccessResponse<{ isSuccess: boolean, taskId?: string }> | ApiErrorResponse> {
     const body = instanceActionBodySchema.safeParse(request.body ?? {})
     if (!body.success) {
       return businessError('请求参数无效', request)
@@ -867,6 +878,17 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (isInstallJobActive(id) || isAnyInstallJobActive() || isSteamcmdAppUpdateBusy()) {
       return businessError('当前有实例正在安装或更新游戏文件（SteamCMD），请等待完成后再启动', request)
     }
+    if (await isInstanceContainerRunning(id)) {
+      if (options?.target === 'master') return businessError('主世界已经运行', request)
+      if (!options?.target && (!current.installPath || !readClusterShardEnabledFromInstall(current.installPath) || await isInstanceContainerRunning(id, 'caves'))) return success({ isSuccess: true }, request)
+      const started = await startInstanceContainer(app, {
+        instanceId: id, gameCode: current.gameCode, installPath: current.installPath ?? '', instanceName: current.name,
+        gamePort: current.gamePort, target: options?.target ?? 'all',
+        source: options?.skipAuth || instanceStartSource.getStore() === 'automatic' ? 'automatic' : 'manual',
+      })
+      return started.ok ? success({ isSuccess: true, taskId: started.taskId }, request) : businessError(started.message, request)
+    }
+    if (options?.target === 'caves') return businessError('请先启动主世界并等待就绪', request)
     const installPath = normalizeInstallPath(current.installPath ?? undefined) || await getDefaultSteamInstallPath(current.gameCode, current.id)
     const installPathError = validateInstallPath(installPath)
     if (installPathError) {
@@ -1045,6 +1067,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
         lastError: null,
       })
       const started = await startInstanceContainer(app, {
+        target: options?.target ?? 'all',
         source: options?.skipAuth || instanceStartSource.getStore() === 'automatic' ? 'automatic' : 'manual',
         instanceId: id,
         gameCode: current.gameCode,
@@ -1156,7 +1179,7 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (!current) {
       return { ok: false, message: '实例不存在' }
     }
-    if (current.runtimeFailureKind === 'memory_protection') return { ok: false, message: '内存保护停止后禁止计划任务或插件自动重启' }
+    if (current.runtimeFailureKind === 'memory_protection' || current.lastStartupReport?.caves.protectionStop) return { ok: false, message: '分片内存保护停止后禁止计划任务或插件自动重启' }
     if (current.nodeId !== LOCAL_NODE_ID) {
       return { ok: false, message: '当前仅支持本地节点执行实例命令' }
     }

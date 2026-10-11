@@ -3,7 +3,7 @@ import { useNotification } from 'naive-ui'
 import { showStartupSwapNotification } from '@/utils/hostMemoryPressure'
 import apiInstance, { type InstanceItem, type InstanceStartupSnapshot } from '@/api/modules/instance'
 import { createRuntimeMetricsPoller } from './runtimeMetricsPoller'
-import { createStartupNoticeTracker, shouldPollStartup } from '../startupPresentation'
+import { createStartupNoticeTracker, shouldPollStartup, startupPhaseLabel } from '../startupPresentation'
 
 const notices = createStartupNoticeTracker()
 const acceptanceVersion = ref(0)
@@ -17,6 +17,7 @@ export function useInstanceStartup(
   instances: Readonly<Ref<InstanceItem[]>>,
   commit: (id: string, snapshot: InstanceStartupSnapshot) => void,
   onTerminal?: () => void,
+  options: { notifyFailure?: boolean } = {},
 ) {
   const notification = useNotification()
   let enabled = false
@@ -34,11 +35,13 @@ export function useInstanceStartup(
         if (previous && Date.parse(snapshot.startedAt) < Date.parse(previous.startedAt)) continue
         if (previous?.taskId === snapshot.taskId && Date.parse(snapshot.updatedAt) < Date.parse(previous.updatedAt)) continue
         commit(id, snapshot)
+        // 主世界确认就绪即恢复其查询，不等待洞穴终态。
+        if (snapshot.master.state === 'ready' && previous?.master.state !== 'ready') terminal = true
         const swapAdvice = notices.consumeSwap(id, snapshot)
         if (swapAdvice) showStartupSwapNotification(notification, instance.name, swapAdvice)
         const notice = notices.consume(id, snapshot)
-        if (notice === 'success') faToast.success('实例已启动，全部世界已就绪')
-        if (notice === 'failed') faToast.error('启动失败', { description: snapshot.diagnosis?.message ?? '请查看控制台日志和服务器配置' })
+        if (notice === 'success') faToast.success(snapshot.target === 'caves' ? '洞穴已启动并连接主世界' : startupPhaseLabel(snapshot))
+        if (notice === 'failed' && options.notifyFailure !== false) faToast.error(snapshot.master.state === 'ready' ? '洞穴启动失败，主世界继续运行' : '主世界启动失败', { description: snapshot.diagnosis?.message ?? '请查看控制台日志和服务器配置' })
         if ((snapshot.status === 'success' || snapshot.status === 'failed' || snapshot.status === 'cancelled') && previous?.status !== snapshot.status) terminal = true
       }
       if (terminal) onTerminal?.()

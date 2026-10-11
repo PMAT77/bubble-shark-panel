@@ -183,9 +183,14 @@ it('the first watch sample protects an OOM-exited cave while the master is alive
   t.mock.method(f.runtime, 'resourceSnapshot', async (ref: ContainerRef) => ({ ...emptyResourceSnapshot(), runtimeIdentity: 'old-round',
     oomKilled: ref.name.endsWith('-caves'), oomKillCount: 8 }))
   await inspectMemoryProtection(f.app)
-  assert.equal((await getGameInstanceById(f.instance.id))?.runtimeFailureKind, 'memory_protection')
-  assert.equal((await getGameInstanceById(f.instance.id))?.lastStartupReport?.status, 'failed')
-  assert.equal(f.refs.size, 0)
+  const saved = await getGameInstanceById(f.instance.id)
+  assert.equal(saved?.runtimeFailureKind, 'memory')
+  assert.equal(saved?.status, 'running')
+  assert.equal(saved?.lastStartupReport?.status, 'failed')
+  assert.equal(saved?.lastStartupReport?.caves.protectionStop?.code, 'oom')
+  assert.equal(saved?.lastStartupReport?.caves.protectionStop?.cleanupCompleted, true)
+  assert.equal(saved?.containerId, f.instance.containerId)
+  assert.equal(f.refs.size, 1)
 })
 
 it('the exit watch preserves OOM protection instead of marking only the master stopped', async t => {

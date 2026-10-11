@@ -8,6 +8,9 @@ const PHASE_LABELS: Record<InstanceStartupSnapshot['phase'], string> = {
 
 export function startupPhaseLabel(snapshot: InstanceStartupSnapshot) {
   if (snapshot.protectionStop) return '内存保护停止'
+  if (snapshot.master.state === 'ready' && snapshot.caves.state === 'failed') return snapshot.caves.protectionStop ? '主世界运行中 · 洞穴保护停止' : '主世界运行中 · 洞穴启动失败'
+  if (snapshot.phase === 'ready' && (snapshot.target === 'master' || snapshot.caves.state === 'stopped')) return '主世界已就绪'
+  if (snapshot.phase === 'ready' && snapshot.caves.state === 'disabled') return '主世界已就绪'
   return PHASE_LABELS[snapshot.phase]
 }
 
@@ -16,7 +19,7 @@ export function isStartupActive(snapshot: InstanceStartupSnapshot | null | undef
 }
 
 export function isInstanceWorldReady(instance: Pick<InstanceItem, 'status' | 'runtimeReadyAt'> & { startup?: InstanceStartupSnapshot | null }) {
-  return instance.status === 'running' && !instance.startup?.protectionStop && (instance.startup ? instance.startup.status === 'success' : Boolean(instance.runtimeReadyAt))
+  return instance.status === 'running' && !instance.startup?.protectionStop && (instance.startup ? instance.startup.master.state === 'ready' : Boolean(instance.runtimeReadyAt))
 }
 
 export function shouldPollStartup(instance: Pick<InstanceItem, 'status' | 'runtimeReadyAt'> & { startup?: InstanceStartupSnapshot | null }) {

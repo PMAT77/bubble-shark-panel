@@ -177,17 +177,14 @@ onMounted(() => {
       <h1 class="text-lg font-semibold">
         世界列表
       </h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        查看地上与洞穴世界的运行状态；洞穴开启后可在此调整端口、地图与世界规则。
-      </p>
     </div>
 
     <AdminListToolbar
       v-model:keyword="keywordFilter"
       keyword-placeholder="实例名称"
+      :show-search="false"
       :search-loading="loading"
       :reset-disabled="!keywordFilter"
-      @search="() => {}"
       @reset="resetFilters"
     >
       <template #actions>

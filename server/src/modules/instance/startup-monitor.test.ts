@@ -127,8 +127,13 @@ for (const shardId of ['actual-caves', null]) {
     assert.equal(f.task.snapshot.diagnosis?.code, 'shard_connect_timeout')
     assert.equal(connectionQueries > 0, shardId !== null)
     assert.equal(f.cleanup.mock.callCount(), 1)
-    assert.equal((await getGameInstanceById(f.instance.id))?.status, 'error')
-    assert.deepEqual(f.cleanup.mock.calls[0]?.arguments[0], [f.cavesRef, f.masterRef])
+    const row = await getGameInstanceById(f.instance.id)
+    assert.equal(row?.status, 'running')
+    assert.equal(row?.containerId, f.masterRef.id)
+    assert.ok(row?.runtimeReadyAt)
+    assert.deepEqual(f.cleanup.mock.calls[0]?.arguments[0], [f.cavesRef])
+    assert.equal(row?.lastStartupReport?.caves.cleanupCompleted, true)
+    assert.equal(row?.lastStartupReport?.master.lastProbe?.remoteConnected, shardId ? false : null)
   })
 }
 
@@ -142,6 +147,29 @@ it('probeFailed 保持未知，探测恢复后可正常就绪', async (t) => {
   assert.equal(f.cleanup.mock.callCount(), 0)
   assert.equal(f.task.snapshot.status, 'success')
 })
+
+for (const failure of ['lua', 'exit', 'cleanup'] as const) {
+  it(`洞穴 ${failure} 失败只清理洞穴，并保留主世界就绪时间和引用`, async t => {
+    const f = await fixture(t, `caves-${failure}`)
+    let caveStarted = false
+    if (failure === 'exit') t.mock.method(f.runtime, 'inspect', async (ref: ContainerRef) => ({ ...ref, running: ref.id !== f.cavesRef.id, restarts: 7 }))
+    await f.run({
+      waitSec: .1,
+      startCaves: async () => { caveStarted = true; return { ok: true, ref: f.cavesRef, baselineRestarts: 7 } },
+      luaFailure: shard => failure === 'lua' && caveStarted && shard === 'caves' ? 'LUA ERROR stack traceback: private-cave-path' : null,
+      probe: async (_ref, shard) => ({ worldReady: shard === 'master', shardId: shard === 'master' ? '1' : '2', remoteConnected: null }),
+      cleanup: async refs => { assert.deepEqual(refs, [f.cavesRef]); if (failure === 'cleanup') throw new Error('fixture cleanup failed') },
+    })
+    const row = (await getGameInstanceById(f.instance.id))!
+    assert.equal(row.status, 'running')
+    assert.equal(row.containerId, f.masterRef.id)
+    assert.ok(row.runtimeReadyAt)
+    assert.equal(row.lastStartupReport?.master.state, 'ready')
+    assert.equal(row.lastStartupReport?.caves.state, 'failed')
+    assert.equal(row.lastStartupReport?.caves.cleanupCompleted, failure !== 'cleanup')
+    assert.equal(JSON.stringify(row.lastStartupReport).includes('private-cave-path'), false)
+  })
+}
 
 it('恢复的世界静默超过 120 秒仍可成功，重复 IPC 警告不当作进展', async (t) => {
   const f = await fixture(t, 'silent-ready')

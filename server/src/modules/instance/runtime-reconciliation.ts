@@ -5,14 +5,29 @@ import { listGameInstances, updateGameInstanceRuntime, getInstanceRuntimeRevisio
 import { describeSystemdExitReason, readHostMemorySnapshot, readRuntimeMemoryCapMb } from '../../infra/container/exit-reason'
 import { getContainerRuntime } from '../../infra/container'
 import { resolveInstanceResourceSettings } from '../../infra/container/dst-container-resources'
-import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveInstanceContainerRef, stopInstanceContainer, recoverInstanceStartup, protectExitedShardOom } from './container-lifecycle'
+import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveInstanceContainerRef, resolveCavesContainerRef, stopInstanceContainer, stopFailedCaves, recoverInstanceStartup, protectExitedShardOom, runtimeMemoryEpoch } from './container-lifecycle'
 import { currentStartupTask, getStartupSnapshot, isCurrentStartupTask, startupIsActive } from './startup-state'
 import { reconcileStaleInstallingInstances } from './install-service'
 import { buildRestartLoopWarning, shouldClearRuntimeWarning } from './runtime-warning'
 import { resolveRuntimeReadiness, type InstanceRuntimeReadiness } from './runtime-readiness'
 import { buildRuntimeFailureWarning, classifyRuntimeFailure } from './runtime-failure'
 import { createReconciliationCache } from './reconciliation-cache'
+import { emitPanelEvent } from '../notify/events'
 const LOCAL_NODE_ID = 'local-node'
+
+/** 与后台退出监控共用；未知返回 null，洞穴失败已处理返回 true。 */
+export async function reconcileCavesRuntime(app: FastifyInstance, instance: DbGameInstance): Promise<boolean | null> {
+  const cave = instance.lastStartupReport?.caves
+  if (cave?.state !== 'ready' || cave.protectionStop) return false
+  const probe = await inspectInstanceShardRuntime(instance.id, 'caves')
+  if (probe.unitExists && !probe.snapshot) return null
+  const ref = await resolveCavesContainerRef(instance.id)
+  if (ref && await protectExitedShardOom(app, instance, ref, probe.snapshot ?? undefined)) return true
+  const lua = findShardLuaFailure(instance.id, instance.installPath ?? undefined, cave.startedAt ?? instance.runtimeStartedAt, 'caves')
+  if (!lua && probe.snapshot?.running && !probe.snapshot.restarting) return false
+  await stopFailedCaves(app, instance, lua ? 'lua_error' : 'shard_exited', lua ? '洞穴发生 Lua 致命错误，请查看控制台' : '洞穴分片异常退出，请手动启动洞穴')
+  return true
+}
 /** 运行期告警要落库的实例字段：文案 + 归因（归因供前端决定是否给出扩容引导） */
 type RuntimeWarningTarget = Pick<DbGameInstance, 'id' | 'runtimeWarning' | 'runtimeFailureKind' | 'resourceConfig' | 'lastStartupReport'>
 
@@ -116,15 +131,6 @@ async function reportRuntimeIssue(
   await warnInstanceRestartLoop(app, instance, snapshot)
 }
 
-/** 主世界已停、洞穴还在跑：只写运行期警告，不占用 lastError（它留给真正的启动失败） */
-async function warnCavesLeftRunning(
-  app: FastifyInstance,
-  instance: RuntimeWarningTarget,
-): Promise<void> {
-  const message = '主世界分片已停止，但洞穴分片仍在运行。请在实例控制里重新启动或停止实例，避免洞穴单独占着内存。'
-  await applyRuntimeWarning(app, instance, message, null)
-}
-
 /**
  * 服务重启后 DB 可能仍保留 running；与运行时实际状态对齐。
  *
@@ -159,10 +165,10 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
       health.complete = false
       continue
     }
-    const luaFailure = findShardLuaFailure(instance.id, instance.installPath ?? undefined, instance.runtimeStartedAt)
+    const luaFailure = findShardLuaFailure(instance.id, instance.installPath ?? undefined, instance.runtimeStartedAt, 'master')
     if (luaFailure) {
       const message = instance.runtimeReadyAt ? luaFailure : `启动失败：${luaFailure}`
-      await stopInstanceContainer(instance.id)
+      if (!await stopInstanceContainer(instance.id, runtimeMemoryEpoch(instance))) continue
       await updateGameInstanceRuntime(instance.id, {
         status: 'error',
         lastError: message,
@@ -176,6 +182,10 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
       continue
     }
     if (snapshot?.running) {
+      const caveReport = instance.lastStartupReport?.caves
+      const caveResult = await reconcileCavesRuntime(app, instance)
+      if (caveResult === null) health.complete = false
+      if (caveResult) { reconciled++; continue }
       if (!instance.runtimeStartedAt) {
         await updateGameInstanceRuntime(instance.id, {
           runtimeStartedAt: new Date().toISOString(),
@@ -195,7 +205,10 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
         notReadyAfterSec: resolveRunningResourceSettings(instance).shardReadyWaitSec,
       })
       // 崩溃循环后自己站稳、且已连续干净运行足够久的实例：旧警告自己消失，也不再写新的
-      if (shouldClearRuntimeWarning(snapshot.uptimeSeconds)) {
+      if (caveReport?.state === 'failed') {
+        // 健康主世界的运行时长不能解除洞穴的失败提示或保护锁。
+      }
+      else if (shouldClearRuntimeWarning(snapshot.uptimeSeconds)) {
         await applyRuntimeWarning(app, instance, null, null)
       }
       else {
@@ -204,21 +217,25 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
       await ensureInstanceContainerLogFollow(instance.id)
       continue
     }
-    // master 不在运行：确认洞穴分片是否还在跑。两个分片生命周期本应一致，
-    // 只剩洞穴在跑时既白占内存，又让服主以为「已经停了」，必须如实说出来。
+    // 主世界是洞穴的依赖；确认退出后同时结束失去依赖的洞穴。
     const cavesProbe = await inspectInstanceShardRuntime(instance.id, 'caves')
     if (cavesProbe.unitExists && !cavesProbe.snapshot) health.complete = false
     const cavesStillRunning = cavesProbe.snapshot?.running === true
+    if (!await stopInstanceContainer(instance.id, runtimeMemoryEpoch(instance))) continue
     await updateGameInstanceRuntime(instance.id, {
       status: 'stopped',
       containerId: null,
       runtimePid: null,
       runtimeStartedAt: null,
+      runtimeReadyAt: null,
     })
     reconciled++
     if (cavesStillRunning) {
-      await warnCavesLeftRunning(app, instance)
+      await applyRuntimeWarning(app, instance, '主世界异常退出，已停止失去主世界依赖的洞穴；请手动启动', null)
     }
+    emitPanelEvent({ type: 'instance_exited_unexpectedly', subjectId: instance.id, subjectName: instance.name, severity: 'critical',
+      at: new Date().toISOString(), occurrenceKey: `master:${instance.runtimeStartedAt ?? instance.containerId ?? instance.id}`,
+      message: `实例「${instance.name}」主世界异常退出${cavesStillRunning ? '，已停止失去依赖的洞穴' : ''}；请手动启动` })
     app.log.info({ instanceId: instance.id }, '实例运行时不存在，已同步状态为已停止')
   }
   return reconciled
@@ -255,7 +272,7 @@ async function reconcileStoppedButContainerRunning(app: FastifyInstance, health:
       continue
     }
     // Lua 崩溃后进程可能仍存活，不能把上一轮的失败结论抹成「运行中」。
-    if (findShardLuaFailure(instance.id, instance.installPath ?? undefined, instance.runtimeStartedAt)) {
+    if (findShardLuaFailure(instance.id, instance.installPath ?? undefined, instance.runtimeStartedAt, 'master')) {
       continue
     }
     if (!isHealthyRuntimeForResurrect(snapshot)) {

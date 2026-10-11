@@ -21,8 +21,20 @@ function makeInstance(overrides: Partial<InstanceItem> = {}): InstanceItem {
  * 语气（tone）交给后端的 `runtimeFailureKind`，前端不复刻阈值判断卡没卡住。
  */
 describe('resolveRuntimeReadinessView', () => {
+  it('新任务加载期间优先显示启动中，不沿用上一轮错误或内存保护状态', () => {
+    for (const status of ['queued', 'running'] as const) {
+      const startup = { status, phase: 'master_loading', elapsedSeconds: 18, remainingSeconds: 282, diagnosis: null,
+        master: { state: 'loading', memoryPeakMb: null }, caves: { state: 'pending', memoryPeakMb: null } } as InstanceStartupSnapshot
+      const instance = makeInstance({ status: 'error', runtimeFailureKind: 'memory_protection', lastErrorPhase: 'runtime', lastError: '主世界启动失败：等待主世界就绪超时（300 秒）', startup })
+      assert.equal(getInstanceState(instance).label, '启动中')
+      assert.deepEqual(resolveRuntimeReadinessView(instance, NOW), { label: '主世界加载中（已等待 18 秒，本阶段剩余 282 秒）', tone: 'ok' })
+      const failed = { ...instance, runtimeFailureKind: null, startup: { ...startup, status: 'failed' as const, phase: 'failed' as const, diagnosis: { code: 'timeout', message: '本轮超时' } }, lastError: '启动失败：本轮超时' }
+      assert.equal(getInstanceState(failed).label, '启动失败')
+    }
+  })
   it('主世界已就绪但洞穴还在加载时保留启动中状态', () => {
-    const startup = { status: 'running', phase: 'caves_loading', elapsedSeconds: 150, remainingSeconds: 250, diagnosis: null } as InstanceStartupSnapshot
+    const startup = { status: 'running', phase: 'caves_loading', elapsedSeconds: 150, remainingSeconds: 250, diagnosis: null,
+      master: { state: 'ready', memoryPeakMb: null }, caves: { state: 'loading', memoryPeakMb: null } } as InstanceStartupSnapshot
     const instance = makeInstance({ runtimeReadyAt: '2026-10-02T11:58:00.000Z', startup })
     assert.equal(getInstanceState(instance).label, '启动中')
     assert.equal(resolveRuntimeReadinessView(instance, NOW)?.label, '洞穴加载中（已等待 150 秒，本阶段剩余 250 秒）')

@@ -18,6 +18,7 @@ import { registerInstanceModule } from './index'
 import { bumpCavesStartGeneration, ensureInstanceContainerLogFollow, stopInstanceContainer } from './container-lifecycle'
 import { createStartupTask, currentStartupTask, persistStartupTask, releaseStartupTask } from './startup-state'
 import { resolvePluginInstanceOps } from './instance-plugin-ops'
+import { restartInstanceBySchedule } from './scheduled-entry'
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-startup-routes-'))
 const databasePath = path.join(dir, 'test.sqlite')
@@ -94,6 +95,17 @@ it('startup exposes only contract metadata and excludes raw console logs', async
   assert.equal(body.data.master.memoryPeakMb, 2300)
   assert.equal(response.body.includes(rawLog), false)
   assert.equal('logs' in body.data, false)
+})
+
+it('shard start requires lifecycle permission and the instance grant, and validates the target', async () => {
+  await setPermissions(['world:read'])
+  const denied = await app.inject({ method: 'POST', url: '/app/instance/shards/start', headers: { token }, payload: { instanceId: id, shard: 'master' } })
+  assert.equal(JSON.parse(denied.body).code, ErrorCode.FORBIDDEN)
+  await setPermissions(['instance:lifecycle'])
+  const hidden = await app.inject({ method: 'POST', url: '/app/instance/shards/start', headers: { token }, payload: { instanceId: hiddenId, shard: 'caves' } })
+  assert.equal(JSON.parse(hidden.body).code, ErrorCode.FORBIDDEN)
+  const invalid = await app.inject({ method: 'POST', url: '/app/instance/shards/start', headers: { token }, payload: { instanceId: id, shard: 'both' } })
+  assert.ok(JSON.parse(invalid.body).error)
 })
 
 it('instance list includes safe startup metadata only for granted instances', async (t) => {
@@ -196,4 +208,21 @@ it('an old stop does not remove the cave or overwrite a newer startup generation
   assert.equal(row?.containerId, 'new-master')
   assert.equal(row?.lastStartupReport?.status, 'queued')
   assert.equal(row?.lastError, null)
+})
+
+it('洞穴保护锁在停止主世界之前拒绝计划任务和插件重启', async t => {
+  const row = (await getGameInstanceById(id))!
+  const report = structuredClone(row.lastStartupReport!)
+  report.status = 'success'; report.phase = 'ready'; report.master.state = 'ready'; report.caves.state = 'failed'
+  report.caves.protectionStop = { at: new Date().toISOString(), code: 'oom', message: '洞穴 OOM', master: null, caves: null, host: null, cleanupCompleted: true }
+  await updateGameInstanceRuntime(id, { status: 'running', containerId: 'healthy-master', lastStartupReport: report })
+  t.after(() => updateGameInstanceRuntime(id, { status: row.status, containerId: row.containerId, lastStartupReport: row.lastStartupReport }))
+  const stop = t.mock.method(getContainerRuntime(), 'stop', async () => {})
+  for (const invoke of [() => restartInstanceBySchedule(app, id), () => resolvePluginInstanceOps()!.restart(app, id)]) {
+    const result = await invoke()
+    assert.equal(result.ok, false)
+    assert.match(result.message ?? '', /保护/)
+  }
+  assert.equal(stop.mock.callCount(), 0)
+  assert.equal((await getGameInstanceById(id))?.containerId, 'healthy-master')
 })

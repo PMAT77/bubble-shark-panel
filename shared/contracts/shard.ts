@@ -54,6 +54,8 @@ export const shardInstanceQuerySchema = z.object({
   instanceId: instanceIdSchema,
 })
 
+export const shardStartPayloadSchema = shardInstanceQuerySchema.extend({ shard: shardIdSchema })
+
 export const shardSummarySchema = z.object({
   id: shardIdSchema,
   displayName: z.string(),

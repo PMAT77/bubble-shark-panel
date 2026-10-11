@@ -33,6 +33,7 @@ export type {
 export { shardSavePayloadSchema } from '../../../shared/contracts/shard'
 
 export default {
+  startShard: (instanceId: string, shard: ShardId) => api.post('app/instance/shards/start', { instanceId, shard }) as Promise<{ data: { isSuccess: boolean, taskId: string } }>,
   getShardList: (instanceId: string) => api.get('app/instance/shards', {
     params: { instanceId },
   }) as Promise<{ data: ShardListDto }>,

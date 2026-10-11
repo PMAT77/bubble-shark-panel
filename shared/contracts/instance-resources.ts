@@ -65,7 +65,13 @@ export const memoryProtectionStopSchema = z.object({
 export type MemoryProtectionStop = z.infer<typeof memoryProtectionStopSchema>
 
 export const instanceStartupShardSchema = z.object({
-  state: z.enum(['pending', 'loading', 'ready', 'failed', 'disabled']),
+  state: z.enum(['pending', 'loading', 'ready', 'failed', 'disabled', 'stopped']),
+  startedAt: z.string().optional(),
+  readyAt: z.string().nullable().optional(),
+  diagnosis: z.object({ code: z.string(), message: z.string() }).nullable().optional(),
+  cleanupCompleted: z.boolean().optional(),
+  protectionStop: memoryProtectionStopSchema.optional(),
+  lastProbe: z.object({ at: z.string(), worldReady: z.boolean(), shardId: z.string().nullable(), remoteConnected: z.boolean().nullable() }).optional(),
   memoryPeakMb: nullableNumber,
   memoryAndSwapPeakMb: nullableNumber.optional(),
   peakLimited: z.boolean().optional(),
@@ -76,6 +82,7 @@ export const instanceStartupShardSchema = z.object({
 })
 export const instanceStartupSnapshotSchema = z.object({
   taskId: z.string(),
+  target: z.enum(['all', 'master', 'caves']).optional(),
   status: z.enum(['queued', 'running', 'success', 'failed', 'cancelled']),
   phase: z.enum(['queued', 'prepare', 'master_loading', 'caves_loading', 'connecting', 'ready', 'failed', 'cancelled']),
   startedAt: z.string(),

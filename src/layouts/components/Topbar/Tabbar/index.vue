@@ -24,7 +24,6 @@ const { generateTitle } = useAppMenu()
 const activedTabId = computed(() => tabbar.getId())
 
 const tabsRef = useTemplateRef('tabsRef')
-const tabContainerRef = useTemplateRef('tabContainerRef')
 const tabRef = useTemplateRef<HTMLElement[]>('tabRef')
 
 const isAnimating = ref(false)
@@ -60,7 +59,6 @@ watch(() => route, (val) => {
           // 首次加载时直接定位到指定位置
           tabsRef.value?.scrollTo(scrollLeft, !isInit.value ? 'smooth' : undefined)
         }
-        tabbarScrollTip()
       }
     })
   }
@@ -69,20 +67,6 @@ watch(() => route, (val) => {
   deep: true,
 })
 
-function tabbarScrollTip() {
-  if (tabContainerRef.value?.$el.clientWidth > (tabsRef.value?.ref?.$el.clientWidth ?? 0) && !localStorage.has('tabbarScrollTip')) {
-    localStorage.setItem('tabbarScrollTip', '')
-    const tips = faToast.info('温馨提示', {
-      description: '标签栏数量超过展示区域范围，可以将鼠标移到标签栏上，通过鼠标滚轮滑动浏览',
-      position: 'top-center',
-      duration: Infinity,
-      action: {
-        label: '知道了',
-        onClick: () => faToast.dismiss(tips),
-      },
-    })
-  }
-}
 function contextMenuItems(routeItem: TabbarRecordRaw) {
   return [
     [
@@ -197,7 +181,7 @@ watch(() => keys.alt, (val) => {
       <FaScrollArea
         ref="tabsRef" :scrollbar="false" mask horizontal class="tabs overscroll-contain"
       >
-        <TransitionGroup ref="tabContainerRef" :name="!isInit ? 'tabbar' : undefined" tag="div" class="tab-container" @before-leave="onBeforeLeave" @after-leave="isAnimating = false">
+        <TransitionGroup :name="!isInit ? 'tabbar' : undefined" tag="div" class="tab-container" @before-leave="onBeforeLeave" @after-leave="isAnimating = false">
           <div
             v-for="(element, index) in appTabbarStore.list" :key="element.tabId"
             ref="tabRef" :data-index="index" class="tab" :class="{
@@ -224,9 +208,6 @@ watch(() => keys.alt, (val) => {
                   <template #content>
                     <div class="text-sm">
                       {{ generateTitle(element.title) }}
-                    </div>
-                    <div class="text-accent/50">
-                      {{ element.fullPath }}
                     </div>
                   </template>
                 </FaTooltip>

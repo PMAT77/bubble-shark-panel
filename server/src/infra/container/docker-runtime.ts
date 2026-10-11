@@ -103,7 +103,7 @@ export class DockerContainerRuntime implements ContainerRuntime {
       HostConfig: {
         Binds: binds,
         PortBindings: mapPortBindings(spec.ports),
-        RestartPolicy: { Name: 'on-failure', MaximumRetryCount: 5 },
+        RestartPolicy: { Name: 'no' },
         ...(spec.memoryParent ? { CgroupParent: spec.memoryParent } : {}),
         ...(spec.networkName ? { NetworkMode: spec.networkName } : {}),
         ...(resourceLimits?.memory ? { Memory: resourceLimits.memory, MemorySwap: -1 } : {}),

@@ -436,11 +436,11 @@ const columns = computed<DataTableColumns<ScheduleTaskItem>>(() => {
 <template>
   <FaPageMain class="gap-4" main-class="flex flex-col gap-4">
     <div>
-      <h2 class="m-0 text-lg font-semibold">
+      <h1 class="m-0 text-lg font-semibold">
         计划任务
-      </h2>
+      </h1>
       <p class="mt-1 text-sm text-muted-foreground">
-        单机定时任务；错过的执行不会补跑。
+        错过的任务不会补跑。
       </p>
     </div>
 

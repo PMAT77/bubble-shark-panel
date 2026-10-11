@@ -9,7 +9,7 @@ import { resolveShardSaveDir } from './shard-layout'
 const dirs: string[] = []
 const session = '49156F29BABC4C94'
 const caveSession = '66BD68AFE6767E46'
-function fixture(caves = false) {
+function fixture(caves = false, header = '') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-world-snapshots-'))
   dirs.push(dir)
   const { clusterRoot, clusterIniPath } = resolveClusterPaths(dir)
@@ -18,7 +18,7 @@ function fixture(caves = false) {
   for (const shard of ['master', ...(caves ? ['caves'] : [])] as const) {
     const save = resolveShardSaveDir(dir, shard as 'master' | 'caves')
     fs.mkdirSync(save, { recursive: true })
-    fs.writeFileSync(path.join(save, 'shardindex'), `return {session_id="${shard === 'master' ? session : caveSession}", world={}}\0`)
+    fs.writeFileSync(path.join(save, 'shardindex'), `${header}return {enabled_mods={}, session_id="${shard === 'master' ? session : caveSession}", world={}}\0`)
   }
   return dir
 }
@@ -43,6 +43,37 @@ it('一个会话包含多个编号快照，按编号排序而不是目录时间'
   assert.deepEqual(rows.map(r => [r.snapshotId, r.worldDay, r.rollbackSteps]), [[8, 5, 1], [7, 5, 2], [6, 4, 3]])
   assert.equal(rows[0]!.sessionId, session)
   assert.equal(rows[0]!.savedAt, '2026-10-10T01:00:00.000Z')
+})
+it('识别 KLEI 明文存档文件头，读取两个分片会话及完整快照', () => {
+  const dir = fixture(true, 'KLEI     1 ')
+  snapshot(dir, 8, 4); snapshot(dir, 9, 5)
+  snapshot(dir, 9, 5, 'caves')
+  assert.equal(readShardSessionId(dir, 'master'), session)
+  assert.equal(readShardSessionId(dir, 'caves'), caveSession)
+  const rows = listShardSnapshots(dir, 'master')
+  assert.deepEqual(rows.map(r => [r.snapshotId, r.worldDay, r.cavesAvailable, r.rollbackSteps]), [[9, 6, true, 1], [8, 5, false, null]])
+  assert.equal(rows[0]!.cavesSessionId, caveSession)
+  assert.deepEqual(listShardSnapshots(dir, 'caves').map(r => [r.sessionId, r.snapshotId, r.worldDay]), [[caveSession, 9, 6]])
+})
+it('带文件头的损坏、缺失或超限会话及未知格式不能产生存档点', () => {
+  const dir = fixture()
+  snapshot(dir, 9, 5)
+  const file = path.join(resolveShardSaveDir(dir, 'master'), 'shardindex')
+  for (const source of [
+    'KLEI     1 return {world={}}',
+    'KLEI     1 return {session_id="invalid"}',
+    `KLEI     1 return {session_id="${session}", world=???}`,
+    `KLEI     2 return {session_id="${session}"}`,
+    `KLEI 1 return {session_id="${session}"}`,
+    `KLEI     1 return {session_id="${session}"}${' '.repeat(1024 * 1024)}`,
+  ]) {
+    fs.writeFileSync(file, source)
+    assert.equal(readShardSessionId(dir, 'master'), null)
+    assert.deepEqual(listShardSnapshots(dir, 'master'), [])
+  }
+  fs.rmSync(file)
+  assert.equal(readShardSessionId(dir, 'master'), null)
+  assert.deepEqual(listShardSnapshots(dir, 'master'), [])
 })
 it('排除旧会话、玩家子目录、编号目录、无世界文件和缺失元数据', () => {
   const dir = fixture()

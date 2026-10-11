@@ -13,7 +13,9 @@ export type DstShardSnapshot = ShardSnapshotDto
 function readTable(file: string) {
   try {
     if (!fs.lstatSync(file).isFile() || fs.statSync(file).size > MAX_LUA_PARSE_LENGTH) return null
-    return parseLuaTableLiteral(fs.readFileSync(file, 'utf8').replace(/^\s*return\s*/, '').replace(/\0+$/, ''))
+    // DST 的明文持久化文件带 KLEI 版本头；未知格式仍交由静态解析拒绝。
+    const source = fs.readFileSync(file, 'utf8').replace(/^KLEI     1 /, '')
+    return parseLuaTableLiteral(source.replace(/^\s*return\s*/, '').replace(/\0+$/, ''))
   }
   catch { return null }
 }

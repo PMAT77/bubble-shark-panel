@@ -16,11 +16,17 @@ it('world maintenance submits over HTTP and recovers from local and request fail
   t.mock.getter(globalThis, 'crypto', () => browserCrypto)
   const requests: WorldMaintenancePayload[] = []
   const notices: unknown[][] = []
-  let current: WorldMaintenanceOperation | null = null
+  const notifications: { type: string, title?: string, content?: string, duration?: number, destroyed: boolean }[] = []
+  let current: WorldMaintenanceOperation | null = { id: 'historical', state: 'completed', phase: 'finished' } as WorldMaintenanceOperation
   let requestFailure = false
   let nextState: WorldMaintenanceOperation['state'] = 'completed'
   fixture.__bspMaintenanceFixture = {
     toast: { error: (...args: unknown[]) => notices.push(args) },
+    notification: Object.fromEntries(['success', 'error', 'warning', 'info'].map(type => [type, (options: object) => {
+      const notice = { ...options, type, destroyed: false }
+      notifications.push(notice)
+      return { ...notice, destroy: () => { notice.destroyed = true } }
+    }])),
     api: {
       status: async () => ({ data: current }),
       begin: async (payload: WorldMaintenancePayload) => {
@@ -46,7 +52,10 @@ it('world maintenance submits over HTTP and recovers from local and request fail
       banner: { js: 'const faToast = globalThis.__bspMaintenanceFixture.toast;' },
       plugins: [{ name: 'maintenance-fixture', setup(builder) {
         builder.onResolve({ filter: /^@\/api\/modules\/world-maintenance$/ }, () => ({ path: 'fixture', namespace: 'fixture' }))
-        builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export default globalThis.__bspMaintenanceFixture.api', loader: 'js' }))
+        builder.onResolve({ filter: /^naive-ui$/ }, () => ({ path: 'notification', namespace: 'fixture' }))
+        builder.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ contents: args.path === 'notification'
+          ? 'export const useNotification = () => globalThis.__bspMaintenanceFixture.notification'
+          : 'export default globalThis.__bspMaintenanceFixture.api', loader: 'js' }))
       } }],
     })
     const { useWorldMaintenance } = await import(pathToFileURL(hookFile).href) as typeof import('./useWorldMaintenance.ts')
@@ -64,6 +73,7 @@ it('world maintenance submits over HTTP and recovers from local and request fail
     app.mount({})
     unmount = () => app.unmount()
     await Promise.resolve()
+    assert.equal(notifications.length, 0, '历史完成记录不重新弹出通知')
 
     await t.test('reset submits once and preserves the backup confirmation state', async () => {
       nextState = 'awaiting_confirmation'
@@ -75,10 +85,14 @@ it('world maintenance submits over HTTP and recovers from local and request fail
       assert.equal(hook.operation.value?.state, 'awaiting_confirmation')
       assert.equal(hook.busy.value, true)
       assert.equal(hook.submitting.value, false)
+      assert.equal(notifications.at(-1)?.type, 'warning')
+      assert.equal(notifications.at(-1)?.duration, 0)
       await hook.continueWithoutBackup(false)
       assert.equal(hook.operation.value?.state, 'cancelled')
       assert.equal(hook.busy.value, false)
       assert.equal(notices.length, 0)
+      assert.equal(notifications.at(-1)?.type, 'info')
+      assert.equal(notifications.at(-2)?.destroyed, true)
     })
 
     await t.test('save, rollback and shard regeneration use the same HTTP fallback', async () => {
@@ -114,6 +128,41 @@ it('world maintenance submits over HTTP and recovers from local and request fail
       assert.equal(hook.submitting.value, false)
       assert.equal(hook.busy.value, false)
       assert.equal(hook.activeKey.value, null)
+    })
+    await t.test('polling updates one progress notification and reports the final result once', async () => {
+      const before = notifications.length
+      current = { id: 'polling', state: 'running', phase: 'saving', message: null } as WorldMaintenanceOperation
+      await hook.refresh()
+      assert.equal(notifications.length, before + 1)
+      assert.equal(notifications.at(-1)?.type, 'info')
+      assert.equal(notifications.at(-1)?.title, '保存存档')
+      assert.equal(notifications.at(-1)?.duration, 0)
+      current = { ...current, updatedAt: 'later' }
+      await hook.refresh()
+      assert.equal(notifications.length, before + 1)
+      current = { ...current, phase: 'backing_up' }
+      await hook.refresh()
+      assert.equal(notifications.at(-2)?.destroyed, true)
+      assert.equal(notifications.at(-1)?.title, '创建安全备份')
+      current = { ...current, state: 'completed', phase: 'finished', message: '整个房间的存档已保存' }
+      await hook.refresh()
+      assert.equal(notifications.at(-1)?.type, 'success')
+      assert.equal(notifications.at(-1)?.content, '整个房间的存档已保存')
+      assert.equal(notifications.at(-1)?.duration, 8000)
+      const finishedCount = notifications.length
+      current = { ...current }
+      await hook.refresh()
+      assert.equal(notifications.length, finishedCount)
+      assert.equal(notifications.filter(notice => !notice.destroyed).length, 1)
+    })
+    await t.test('failures retain the cause and backup warning in the notification', async () => {
+      current = { ...current, state: 'failed', message: '保存超时', backupWarning: '备份未完成', backupSkipped: true } as WorldMaintenanceOperation
+      await hook.refresh()
+      assert.equal(notifications.at(-1)?.type, 'error')
+      assert.equal(notifications.at(-1)?.content, '保存超时\n备份未完成\n本次操作未创建安全备份。')
+      app.unmount()
+      unmount = undefined
+      assert.equal(notifications.at(-1)?.destroyed, true)
     })
   }
   finally {

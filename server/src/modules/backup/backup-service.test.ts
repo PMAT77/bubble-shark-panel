@@ -8,13 +8,16 @@ import { fileURLToPath } from 'node:url'
 import {
   closeDatabase,
   createGameInstance,
+  createBackupRecord,
+  findUserByAccount,
   getBackupById,
   getSystemBackupSettings,
   initDatabase,
+  listBackups,
   saveSystemBackupSettings,
   updateGameInstanceRuntime,
 } from '../../shared/db/index'
-import type { DbGameInstance } from '../../shared/db/index'
+import type { DbBackup, DbGameInstance } from '../../shared/db/index'
 import { withInstanceArchiveOperationLock } from './archive-lock'
 import { createInstanceBackup, restoreInstanceBackup } from './backup-service'
 
@@ -59,6 +62,23 @@ after(() => {
 })
 
 describe('backup service', () => {
+  it('resolves legacy creator IDs without changing stored records or other creator labels', async () => {
+    const legacyInstance = await createGameInstance({ nodeId: 'local-node', name: '历史备份创建者测试', gameCode: 'dst' })
+    const creator = await findUserByAccount('superadmin')
+    assert.ok(creator)
+    const missingUserId = randomUUID()
+    const creators = [creator.id, creator.id, 'superadmin', 'scheduler', '', missingUserId]
+    const records: DbBackup[] = []
+    for (const [index, createdBy] of creators.entries()) {
+      records.push(await createBackupRecord({ id: randomUUID(), instanceId: legacyInstance.id,
+        kind: index === 1 ? 'pre_rollback' : 'pre_reset', filePath: path.join(workDir, `creator-${index}.tar.gz`), sizeBytes: 1, createdBy }))
+    }
+    const listed = await listBackups(legacyInstance.id)
+    assert.deepEqual(records.map(record => listed.find(item => item.id === record.id)?.createdBy),
+      ['superadmin', 'superadmin', 'superadmin', 'scheduler', '', missingUserId])
+    assert.equal((await listBackups()).find(item => item.id === records[0].id)?.createdBy, 'superadmin')
+    assert.equal((await getBackupById(records[0].id))?.createdBy, creator.id)
+  })
   it('creates a backup record and archive file for a stopped instance', async () => {
     const result = await createInstanceBackup({
       instanceId: instance.id,

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { and, asc, desc, eq } from 'drizzle-orm'
-import { backups, systemSettings } from './schema/index'
+import { backups, systemSettings, users } from './schema/index'
 import { ensureDb, nowIso } from './connection'
 import type {
   CreateBackupInput,
@@ -74,11 +74,13 @@ export async function getBackupById(id: string): Promise<DbBackup | undefined> {
 
 export async function listBackups(instanceId?: string): Promise<DbBackup[]> {
   const { drizzleDb } = ensureDb()
-  const base = drizzleDb.select().from(backups)
+  // 兼容旧版世界维护备份写入的用户 ID，仅在列表中解析账号名。
+  const base = drizzleDb.select({ backup: backups, creatorAccount: users.account }).from(backups)
+    .leftJoin(users, eq(backups.createdBy, users.id))
   const rows = instanceId
     ? await base.where(eq(backups.instanceId, instanceId)).orderBy(desc(backups.createdAt))
     : await base.orderBy(desc(backups.createdAt))
-  return rows.map(mapDbBackup)
+  return rows.map(row => mapDbBackup({ ...row.backup, createdBy: row.creatorAccount ?? row.backup.createdBy }))
 }
 
 /** 保留策略用：按创建时间升序取某实例某来源的最旧记录 */

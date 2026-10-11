@@ -93,6 +93,18 @@ it('回档前备份不新增保存点，回到确认的编号和天数', async (
   assert.deepEqual(f.counts(), { saves: 0, sends: 1 })
   assert.equal(listShardSnapshots(f.instance.installPath, 'master')[0]?.snapshotId, 6)
 })
+it('重置与回档前的自动备份记录操作账号名', async (t) => {
+  for (const action of ['rollback', 'reset'] as const) {
+    const f = fixture(t)
+    const backup = t.mock.method(deps, 'backup', async (_options: Parameters<typeof deps.backup>[0]) => ({ ok: true, backup: { id: randomUUID() } as DbBackup }))
+    const op = f.begin(f.payload(action))
+    await waitWorldMaintenanceForTest(op.id)
+    assert.equal(f.record().state, 'completed')
+    assert.equal(backup.mock.calls.length, 1)
+    assert.equal(backup.mock.calls[0].arguments[0].createdBy, actor.account)
+    assert.equal(backup.mock.calls[0].arguments[0].kind, action === 'rollback' ? 'pre_rollback' : 'pre_reset')
+  }
+})
 it('相同请求 ID 不会重复保存或重复回档，参数变化拒绝复用', async (t) => {
   const f = fixture(t)
   const payload = f.payload('save')

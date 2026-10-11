@@ -153,7 +153,7 @@ async function execute(instance: ResolvedLocalDstInstance, op: MaintenanceCheckp
       let backup: Awaited<ReturnType<typeof maintenanceDependencies.backup>>
       try {
         backup = await maintenanceDependencies.backup({ app: appByOperation.get(op.id), instanceId: instance.id,
-          kind: op.action === 'rollback' ? 'pre_rollback' : 'pre_reset', note: `世界维护 ${op.id}（${instance.name}，${op.action}，${op.scope}）`, createdBy: op.actorId, saveBeforeArchive: false })
+          kind: op.action === 'rollback' ? 'pre_rollback' : 'pre_reset', note: `世界维护 ${op.id}（${instance.name}，${op.action}，${op.scope}）`, createdBy: op.actorAccount, saveBeforeArchive: false })
       }
       catch (error) { backup = { ok: false, message: errorMessage(error) } }
       if (!backup.ok || !backup.backup) {

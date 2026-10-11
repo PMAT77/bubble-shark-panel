@@ -50,6 +50,7 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
   const dialog = useDialog()
   const notification = useNotification()
   const router = useRouter()
+  const { auth: hasPermission } = useAppAuth()
 
   /** 正在执行的实例操作（格式 action:instanceId），驱动按钮 loading 与同实例操作互斥 */
   const actionLoadingIds = ref<Set<string>>(new Set())
@@ -240,7 +241,7 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
 
     const quickStart = () => runInstanceAction(row.id, 'start')
 
-    if (!shouldOfferStartGuide(row, undefined)) {
+    if (!hasPermission('room:read') || !hasPermission('world:read') || !shouldOfferStartGuide(row, undefined)) {
       await quickStart()
       return
     }

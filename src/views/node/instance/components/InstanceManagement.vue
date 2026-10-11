@@ -14,8 +14,6 @@ import apiInstance from '@/api/modules/instance'
 import apiSystem from '@/api/modules/system'
 import {
   routeToConsoleMonitor,
-  routeToDstRoomSettings,
-  routeToDstWorldSettings,
   routeToInstanceConsole,
   routeToInstanceDetail,
 } from '@/navigation/game-routes'
@@ -142,7 +140,6 @@ const createModalVisible = ref(false)
 const createGuideVisible = ref(false)
 const createFormRef = ref<FormInst | null>(null)
 const installableGames = ref<InstallableGameItem[]>([])
-const createGuideTarget = ref<{ id: string, name: string } | null>(null)
 const installLogVisible = ref(false)
 const installLogInstanceName = ref('')
 const installLogTargetId = ref('')
@@ -885,26 +882,7 @@ function openPostCreateGuide(instance: Pick<InstanceItem, 'id' | 'name' | 'gameC
   if (!shouldShowPostCreateInstallGuide(instance)) {
     return
   }
-  createGuideTarget.value = { id: instance.id, name: instance.name }
   createGuideVisible.value = true
-}
-
-function goToRoomSettingsFromCreateGuide() {
-  const target = createGuideTarget.value
-  if (!target) {
-    return
-  }
-  createGuideVisible.value = false
-  router.push(routeToDstRoomSettings(target.id))
-}
-
-function goToWorldSettingsFromCreateGuide() {
-  const target = createGuideTarget.value
-  if (!target) {
-    return
-  }
-  createGuideVisible.value = false
-  router.push(routeToDstWorldSettings(target.id))
 }
 
 async function fetchInstallableGames() {
@@ -1538,27 +1516,13 @@ onBeforeUnmount(() => {
     >
       <div class="space-y-3 text-sm leading-relaxed text-foreground">
         <p>
-          实例「{{ createGuideTarget?.name || 'DST 实例' }}」正在安装，可能需要几分钟，完成后会提醒你。
-        </p>
-        <p>
-          等待期间可以先配置房间与世界参数。
+          实例正在安装，完成后会提醒你。
         </p>
       </div>
       <template #footer>
         <NSpace justify="end">
           <NButton @click="closeCreateGuideModal">
             稍后再说
-          </NButton>
-          <!--
-            这两个入口各指向另一个模块的页面（世界管理 / 房间管理），且都是**按路由名**跳转。
-            面板的路由按权限动态注册：目标模块无权时那条路由不存在，点了会在解析阶段抛 No match，
-            看起来就是按钮失灵——所以无权时直接不出现。
-          -->
-          <NButton v-if="hasPermission('world:read')" @click="goToWorldSettingsFromCreateGuide">
-            去配置世界
-          </NButton>
-          <NButton v-if="hasPermission('room:read')" type="primary" @click="goToRoomSettingsFromCreateGuide">
-            去配置房间
           </NButton>
         </NSpace>
       </template>

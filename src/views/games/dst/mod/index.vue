@@ -17,6 +17,7 @@ import { ChevronRight, GripVertical } from 'lucide-vue-next'
 import { useSortable } from '@vueuse/integrations/useSortable'
 import type { SortableEvent } from 'sortablejs'
 import { moveModLoadOrder } from './modLoadOrder'
+import { renderModPreview } from './modPreview'
 import type { NotificationReactive } from 'naive-ui'
 import { NAlert, NButton, NCard, NDataTable, NEmpty, NImage, NInput, NPagination, NRate, NSelect, NSwitch, NTabPane, NTabs, NTag, NTooltip, useDialog, useMessage, useNotification } from 'naive-ui'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
@@ -159,23 +160,6 @@ function goToModDetail(workshopId: string) {
     return
   }
   router.push(routeToDstModDetail(workshopId, selectedInstanceId.value))
-}
-
-function renderModPreview(previewImage: string | null) {
-  if (!previewImage) {
-    return h('div', {
-      class: 'flex size-12 items-center justify-center rounded bg-muted text-xs text-muted-foreground',
-    }, '无图')
-  }
-  return h(NImage, {
-    src: previewImage,
-    width: 48,
-    height: 48,
-    objectFit: 'cover',
-    lazy: true,
-    previewDisabled: false,
-    class: 'rounded',
-  })
 }
 
 function renderModRating(rating: number | null) {

@@ -2,7 +2,7 @@
 import { NButton, NSpace, useDialog } from 'naive-ui'
 import type { WorldMaintenanceOperation } from '@/api/modules/world-maintenance'
 import { routeToOpsBackups } from '@/navigation/game-routes'
-const props = defineProps<{ operation: WorldMaintenanceOperation | null, submitting?: boolean }>()
+const props = withDefaults(defineProps<{ operation: WorldMaintenanceOperation | null, submitting?: boolean, showBackupLink?: boolean }>(), { showBackupLink: true })
 const emit = defineEmits<{ continue: [withoutBackup: boolean], verify: [] }>()
 const dialog = useDialog()
 const router = useRouter()
@@ -12,8 +12,8 @@ function confirmSkip() {
 }
 </script>
 <template>
-  <NSpace v-if="operation && ((operation.backupId && hasPermission('backup:read')) || (operation.state === 'awaiting_confirmation' && operation.canContinue) || (operation.state === 'unknown' && operation.action !== 'save'))" class="my-3">
-    <NButton v-if="operation.backupId && hasPermission('backup:read')" size="small" @click="router.push(routeToOpsBackups(operation.instanceId))">备份与恢复</NButton>
+  <NSpace v-if="operation && ((showBackupLink && operation.backupId && hasPermission('backup:read')) || (operation.state === 'awaiting_confirmation' && operation.canContinue) || (operation.state === 'unknown' && operation.action !== 'save'))" class="my-3">
+    <NButton v-if="showBackupLink && operation.backupId && hasPermission('backup:read')" size="small" @click="router.push(routeToOpsBackups(operation.instanceId))">备份与恢复</NButton>
     <template v-if="operation.state === 'awaiting_confirmation' && operation.canContinue">
       <NButton size="small" :disabled="submitting" @click="emit('continue', false)">取消操作</NButton>
       <NButton size="small" type="error" :disabled="submitting" @click="confirmSkip">不备份继续</NButton>

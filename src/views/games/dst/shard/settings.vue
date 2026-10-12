@@ -929,7 +929,7 @@ onActivated(() => {
           </NTabPane>
         </NTabs>
 
-        <WorldMaintenanceStatus :operation="maintenanceOperation" :submitting="maintenanceSubmitting" @continue="continueWithoutBackup" @verify="recheck" />
+        <WorldMaintenanceStatus :operation="maintenanceOperation" :submitting="maintenanceSubmitting" :show-backup-link="false" @continue="continueWithoutBackup" @verify="recheck" />
         <NModal v-model:show="seedModalVisible" preset="card" :title="selectedSeed?.shard === 'master' ? '重新生成地上' : '重新生成洞穴'" class="max-w-lg" :mask-closable="false">
           <div class="space-y-3 text-sm mb-4">
             <p>{{ selectedSeed?.seed ? `种子：${selectedSeed.seed}` : '使用随机种子' }}。其他设置使用已保存的配置，未保存修改不会提交。</p>

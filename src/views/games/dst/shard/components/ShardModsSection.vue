@@ -7,6 +7,7 @@ import AdminSettingsSection from '@/components/AdminSettingsSection.vue'
 import apiMod from '@/api/modules/mod'
 import { MOD_ENABLED_STATUS, MOD_INSTALL_STATUS, MOD_UPDATE_STATUS, statusTagType } from '@/constants/statusDictionary'
 import { useInstanceModState } from '@/composables/useInstanceModState'
+import { renderModPreview } from '@/views/games/dst/mod/modPreview'
 
 type ModEnabledFilter = 'all' | 'enabled' | 'disabled'
 
@@ -71,6 +72,12 @@ function renderInstallStatus(row: ModItemDto) {
 }
 
 const installedColumns: DataTableColumns<ModItemDto> = [
+  {
+    title: '缩略图',
+    key: 'previewImage',
+    width: 72,
+    render: row => renderModPreview(row.previewImage),
+  },
   { title: 'Mod 名称', key: 'name', minWidth: 220, render: row => row.name },
   { title: '创意工坊 ID', key: 'workshopId', width: 170, render: row => row.workshopId },
   {

@@ -1092,7 +1092,7 @@ async function startInstanceContainerUnlocked(
   const reservedPorts = await collectReservedDstPortsOnNode(LOCAL_NODE_ID, input.instanceId, {
     onlyRunning: true,
   })
-  const portError = await validateShardPortsForStart(masterFields, cavesFields, {
+  const portError = await validateShardPortsForStart(reuseMaster ? null : masterFields, cavesFields, {
     reservedPorts,
   })
   if (portError) {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import dgram from 'node:dgram'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,6 +12,10 @@ import Docker from 'dockerode'
 import { getContainerRuntime, buildMasterContainerName, buildCavesContainerName, type ContainerRuntime, type ContainerRef, type ShardContainerSpec, type LogOpts } from '../../infra/container'
 import { emptyResourceSnapshot } from '../../infra/container/dst-container-resources'
 import { ensureDstClusterConfig, ensureDstCavesShardConfig } from '../../infra/game-adapter/dst/cluster-config'
+import { buildServerIni } from '../../infra/game-adapter/dst/server-ini'
+import { readMasterServerIniFields, readCavesServerIniFields } from '../../infra/game-adapter/dst/shard-service'
+import { resolveMasterServerIniPath, resolveCavesServerIniPath } from '../../infra/game-adapter/dst/shard-layout'
+import { validateShardPortsForStart } from '../../infra/game-adapter/dst/port-conflict'
 import { closeDatabase, createGameInstance, deleteGameInstanceById, getGameInstanceById, initDatabase, updateGameInstanceRuntime } from '../../shared/db'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 import { startInstanceContainer, stopInstanceContainer, protectInstanceMemory, stopFailedCaves, recoverInstanceStartup, runtimeMemoryEpoch } from './container-lifecycle'
@@ -30,6 +35,33 @@ async function until(predicate: () => Promise<boolean>) {
   const deadline = Date.now() + 2500
   while (Date.now() < deadline) { if (await predicate()) return; await delay(10) }
   assert.fail('后台分片任务未按预期完成')
+}
+
+async function occupyShardPorts(t: TestContext, installPath: string, occupyCaves = false) {
+  const sockets = new Set<dgram.Socket>()
+  t.after(async () => {
+    for (const socket of sockets) await new Promise<void>(resolve => socket.close(resolve))
+  })
+  const ports: number[] = []
+  const caveSockets: dgram.Socket[] = []
+  for (let i = 0; i < 6; i++) {
+    const socket = dgram.createSocket('udp4')
+    await new Promise<void>((resolve, reject) => { socket.once('error', reject); socket.bind(0, '0.0.0.0', resolve) })
+    sockets.add(socket)
+    ports.push(socket.address().port)
+    if (i >= 3) caveSockets.push(socket)
+  }
+  const master = { ...readMasterServerIniFields(installPath), serverPort: ports[0], steamAuthPort: ports[1], steamMasterPort: ports[2] }
+  const caves = { ...readCavesServerIniFields(installPath)!, serverPort: ports[3], steamAuthPort: ports[4], steamMasterPort: ports[5] }
+  fs.writeFileSync(resolveMasterServerIniPath(installPath), buildServerIni(master))
+  fs.writeFileSync(resolveCavesServerIniPath(installPath), buildServerIni(caves))
+  const releaseCaves = async () => {
+    for (const socket of caveSockets) {
+      if (sockets.delete(socket)) await new Promise<void>(resolve => socket.close(resolve))
+    }
+  }
+  if (!occupyCaves) await releaseCaves()
+  return { master, caves, releaseCaves }
 }
 
 async function fixture(t: TestContext, mode: 'native' | 'docker', readyMaster = false) {
@@ -124,6 +156,7 @@ for (const mode of ['native', 'docker'] as const) {
     await until(async () => (await getGameInstanceById(f.instance.id))?.lastStartupReport?.status === 'success')
     assert.equal(f.create.mock.callCount(), 1)
     assert.equal(f.create.mock.calls[0]?.arguments[0].shard, 'master')
+    await occupyShardPorts(t, f.input.installPath)
     const before = (await getGameInstanceById(f.instance.id))!
     const resumed = await startInstanceContainer(f.app, { ...f.input, target: 'caves' })
     assert.equal(resumed.ok, true)
@@ -144,16 +177,69 @@ for (const mode of ['native', 'docker'] as const) {
 
   it(`${mode}: 整体启动补齐缺失洞穴，洞穴创建失败保留健康主世界`, async t => {
     const f = await fixture(t, mode, true)
+    await occupyShardPorts(t, f.input.installPath)
+    const createShard = f.runtime.createShardContainer.bind(f.runtime)
     t.mock.method(f.runtime, 'createShardContainer', async (spec: ShardContainerSpec) => { assert.equal(spec.shard, 'caves'); throw new Error('fixture create failed') })
     assert.equal((await startInstanceContainer(f.app, f.input)).ok, true)
     await until(async () => (await getGameInstanceById(f.instance.id))?.lastStartupReport?.status === 'failed')
     const saved = (await getGameInstanceById(f.instance.id))!
+    assert.match(saved.lastError ?? '', /fixture create failed/)
     assert.equal(saved.status, 'running')
     assert.equal(saved.containerId, 'healthy-master')
     assert.equal(saved.runtimeReadyAt, f.masterAt)
     assert.equal(saved.lastStartupReport?.master.memoryPeakMb, 2000)
     assert.equal(saved.lastStartupReport?.master.memoryAndSwapPeakMb, 2500)
     assert.equal(saved.lastStartupReport?.caves.cleanupCompleted, true)
+    t.mock.method(f.runtime, 'createShardContainer', createShard)
+    assert.equal((await startInstanceContainer(f.app, { ...f.input, target: 'caves' })).ok, true)
+    await until(async () => (await getGameInstanceById(f.instance.id))?.lastStartupReport?.caves.state === 'ready')
+    const retried = (await getGameInstanceById(f.instance.id))!
+    assert.equal(retried.containerId, saved.containerId)
+    assert.equal(retried.runtimeStartedAt, saved.runtimeStartedAt)
+    assert.equal(retried.runtimeReadyAt, saved.runtimeReadyAt)
+    assert.deepEqual(retried.lastStartupReport?.master.resourceBaseline, saved.lastStartupReport?.master.resourceBaseline)
+    assert.equal(f.stop.mock.callCount(), 0)
+    assert.equal(f.networkRemove.mock.callCount(), 0)
+  })
+
+  it(`${mode}: 洞穴端口真实占用时补启动失败，释放后重试保留主世界`, async t => {
+    const f = await fixture(t, mode, true)
+    const { caves, releaseCaves } = await occupyShardPorts(t, f.input.installPath, true)
+    assert.equal((await startInstanceContainer(f.app, { ...f.input, target: 'caves' })).ok, true)
+    await until(async () => (await getGameInstanceById(f.instance.id))?.lastStartupReport?.status === 'failed')
+    const failed = (await getGameInstanceById(f.instance.id))!
+    assert.match(failed.lastError ?? '', new RegExp(`端口 ${caves.serverPort}、${caves.steamAuthPort}、${caves.steamMasterPort} 已被占用`))
+    assert.equal(failed.status, 'running')
+    assert.equal(failed.containerId, 'healthy-master')
+    assert.equal(f.create.mock.callCount(), 0)
+    await releaseCaves()
+    assert.equal((await startInstanceContainer(f.app, { ...f.input, target: 'caves' })).ok, true)
+    await until(async () => (await getGameInstanceById(f.instance.id))?.lastStartupReport?.caves.state === 'ready')
+    const retried = (await getGameInstanceById(f.instance.id))!
+    assert.equal(retried.containerId, failed.containerId)
+    assert.equal(retried.runtimeStartedAt, failed.runtimeStartedAt)
+    assert.equal(retried.runtimeReadyAt, failed.runtimeReadyAt)
+    assert.equal(f.create.mock.calls[0]?.arguments[0].shard, 'caves')
+    assert.equal(f.stop.mock.callCount(), 0)
+    assert.equal(f.networkRemove.mock.callCount(), 0)
+  })
+
+  it(`${mode}: 其它运行实例预留洞穴端口时拒绝补启动并保留主世界`, async t => {
+    const f = await fixture(t, mode, true)
+    const { caves } = await occupyShardPorts(t, f.input.installPath)
+    const otherPath = path.join(directory, randomUUID())
+    ensureDstClusterConfig(otherPath, {})
+    fs.writeFileSync(resolveMasterServerIniPath(otherPath), buildServerIni({ ...readMasterServerIniFields(otherPath), serverPort: caves.serverPort }))
+    const other = await createGameInstance({ installPath: otherPath, nodeId: 'local-node', name: 'port-owner', gameCode: '343050', status: 'running' })
+    t.after(async () => { await deleteGameInstanceById(other.id) })
+    assert.equal((await startInstanceContainer(f.app, { ...f.input, target: 'caves' })).ok, true)
+    await until(async () => (await getGameInstanceById(f.instance.id))?.lastStartupReport?.status === 'failed')
+    const failed = (await getGameInstanceById(f.instance.id))!
+    assert.match(failed.lastError ?? '', new RegExp(`端口 ${caves.serverPort} 已被同节点上运行中的其它实例占用`))
+    assert.equal(failed.status, 'running')
+    assert.equal(failed.containerId, 'healthy-master')
+    assert.equal(failed.runtimeReadyAt, f.masterAt)
+    assert.equal(f.create.mock.callCount(), 0)
     assert.equal(f.stop.mock.callCount(), 0)
     assert.equal(f.networkRemove.mock.callCount(), 0)
   })
@@ -198,6 +284,18 @@ for (const mode of ['native', 'docker'] as const) {
     assert.equal(f.networkRemove.mock.callCount(), 0)
   })
 }
+
+it('冷启动仍检查主世界占用端口，洞穴补启动只检查洞穴的预留端口', async t => {
+  const f = await fixture(t, 'native')
+  const { master, caves } = await occupyShardPorts(t, f.input.installPath)
+  assert.match(await validateShardPortsForStart(master, caves) ?? '', /已被占用/)
+  const reservedPorts = new Set([master.serverPort])
+  assert.match(await validateShardPortsForStart(master, caves, { reservedPorts }) ?? '', /其它实例占用/)
+  assert.equal(await validateShardPortsForStart(null, caves, { reservedPorts }), undefined)
+  assert.equal((await startInstanceContainer(f.app, { ...f.input, target: 'master' })).ok, true)
+  await until(async () => (await getGameInstanceById(f.instance.id))?.lastStartupReport?.status === 'failed')
+  assert.equal(f.create.mock.callCount(), 0)
+})
 
 it('主世界尚未运行时拒绝单独洞穴启动，且不创建任何分片', async t => {
   const f = await fixture(t, 'native')

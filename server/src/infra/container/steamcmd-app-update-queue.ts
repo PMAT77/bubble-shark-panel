@@ -2,6 +2,16 @@ import { readBrandEnv } from '../../../../shared/brand-env'
 import { abortable } from '../../shared/abort'
 let chain: Promise<void> = Promise.resolve()
 let inFlight = 0
+const queuedJobs = new Map<string, AbortController>()
+
+export class SteamcmdQueuedJobCancelledError extends Error {
+  constructor() { super('SteamCMD 任务已取消（排队期间被取消）') }
+}
+
+/** 只退出指定任务的锁等待，不取消正在持锁的 SteamCMD。 */
+export function cancelQueuedSteamcmdJob(cancelKey: string): void {
+  queuedJobs.get(cancelKey)?.abort(new SteamcmdQueuedJobCancelledError())
+}
 
 function resolveInterJobCooldownMs(): number {
   const raw = readBrandEnv('BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS')?.trim()
@@ -30,6 +40,7 @@ export function isSteamcmdAppUpdateQueued(): boolean {
 
 export interface SteamcmdAppUpdateLockOptions {
   signal?: AbortSignal
+  cancelKey?: string
   /** 当前任务需等待其他 app_update 完成时调用（用于更新排队 UI） */
   onQueued?: () => void | Promise<void>
 }
@@ -49,16 +60,27 @@ export async function withSteamcmdAppUpdateLock<T>(
   })
   inFlight++
   let started = false
+  const cancelKey = options?.cancelKey
+  const controller = cancelKey ? new AbortController() : undefined
+  if (controller && cancelKey) queuedJobs.set(cancelKey, controller)
+  const signal = controller
+    ? (options?.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal)
+    : options?.signal
+  const forgetQueuedJob = () => {
+    if (options?.cancelKey && queuedJobs.get(options.cancelKey) === controller) queuedJobs.delete(options.cancelKey)
+  }
   try {
     if (inFlight > 1 && options?.onQueued) {
       await options.onQueued()
     }
-    await abortable(previous, options?.signal)
-    options?.signal?.throwIfAborted()
+    await abortable(previous, signal)
+    signal?.throwIfAborted()
+    forgetQueuedJob()
     started = true
     return await fn()
   }
   finally {
+    forgetQueuedJob()
     inFlight--
     if (started) {
       const cooldownMs = resolveInterJobCooldownMs()

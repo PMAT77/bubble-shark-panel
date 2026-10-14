@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ModDownloadQueueDto } from '../../../../../shared/contracts/mod.ts'
-import { resolveModDownloadDetails, resolveModDownloadHelp, summarizeModDownloadFailure } from './modDownloadPresentation.ts'
+import { resolveModDownloadAction, resolveModDownloadHelp, summarizeModDownloadFailure } from './modDownloadPresentation.ts'
 
 function queue(overrides: Partial<ModDownloadQueueDto> = {}): ModDownloadQueueDto {
   return { instanceId: 'test', status: 'idle', phase: null, items: [], eligibleCount: 0, inactiveMissingCount: 0,
@@ -12,6 +12,11 @@ function queue(overrides: Partial<ModDownloadQueueDto> = {}): ModDownloadQueueDt
 const failure = (error: string) => queue({ items: [{ workshopId: '100', phase: 'failed', installStatus: 'failed', error, nextRetryAt: null }], retryableFailedCount: 1 })
 
 describe('download presentation', () => {
+  it('distinguishes preparation and bootstrap failures from Workshop downloading', () => {
+    assert.equal(resolveModDownloadHelp(queue({ status: 'running', phase: 'preparing_steamcmd' })).summary, '正在准备下载环境。')
+    assert.equal(summarizeModDownloadFailure('SteamCMD 自更新超时，尚未开始下载 Mod'), '下载环境准备超时，Mod 下载尚未开始。')
+    assert.equal(resolveModDownloadAction(queue({ status: 'running', phase: 'preparing_steamcmd' }))?.label, '暂停下载')
+  })
   it('shows only evidenced causes and keeps unknown output out of user guidance', () => {
     assert.equal(summarizeModDownloadFailure('Mod 下载超时，请检查 Steam 网络连接后重试'), '下载超时。')
     assert.match(summarizeModDownloadFailure('Mod 下载失败：实例目录权限不足'), /权限不足.*管理员/)
@@ -39,19 +44,20 @@ describe('download presentation', () => {
     assert.match(resolveModDownloadHelp({ ...failure('Mod 下载超时'), status: 'running', phase: 'downloading' }).summary, /1 个 Mod/)
     assert.equal(resolveModDownloadHelp(queue({ lastError: 'unknown worker error' })).retryHint, null)
   })
-  it('removes running and cancellation text from completed and paused downloads', () => {
-    const completed = resolveModDownloadDetails(queue({ success: 1, currentBatchIndex: 1 }))
-    assert.deepEqual(completed, ['本次下载已结束：成功 1 个，失败 0 个。'])
-    assert.doesNotMatch(completed.join(''), /当前处理|正在处理|取消|当前第/)
-    const paused = resolveModDownloadDetails(queue({ status: 'paused', eligibleCount: 2, currentBatchIndex: 1 }))
-    assert.match(paused.join(''), /2 个 Mod/)
-    assert.doesNotMatch(paused.join(''), /取消当前批次|正在处理/)
+  it('keeps one control visible throughout pause and resume without allowing overlapping downloads', () => {
+    for (const phase of ['downloading', 'waiting_steamcmd', 'retry_wait', null] as const) {
+      const active = queue({ status: 'running', phase, eligibleCount: 2 })
+      assert.deepEqual(resolveModDownloadAction(active), { action: 'pause', label: '暂停下载', disabled: false })
+      assert.deepEqual(resolveModDownloadAction({ ...active, status: 'pausing' }), { action: 'pause', label: '正在暂停…', disabled: true })
+      assert.deepEqual(resolveModDownloadAction({ ...active, status: 'paused', phase: null }), { action: 'start', label: '恢复下载', disabled: false })
+    }
   })
-  it('distinguishes waiting, retrying and actual downloading', () => {
-    assert.match(resolveModDownloadDetails(queue({ status: 'running', phase: 'waiting_steamcmd', currentWorkshopIds: ['100'] })).join(''), /轮到本次任务/)
-    assert.match(resolveModDownloadDetails(queue({ status: 'running', phase: 'retry_wait' })).join(''), /自动重试/)
-    assert.match(resolveModDownloadDetails(queue({ status: 'running', phase: 'downloading', currentBatchIndex: 2, currentWorkshopIds: ['100', '101'] })).join(''), /第 2 批.*处理 2 个/)
-    assert.doesNotMatch(resolveModDownloadDetails(queue({ status: 'pausing', phase: 'waiting_steamcmd' })).join(''), /当前下载完成后|取消当前批次/)
-    assert.deepEqual(resolveModDownloadDetails(queue({ status: 'running', phase: 'downloading' })), ['正在准备下一批下载。'])
+  it('retains the initial download entry and hides controls once nothing is pending', () => {
+    assert.deepEqual(resolveModDownloadAction(queue({ eligibleCount: 2 })), { action: 'start', label: '开始下载', disabled: false })
+    assert.equal(resolveModDownloadAction(null), null)
+    assert.equal(resolveModDownloadAction(queue({ success: 2 })), null)
+    assert.equal(resolveModDownloadAction(queue({ status: 'paused', success: 2 })), null)
+    assert.equal(resolveModDownloadAction(failure('offline')), null)
+    assert.match(resolveModDownloadHelp(queue({ status: 'paused', eligibleCount: 2, lastError: 'offline' })).retryHint ?? '', /上方.*恢复下载/)
   })
 })

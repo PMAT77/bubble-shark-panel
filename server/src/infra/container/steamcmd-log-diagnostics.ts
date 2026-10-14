@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises'
 import type Docker from 'dockerode'
 import tar from 'tar-stream'
 
-export const STEAMCMD_LOG_FILES = ['content_log.txt', 'stderr.txt'] as const
+export const STEAMCMD_LOG_FILES = ['content_log.txt', 'stderr.txt', 'bootstrap_log.txt'] as const
 const MAX_TAIL_BYTES = 64 * 1024
 const MAX_ARCHIVE_BYTES = 8 * 1024 * 1024
 const COLLECTION_TIMEOUT_MS = 5000
@@ -150,12 +150,22 @@ export class NativeSteamcmdLogDiagnostics {
   }
 
   collect(emit: (line: string) => void): void {
-    if (!this.directory) {
+    const directory = this.directory ?? [...this.positions].find(([file, previous]) => {
+      try {
+        const stat = fs.lstatSync(file)
+        return stat.isFile() && (previous
+          ? stat.size !== previous.size || stat.ino !== previous.ino || stat.dev !== previous.dev
+          : stat.mtimeMs >= this.startedAt)
+      }
+      catch { return false }
+    })?.[0]
+    const resolvedDirectory = this.directory ?? (directory ? path.dirname(directory) : undefined)
+    if (!resolvedDirectory) {
       emit('[SteamCMD 诊断] 未识别到日志目录')
       return
     }
     for (const name of STEAMCMD_LOG_FILES) {
-      const file = path.join(this.directory, name)
+      const file = path.join(resolvedDirectory, name)
       try {
         const stat = fs.lstatSync(file)
         if (!stat.isFile()) throw new Error('不是普通日志文件')

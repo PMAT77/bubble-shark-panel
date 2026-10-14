@@ -2,6 +2,7 @@ import type { ModAccessObservation, ModDownloadQueueDto } from '../../../../../s
 
 /** 只使用下载结果中已经明确的原因；未识别的输出留在技术信息中。 */
 export function summarizeModDownloadFailure(error: string | null): string {
+  if (error?.startsWith('SteamCMD 自更新超时')) return '下载环境准备超时，Mod 下载尚未开始。'
   if (error?.startsWith('Mod 下载超时') || error?.startsWith('Steam 请求超时')) return '下载超时。'
   if (error === 'Mod 下载失败：实例目录权限不足') return '实例目录权限不足，需由管理员处理。'
   if (error?.startsWith('无法下载该 Mod，请确认创意工坊 ID 有效且为公开 Mod')) return '无法下载该 Mod，请确认创意工坊 ID 有效且为公开 Mod。'
@@ -25,32 +26,27 @@ export function resolveModDownloadHelp(queue: ModDownloadQueueDto | null, files?
       retryHint: reasons.some(reason => reason.includes('目录权限不足')) ? '请先由管理员处理目录权限，再点击失败条目中的“重试”。'
         : failed.length > 1 ? '可点击失败条目中的“重试”，或使用“重试全部失败”。'
         : failed.length ? '可点击失败条目中的“重试”。'
-        : queue && queue.eligibleCount > 0 && queue.status !== 'running' && queue.status !== 'pausing' ? '可点击下载状态条中的“继续下载”。' : null,
+        : queue && queue.eligibleCount > 0 && queue.status !== 'running' && queue.status !== 'pausing' ? `可点击上方的“${queue.status === 'paused' ? '恢复下载' : '开始下载'}”。` : null,
     }
   }
   if (queue?.status === 'pausing') return { summary: '正在暂停下载，未完成项会保留。', reasons: [], retryHint: null }
-  if (queue?.status === 'paused') return { summary: '下载已暂停，未完成项仍可继续下载。', reasons: [], retryHint: null }
-  if (queue?.status === 'running') return { summary: queue.phase === 'waiting_steamcmd' ? '正在等待其他安装或下载任务完成。' : '正在下载 Mod。', reasons: [], retryHint: null }
+  if (queue?.status === 'paused') return { summary: '下载已暂停，未完成项仍可恢复下载。', reasons: [], retryHint: null }
+  if (queue?.status === 'running') return { summary: queue.phase === 'waiting_steamcmd' ? '正在等待其他安装或下载任务完成。' : queue.phase === 'preparing_steamcmd' ? '正在准备下载环境。' : '正在下载 Mod。', reasons: [], retryHint: null }
   if (queue?.success || queue?.startedAt || files?.status === 'success') return { summary: '当前没有下载失败的 Mod。', reasons: [], retryHint: null }
   if (files?.status === 'failed') return { summary: '最近一次文件下载未完成。', reasons: [summarizeModDownloadFailure(files.message)], retryHint: null }
   if (files?.status === 'cancelled') return { summary: '上次下载已取消，未完成项仍可继续下载。', reasons: [], retryHint: null }
   return { summary: '尚无下载记录。', reasons: [], retryHint: null }
 }
 
-export function resolveModDownloadDetails(queue: ModDownloadQueueDto | null): string[] {
-  if (!queue) return []
-  if (queue.status === 'pausing') return [queue.phase === 'downloading' ? '当前下载完成后暂停，未完成项会保留。' : '正在暂停下载，未完成项会保留。']
-  if (queue.status === 'running') {
-    if (queue.phase === 'waiting_steamcmd') return ['轮到本次任务后开始下载。等待期间也可以暂停或取消。']
-    if (queue.phase === 'retry_wait') return ['正在等待自动重试，未完成项会继续下载。']
-    if (queue.currentWorkshopIds.length === 0) return ['正在准备下一批下载。']
-    const batch = queue.currentBatchIndex > 0 ? `当前第 ${queue.currentBatchIndex} 批；` : ''
-    return [
-      `${batch}正在处理 ${queue.currentWorkshopIds.length} 个 Mod。`,
-      '取消当前批次会停止本次下载并暂停，未完成项仍可继续下载。',
-    ]
-  }
-  if (queue.status === 'paused') return [`未完成项已保留，还有 ${queue.eligibleCount} 个 Mod 未准备好。`]
-  if (queue.eligibleCount > 0) return ['下载尚未开始。']
-  return [`本次下载已结束：成功 ${queue.success} 个，失败 ${queue.failed} 个。`]
+/** 工具栏始终只提供一个下载控制；停止完成前不允许启动第二个任务。 */
+export function resolveModDownloadAction(queue: ModDownloadQueueDto | null): {
+  action: 'start' | 'pause'
+  label: string
+  disabled: boolean
+} | null {
+  if (!queue) return null
+  if (queue.status === 'running') return { action: 'pause', label: '暂停下载', disabled: false }
+  if (queue.status === 'pausing') return { action: 'pause', label: '正在暂停…', disabled: true }
+  if (queue.eligibleCount > 0) return { action: 'start', label: queue.status === 'paused' ? '恢复下载' : '开始下载', disabled: false }
+  return null
 }

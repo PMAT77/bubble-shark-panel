@@ -127,7 +127,7 @@ export interface ModMutationResult {
 
 export type ModInstallJobStatus = 'downloading' | 'success' | 'failed' | 'not_found'
 
-export type ModInstallJobPhase = 'waiting_steamcmd' | 'downloading'
+export type ModInstallJobPhase = 'waiting_steamcmd' | 'preparing_steamcmd' | 'downloading'
 
 export interface ModInstallJobDto {
   instanceId: string

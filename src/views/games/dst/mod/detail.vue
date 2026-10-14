@@ -103,7 +103,7 @@ const installButtonDisabled = computed(() =>
 
 function pendingDownloadLabel(): string {
   const phase = downloadQueue.value?.items.find(item => item.workshopId === workshopId.value)?.phase
-  return phase === 'downloading' ? '下载中' : phase === 'waiting_steamcmd' ? '等待其他任务' : phase === 'retry_wait' ? '等待重试' : phase === 'queued' ? '等待下载' : '待下载'
+  return phase === 'downloading' ? '下载中' : phase === 'preparing_steamcmd' ? '准备下载环境' : phase === 'waiting_steamcmd' ? '等待其他任务' : phase === 'retry_wait' ? '等待重试' : phase === 'queued' ? '等待下载' : '待下载'
 }
 
 function syncDetailFromQueue() {

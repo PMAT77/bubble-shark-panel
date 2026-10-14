@@ -9,13 +9,14 @@ import { runSteamcmdJob } from './steamcmd-job'
 import { buildSteamcmdAppUpdateArgs, buildSteamcmdWorkshopDownloadArgs } from './steamcmd-args'
 import { resolveSteamcmdInstallBind } from './steamcmd-install-bind'
 import { appendSteamcmdBindMountOptions, resolveSteamcmdContainerUser } from './steamcmd-container-user'
-import { withSteamcmdAppUpdateLock } from './steamcmd-app-update-queue'
+import { SteamcmdQueuedJobCancelledError, withSteamcmdAppUpdateLock } from './steamcmd-app-update-queue'
 import { loadServerConfig, resolveInstallLogsDir } from '../../shared/config'
 import {
   formatSteamcmdTimeoutForLog,
   formatSteamcmdDownloadRegionForLog,
   loadSteamcmdRuntimeConfig,
   resolveSteamcmdAppUpdateTimeoutMs,
+  resolveSteamcmdWorkshopDownloadTimeoutMs,
 } from '../../shared/config/steamcmd'
 import { appendInstallResourceSnapshot } from './install-resource-monitor'
 import { formatSteamcmdMemoryLimitForLog, resolveSteamcmdContainerMemoryLimits } from './steamcmd-container-resources'
@@ -43,11 +44,12 @@ import {
   cleanupOrphanedSteamcmdInstallContainers as cleanupOrphanedDockerSteamcmdInstallContainers,
   isSteamcmdJobRunning as isDockerSteamcmdJobRunning,
   hasUnconfirmedSteamcmdJob as hasUnconfirmedDockerSteamcmdJob,
+  clearSteamcmdJobCancelFlag,
 } from './steamcmd-job'
+import type { SteamcmdTimeoutPhase } from './steamcmd-timeout'
 
 
 const STEAMCMD_APP_INFO_TIMEOUT_MS = 90_000
-const DEFAULT_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
 
 function resolveDocker() {
   const { dockerHost } = getServerContainerConfig()
@@ -259,18 +261,25 @@ export async function runSteamcmdWorkshopDownloadInContainer(input: {
   cancelKey?: string
   onLogLine?: (line: string) => void
   onAwaitingSteamcmdLock?: () => void | Promise<void>
-  onDownloadStart?: () => void | Promise<void>
+  onPreparingSteamcmd?: () => void
   timeoutMs?: number
-}): Promise<{ ok: boolean, output: string, cancelled?: boolean }> {
+}): Promise<{ ok: boolean, output: string, cancelled?: boolean, timeoutPhase?: SteamcmdTimeoutPhase }> {
   if (getServerContainerConfig().runtimeMode === 'native') {
     return runSteamcmdWorkshopDownloadNative(input)
   }
   const jobId = input.cancelKey?.trim() || 'anonymous'
-  return withSteamcmdAppUpdateLock(
-    jobId,
-    () => runSteamcmdWorkshopDownloadInContainerUnlocked(input),
-    { onQueued: input.onAwaitingSteamcmdLock },
-  )
+  try {
+    return await withSteamcmdAppUpdateLock(
+      jobId,
+      () => runSteamcmdWorkshopDownloadInContainerUnlocked(input),
+      { onQueued: input.onAwaitingSteamcmdLock, cancelKey: input.cancelKey },
+    )
+  }
+  catch (error) {
+    if (!(error instanceof SteamcmdQueuedJobCancelledError)) throw error
+    if (input.cancelKey) clearSteamcmdJobCancelFlag(input.cancelKey)
+    return { ok: false, output: error.message, cancelled: true }
+  }
 }
 
 async function runSteamcmdWorkshopDownloadInContainerUnlocked(input: {
@@ -278,9 +287,9 @@ async function runSteamcmdWorkshopDownloadInContainerUnlocked(input: {
   workshopIds: string[]
   cancelKey?: string
   onLogLine?: (line: string) => void
-  onDownloadStart?: () => void | Promise<void>
+  onPreparingSteamcmd?: () => void
   timeoutMs?: number
-}): Promise<{ ok: boolean, output: string, cancelled?: boolean }> {
+}): Promise<{ ok: boolean, output: string, cancelled?: boolean, timeoutPhase?: SteamcmdTimeoutPhase }> {
   const { steamcmdImage, instancesRoot } = getServerContainerConfig()
   const docker = resolveDocker()
   const bindPlan = await resolveSteamcmdInstallBind(docker, input.hostInstallPath, instancesRoot)
@@ -320,8 +329,6 @@ async function runSteamcmdWorkshopDownloadInContainerUnlocked(input: {
   const memoryLimits = resolveSteamcmdContainerMemoryLimits('app-update')
   pushLine(`SteamCMD 容器内存上限: ${formatSteamcmdMemoryLimitForLog(memoryLimits)}`)
 
-  await input.onDownloadStart?.()
-
   const result = await runSteamcmdJob({
     image: steamcmdImage,
     cmd: [
@@ -332,8 +339,9 @@ async function runSteamcmdWorkshopDownloadInContainerUnlocked(input: {
     user: resolveSteamcmdContainerUser(),
     jobId: input.cancelKey,
     kind: 'app-update',
-    timeoutMs: input.timeoutMs ?? DEFAULT_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS,
+    timeoutMs: input.timeoutMs ?? resolveSteamcmdWorkshopDownloadTimeoutMs(),
     onLogLine: input.onLogLine,
+    onStarted: input.onPreparingSteamcmd,
   })
 
   if (result.ok) {
@@ -344,6 +352,7 @@ async function runSteamcmdWorkshopDownloadInContainerUnlocked(input: {
     ok: result.ok,
     output: result.output || logLines.slice(-20).join('\n'),
     cancelled: result.cancelled,
+    timeoutPhase: result.timeoutPhase,
   }
 }
 

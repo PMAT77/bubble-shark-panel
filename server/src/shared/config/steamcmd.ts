@@ -87,6 +87,12 @@ export function resolveSteamcmdAppUpdateTimeoutMs(): number {
   return parseAppUpdateTimeoutMs()
 }
 
+/** Workshop 两种运行时共用既有配置与默认预算。 */
+export function resolveSteamcmdWorkshopDownloadTimeoutMs(): number {
+  const parsed = Number.parseInt(readBrandEnv('BSP_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS') ?? '', 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 10 * 60 * 1000
+}
+
 export function formatSteamcmdTimeoutForLog(timeoutMs: number): string {
   return `${Math.round(timeoutMs / 60000)} 分钟`
 }

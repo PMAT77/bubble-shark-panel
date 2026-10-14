@@ -15,15 +15,20 @@ it('identifies SteamCMD log locations and reads only native appended content', (
   const directory = path.join(root, 'logs')
   fs.mkdirSync(directory)
   const file = path.join(directory, 'content_log.txt')
+  const bootstrap = path.join(directory, 'bootstrap_log.txt')
+  fs.writeFileSync(bootstrap, 'OLD BOOTSTRAP ERROR\n')
   fs.writeFileSync(file, 'OLD ERROR: Not enough disk space\n')
   const diagnostics = new NativeSteamcmdLogDiagnostics(path.join(root, 'steamcmd.sh'))
   assert.equal(steamcmdLogDirectory(`Logging directory: '${directory}'`), directory)
   diagnostics.observe(`Logging directory: '${directory}'`)
   fs.appendFileSync(file, 'CURRENT: HTTP error 503\n')
+  fs.appendFileSync(bootstrap, 'CURRENT BOOTSTRAP: Downloading update (1 of 24695 KB)...\n')
   const lines: string[] = []
   diagnostics.collect(line => lines.push(line))
   assert.match(lines.join('\n'), /CURRENT/)
   assert.doesNotMatch(lines.join('\n'), /OLD ERROR/)
+  assert.match(lines.join('\n'), /CURRENT BOOTSTRAP/)
+  assert.doesNotMatch(lines.join('\n'), /OLD BOOTSTRAP/)
   assert.match(lines.join('\n'), /stderr.txt 未采集/)
   fs.writeFileSync(file, 'TRUNCATED\n')
   lines.length = 0
@@ -53,6 +58,19 @@ it('streams only allowed Docker files, bounds their tails, and tolerates missing
   assert.match(lines.join('\n'), /current 99/)
   assert.equal(lines.filter(line => line.startsWith('current ')).length, 80)
   assert.match(lines.join('\n'), /stderr.txt 未采集/)
+})
+
+it('collects changed bootstrap logs from the known Native directory before a log location is printed', () => {
+  const directory = path.join(root, 'fallback')
+  fs.mkdirSync(path.join(directory, 'logs'), { recursive: true })
+  const file = path.join(directory, 'logs', 'bootstrap_log.txt')
+  fs.writeFileSync(file, 'OLD BOOTSTRAP\n')
+  const diagnostics = new NativeSteamcmdLogDiagnostics(path.join(directory, 'steamcmd.sh'))
+  fs.appendFileSync(file, 'CURRENT BOOTSTRAP: Downloading update\n')
+  const lines: string[] = []
+  diagnostics.collect(line => lines.push(line))
+  assert.match(lines.join('\n'), /CURRENT BOOTSTRAP/)
+  assert.doesNotMatch(lines.join('\n'), /OLD BOOTSTRAP/)
 })
 
 it('enforces the total archive cap and does not extract links', async () => {

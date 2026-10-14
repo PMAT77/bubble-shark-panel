@@ -4,12 +4,13 @@ import { resolveDockerConnectOptions } from '../docker-connect'
 import { getServerContainerConfig } from '../../shared/config/container'
 import { buildSteamcmdContainerEnv, loadSteamcmdRuntimeConfig } from '../../shared/config/steamcmd'
 import { decodeDockerMultiplexLogChunk } from './docker-log'
-import { redactSteamcmdLogLine, steamcmdLogSecrets, STEAMCMD_TIMEOUT_MARKER, STEAMCMD_OOM_MARKER } from './steamcmd-errors'
-import { formatSteamcmdTimeoutForLog } from '../../shared/config/steamcmd'
+import { redactSteamcmdLogLine, steamcmdLogSecrets, STEAMCMD_OOM_MARKER } from './steamcmd-errors'
 import { resolveSteamcmdContainerMemoryLimits } from './steamcmd-container-resources'
 import { SteamcmdOutput } from './steamcmd-output'
 import { collectDockerSteamcmdDiagnostics, steamcmdLogDirectory } from './steamcmd-log-diagnostics'
 import { abortable } from '../../shared/abort'
+import { SteamcmdTimeout, formatSteamcmdTimeoutMessage, type SteamcmdTimeoutPhase } from './steamcmd-timeout'
+import { cancelQueuedSteamcmdJob } from './steamcmd-app-update-queue'
 
 export const STEAMCMD_LABEL_MANAGED = 'bsp.managed'
 export const STEAMCMD_LABEL_MANAGED_VALUE = 'steamcmd-install'
@@ -202,6 +203,7 @@ export function clearSteamcmdJobCancelFlag(jobId: string): void {
 
 export async function cancelSteamcmdInstallContainer(cancelKey: string, verifyOrphans = false): Promise<void> {
   cancelledSteamcmdInstallKeys.add(cancelKey)
+  cancelQueuedSteamcmdJob(cancelKey)
     const tracked = activeSteamcmdInstallContainers.get(cancelKey)
     if (tracked) {
       const removed = await abortable(forceRemoveSteamcmdContainer(tracked), AbortSignal.timeout(15_000))
@@ -236,6 +238,7 @@ export interface SteamcmdJobSpec {
   kind?: 'app-update' | 'app-info'
   timeoutMs: number
   onLogLine?: (line: string) => void
+  onStarted?: () => void
 }
 
 export interface SteamcmdJobResult {
@@ -244,6 +247,7 @@ export interface SteamcmdJobResult {
   output: string
   cancelled?: boolean
   timedOut?: boolean
+  timeoutPhase?: SteamcmdTimeoutPhase
   /** undefined 表示 Docker 状态检查失败，不能据退出码推断。 */
   oomKilled?: boolean
 }
@@ -305,12 +309,14 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
   const steamcmdConfig = loadSteamcmdRuntimeConfig()
   const secrets = steamcmdLogSecrets(spec.cmd, [steamcmdConfig.httpProxy, steamcmdConfig.httpsProxy])
   let logDirectory: string | undefined
+  let timeout: SteamcmdTimeout | undefined
   const pushLine = (line: string) => {
     logDirectory = steamcmdLogDirectory(line) ?? logDirectory
     const text = redactSteamcmdLogLine(line, secrets)
     if (!text) {
       return
     }
+    timeout?.observe(text)
     collected.push(text)
     spec.onLogLine?.(text)
   }
@@ -401,7 +407,6 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
   let exitCode = -1
   let timedOut = false
   let oomKilled: boolean | undefined
-  let timeout: ReturnType<typeof setTimeout> | undefined
   let started = false
   let taskFailed = false
   const isCancelled = () => Boolean(spec.signal?.aborted || (jobId && cancelledSteamcmdInstallKeys.has(jobId)))
@@ -414,13 +419,14 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
     if (!isCancelled()) {
       await abortable(container.start(), AbortSignal.any([execution.signal, AbortSignal.timeout(15_000)]))
       started = true
-      pushLine('SteamCMD 容器已启动')
-      if (isCancelled()) await safeKillContainer(container)
-      timeout = setTimeout(() => {
+      timeout = new SteamcmdTimeout(spec.timeoutMs, () => {
         timedOut = true
         execution.abort(new Error('SteamCMD 任务超时'))
         void safeKillContainer(container).catch(() => {})
-      }, spec.timeoutMs)
+      })
+      spec.onStarted?.()
+      pushLine('SteamCMD 容器已启动')
+      if (isCancelled()) await safeKillContainer(container)
       const waitPromise = container.wait().then(result => result.StatusCode ?? -1)
       const logsPromise = followContainerLogs(container, pushLine, text => collected.acceptChunk(text))
       try {
@@ -441,7 +447,7 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
     pushLine(`SteamCMD ${started ? '任务异常' : '容器启动失败'}: ${message}`)
   }
   finally {
-    clearTimeout(timeout)
+    timeout?.dispose()
     spec.signal?.removeEventListener('abort', cancel)
     try {
       if (started) {
@@ -454,7 +460,7 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
           pushLine('[SteamCMD 诊断] Docker OOM 状态未知，不能据退出码推断')
         }
         if (timedOut) {
-          pushLine(`${STEAMCMD_TIMEOUT_MARKER}: SteamCMD 任务超过 ${formatSteamcmdTimeoutForLog(spec.timeoutMs)} 上限，已终止容器；已下载内容保留，重试将断点续传`)
+          pushLine(formatSteamcmdTimeoutMessage(timeout?.expiredPhase ?? 'task', spec.timeoutMs, '容器'))
         }
         if (kind !== 'app-info' && (exitCode !== 0 || timedOut || oomKilled || taskFailed) && !isCancelled()) {
           await abortable(collectDockerSteamcmdDiagnostics(container, logDirectory, line => {
@@ -497,6 +503,7 @@ export async function runSteamcmdJob(spec: SteamcmdJobSpec): Promise<SteamcmdJob
     output,
     cancelled: wasCancelled,
     timedOut,
+    timeoutPhase: timeout?.expiredPhase,
     oomKilled,
   }
 }

@@ -1223,6 +1223,44 @@ describe('persistent download intent and truthful queue state', () => {
     assert.equal(listedMods[0]?.enabled, false)
   })
 
+  it('preserves cancelled updates and resumes them without accepting the old files as completed', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'cancelled-updates'
+    const ids = ['20', '21']
+    listedMods = ids.map(workshopId => createMockMod({ instanceId, workshopId, name: workshopId, enabled: false }))
+    listedMods.push(createMockMod({ instanceId, workshopId: '999', name: 'unrelated', enabled: true, installStatus: 'pending', downloadIntent: 'install' }))
+    ids.forEach(id => writeWorkshopMod(installPath, id))
+    setModDownloadExecutorForTest(async ({ onPreparingSteamcmd, onDownloadStart }) => {
+      onPreparingSteamcmd?.()
+      assert.equal(getModDownloadQueueSnapshot(instanceId)?.phase, 'preparing_steamcmd')
+      assert.equal(getModDownloadQueueSnapshot(instanceId)?.downloading, 0)
+      await onDownloadStart?.()
+      pauseModDownloadQueue(instanceId)
+      return { ok: false, cancelled: true }
+    })
+    await enqueueModDownloads({ instanceId, installPath, force: true, payloads: ids.map(workshopId => ({ workshopId })) })
+    await waitForModDownloadQueueIdle(instanceId)
+    const paused = await resolveModDownloadQueueState({ instanceId, installPath })
+    assert.equal(paused.status, 'paused')
+    assert.equal(paused.eligibleCount, 2)
+    assert.equal(paused.success, 0)
+    assert.equal(paused.failed, 0)
+    assert.ok(listedMods.filter(mod => ids.includes(mod.workshopId)).every(mod => mod.installStatus === 'pending' && mod.downloadIntent === 'update' && mod.retryCount === 0))
+    let calls = 0
+    setModDownloadExecutorForTest(async ({ workshopIds, force }) => {
+      calls += 1
+      assert.deepEqual(workshopIds, ids)
+      assert.equal(force, true)
+      return { ok: true }
+    })
+    await startModDownloadQueue({ instanceId, installPath, retryFailed: false })
+    await waitForModDownloadQueueIdle(instanceId)
+    assert.equal(calls, 1)
+    assert.ok(listedMods.filter(mod => ids.includes(mod.workshopId)).every(mod => mod.installStatus === 'ready' && mod.downloadIntent === null && !mod.enabled))
+    assert.equal(listedMods.find(mod => mod.workshopId === '999')?.installStatus, 'pending')
+  })
+
   it('restores a forced update and accepts only evidenced successes in a failed batch', async () => {
     installDbHooks()
     const installPath = createInstallPath()

@@ -187,10 +187,13 @@ export function formatSteamcmdAppUpdateFailureMessage(input: {
   }
 
   if (kind === 'timeout') {
+    if (/SteamCMD 自更新超过/.test(output)) {
+      return `SteamCMD 自更新超时，目标游戏更新尚未开始；未完成的自更新组件重试时可能重新下载。SteamCMD 输出：${failureSnippet}`
+    }
     return [
       `SteamCMD 安装 ${input.appId} 失败（下载超时）。`,
       '面板在单次 app_update 超过 BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS（默认 60 分钟）后终止了任务；',
-      '已下载内容保留在 steamapps/downloading，重新安装会断点续传。',
+      '已保留游戏下载缓存，重试时未完成内容可能重新下载。',
       '建议：在 panel.env 调大 BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS（毫秒，例如 7200000），',
       `SteamCMD 输出：${failureSnippet}`,
     ].join('')

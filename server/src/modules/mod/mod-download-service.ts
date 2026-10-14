@@ -629,6 +629,11 @@ async function runBatch(
             patchJobRecord(state.instanceId, workshopId, { phase: 'waiting_steamcmd' })
           }
         },
+        onPreparingSteamcmd: () => {
+          for (const workshopId of toDownload) {
+            patchJobRecord(state.instanceId, workshopId, { phase: 'preparing_steamcmd' })
+          }
+        },
         onDownloadStart: () => {
           for (const workshopId of toDownload) {
             patchJobRecord(state.instanceId, workshopId, { phase: 'downloading' })
@@ -663,6 +668,9 @@ async function runBatch(
       }
     }
     const contentReady = new Set(contentReadyIds)
+    if (cancelled) {
+      state.head = mergeQueueItems(items.filter(item => !contentReady.has(item.workshopId)), state.head)
+    }
 
     const now = Date.now()
     const succeeded: string[] = []
@@ -1029,6 +1037,20 @@ export async function startModDownloadQueue(input: {
     return toQueueDto(existing)
   }
 
+  if (existing?.status === 'paused' && !input.head && input.includeBackfill === undefined) {
+    existing.pauseRequested = false
+    existing.cancelRequested = false
+    existing.status = 'running'
+    existing.retryFailed = input.retryFailed === true
+    existing.success = 0
+    existing.failed = 0
+    existing.lastError = null
+    existing.nextBatchAt = null
+    existing.updatedAt = new Date().toISOString()
+    launchQueueWorker(existing)
+    return toQueueDto(existing)
+  }
+
   const batchSize = resolveModDownloadBatchSize()
   const head = input.head ? mergeQueueItems([], input.head) : []
   const state: InstanceQueueState = {
@@ -1124,7 +1146,7 @@ export async function resolveModDownloadQueueState(input: {
   const mods = await listInstanceModsFn(instanceId)
   const state = queueStates.get(instanceId)
   const plan = await buildBackfillPlan({ ...input, mods, now: Date.now(),
-    rootIds: state?.runPromise && !state.includeBackfill ? state.requestedIds : undefined })
+    rootIds: state && (state.runPromise || state.status === 'paused') && !state.includeBackfill ? state.requestedIds : undefined })
   if (state) {
     state.mods = mods
     state.eligibleIds = plan.eligibleIds

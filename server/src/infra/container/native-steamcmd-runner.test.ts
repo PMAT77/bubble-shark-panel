@@ -5,9 +5,11 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { after, afterEach, beforeEach, it } from 'node:test'
-import { runNativeSteamcmdJob, cancelNativeSteamcmdJob, runSteamcmdWorkshopDownloadNative } from './native-steamcmd-runner'
+import { runNativeSteamcmdJob, cancelNativeSteamcmdJob, runSteamcmdWorkshopDownloadNative, runSteamcmdAppInfoNative } from './native-steamcmd-runner'
+import { withSteamcmdAppUpdateLock, isSteamcmdAppUpdateQueued } from './steamcmd-app-update-queue'
 import { parsePublicBuildIdFromAppInfo } from '../../shared/steam-update/app-info'
 import { registerNativeSteamcmdProcess, cancelRecordedNativeSteamcmdProcess } from './native-steamcmd-process'
+import { abortable } from '../../shared/abort'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-steamcmd-query-'))
 const previousPath = process.env.BSP_NATIVE_STEAMCMD_PATH
@@ -107,7 +109,7 @@ it('honors a cancellation before spawn and during the workshop start callback', 
   process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
   const workshop = await runSteamcmdWorkshopDownloadNative({
     hostInstallPath: root, workshopIds: ['123'], cancelKey: 'workshop-before-spawn',
-    onDownloadStart: () => cancelNativeSteamcmdJob('workshop-before-spawn'),
+    onPreparingSteamcmd: () => { void cancelNativeSteamcmdJob('workshop-before-spawn') },
   })
   assert.equal(workshop.cancelled, true)
 })
@@ -156,6 +158,71 @@ it('cleans a recorded Linux process after losing the in-memory task, without kil
   await closed
   assert.throws(() => process.kill(child.pid!, 0))
   forget()
+})
+
+it('allows bootstrap to exceed the task timeout and reports preparation after spawning', async () => {
+  let prepared = false
+  const result = await run(`
+    console.log('Checking for available updates...');
+    setTimeout(() => {
+      console.log('Steam Console Client (c) Valve Corporation');
+      setTimeout(() => console.log('Success!'), 100);
+    }, 600);
+  `, 500, { kind: 'app-update', onStarted: () => { prepared = true } })
+  assert.equal(prepared, true)
+  assert.equal(result.ok, true)
+  assert.equal(result.timedOut, false)
+})
+
+it('cancels native jobs during preparation and Workshop downloading without retaining timers', async () => {
+  for (const line of ['Checking for available updates...', 'Downloading item 123 ...']) {
+    const key = `cancel-stage-${line[0]}`
+    const result = await run(`console.log(${JSON.stringify(line)}); setInterval(() => {}, 1000)`, 1000, {
+      kind: 'app-update', cancelKey: key,
+      onLogLine: value => { if (value === line) void cancelNativeSteamcmdJob(key) },
+    })
+    assert.equal(result.cancelled, true)
+    assert.equal(result.timedOut, false)
+    assert.equal(result.timeoutPhase, undefined)
+  }
+})
+
+it('serializes Native version queries behind an active SteamCMD job', async () => {
+  process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
+  let release!: () => void
+  const hold = withSteamcmdAppUpdateLock('install-fixture', () => new Promise<void>(resolve => { release = resolve }))
+  await new Promise(resolve => setImmediate(resolve))
+  const query = runSteamcmdAppInfoNative('343050')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(isSteamcmdAppUpdateQueued(), true)
+  release()
+  await Promise.all([hold, query])
+  assert.equal(isSteamcmdAppUpdateQueued(), false)
+})
+
+it('pauses a queued Native Mod job immediately and keeps its resumed job behind the active lock', async () => {
+  process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
+  let release!: () => void
+  const active = withSteamcmdAppUpdateLock('active-version-query', () => new Promise<void>(resolve => { release = resolve }))
+  await new Promise(resolve => setImmediate(resolve))
+  const input = { hostInstallPath: root, workshopIds: ['123'], cancelKey: 'queued-native-mod' }
+  try {
+    const pending = runSteamcmdWorkshopDownloadNative(input)
+    await cancelNativeSteamcmdJob(input.cancelKey)
+    const stopped = await abortable(pending, AbortSignal.timeout(1000))
+    assert.equal(stopped.cancelled, true)
+    let prepared = false
+    const resumed = runSteamcmdWorkshopDownloadNative({ ...input, onPreparingSteamcmd: () => {
+      prepared = true
+      void cancelNativeSteamcmdJob(input.cancelKey)
+    } })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(prepared, false)
+    release()
+    assert.equal((await resumed).cancelled, true)
+    assert.equal(prepared, true, 'the queued cancellation flag must not discard the resumed job')
+  }
+  finally { release(); await active }
 })
 
 it('emits native carriage-return progress before the process exits, including split CRLF', async () => {

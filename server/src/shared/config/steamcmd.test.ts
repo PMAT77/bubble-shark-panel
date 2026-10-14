@@ -5,6 +5,7 @@ import {
   loadSteamcmdRuntimeConfig,
   formatSteamcmdDownloadRegionForLog,
   resolveSteamcmdAppUpdateTimeoutMs,
+  resolveSteamcmdWorkshopDownloadTimeoutMs,
   resolveSteamcmdInstallMaxAttempts,
   resolveSteamcmdInstallRetryDelaysMs,
 } from './steamcmd.ts'
@@ -19,6 +20,7 @@ const ENV_KEYS = [
   'BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS',
   'BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS',
   'BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS',
+  'BSP_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS',
 ] as const
 
 function clearSteamcmdEnv() {
@@ -55,6 +57,14 @@ describe('loadSteamcmdRuntimeConfig', () => {
     assert.equal(resolveSteamcmdAppUpdateTimeoutMs(), 7200000)
     process.env.BSP_STEAMCMD_APP_UPDATE_TIMEOUT_MS = 'abc'
     assert.equal(resolveSteamcmdAppUpdateTimeoutMs(), 60 * 60 * 1000)
+  })
+
+  it('shares the Workshop budget and its existing environment override', () => {
+    assert.equal(resolveSteamcmdWorkshopDownloadTimeoutMs(), 600_000)
+    process.env.BSP_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS = '1200000'
+    assert.equal(resolveSteamcmdWorkshopDownloadTimeoutMs(), 1_200_000)
+    process.env.BSP_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS = 'invalid'
+    assert.equal(resolveSteamcmdWorkshopDownloadTimeoutMs(), 600_000)
   })
 
   it('builds proxy env for SteamCMD container', () => {

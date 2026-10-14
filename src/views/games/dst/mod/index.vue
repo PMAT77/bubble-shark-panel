@@ -13,7 +13,7 @@ import type {
 } from '@/api/modules/mod'
 import type { InstanceSummaryItem } from '@/api/modules/instance'
 import { useDebounceFn } from '@vueuse/core'
-import { ChevronRight, GripVertical } from 'lucide-vue-next'
+import { GripVertical } from 'lucide-vue-next'
 import { useSortable } from '@vueuse/integrations/useSortable'
 import type { SortableEvent } from 'sortablejs'
 import { moveModLoadOrder } from './modLoadOrder'
@@ -30,7 +30,7 @@ import { useInstanceModState } from '@/composables/useInstanceModState'
 import ModConfigModal from '@/views/games/dst/mod/components/ModConfigModal.vue'
 import LocalModImportModal from '@/views/games/dst/mod/components/LocalModImportModal.vue'
 import ModAccessStatusPanel from '@/views/games/dst/mod/components/ModAccessStatusPanel.vue'
-import { resolveModDownloadDetails } from '@/views/games/dst/mod/modDownloadPresentation'
+import { resolveModDownloadAction } from '@/views/games/dst/mod/modDownloadPresentation'
 import { resolveModUpdateCheckNotice } from '@/views/games/dst/mod/modUpdateCheckPresentation'
 import { countOutdatedMods, resolveUpdateIneffectiveNotice, selectUpdatableMods } from '@/views/games/dst/mod/modUpdateTargets'
 import { routeToDstModDetail, routeToNodeInstance } from '@/navigation/game-routes'
@@ -113,8 +113,6 @@ watch(selectedInstanceId, () => {
   checkingUpdates.value = false
   reorderingMods.value = false
 }, { flush: 'sync' })
-const queueDetailsOpen = ref(false)
-watch(selectedInstanceId, () => { queueDetailsOpen.value = false })
 const {
   downloadingMods,
   downloadQueue,
@@ -423,7 +421,7 @@ function marketStatusType(row: SteamModListQueryResultItem): 'default' | 'succes
 
 function pendingDownloadLabel(workshopId: string): string {
   const phase = downloadQueue.value?.items.find(item => item.workshopId === workshopId)?.phase
-  return phase === 'downloading' ? '下载中' : phase === 'waiting_steamcmd' ? '等待其他任务' : phase === 'retry_wait' ? '等待重试' : phase === 'queued' ? '等待下载' : '待下载'
+  return phase === 'downloading' ? '下载中' : phase === 'preparing_steamcmd' ? '准备下载环境' : phase === 'waiting_steamcmd' ? '等待其他任务' : phase === 'retry_wait' ? '等待重试' : phase === 'queued' ? '等待下载' : '待下载'
 }
 
 function modUpdateLabel(mod: ModItemDto): string {
@@ -1298,37 +1296,7 @@ async function retryAllFailedMods() {
   }
 }
 
-/**
- * 下载队列横幅：一个实例只有一条队列，进度与「开始/暂停/取消」都汇总在这里。
- * 迁移包导入后不会自动下载，所以这条横幅也是用户唯一的入口。
- */
-const queuePanel = computed(() => {
-  const queue = downloadQueue.value
-  if (!queue) return null
-  const controls = { showStart: false, showPause: false, showCancel: false }
-  if (queue.status === 'pausing') return { ...controls, text: queue.phase === 'downloading' ? '当前下载完成后暂停' : '正在暂停下载' }
-  if (queue.status === 'running') {
-    const text = queue.phase === 'waiting_steamcmd' ? '正在等待其他安装或下载任务完成'
-      : queue.phase === 'retry_wait' ? '部分 Mod 下载失败，稍后自动重试（' + formatQueueEta(queue.nextBatchAt ?? '') + '）'
-      : '正在下载：成功 ' + queue.success + ' · 失败 ' + queue.failed + ' · 剩余 ' + queue.eligibleCount
-    return { ...controls, text, showPause: true, showCancel: true }
-  }
-  if (queue.eligibleCount > 0) return { ...controls, showStart: true, text: queue.status === 'paused'
-    ? '下载已暂停，还有 ' + queue.eligibleCount + ' 个 Mod 未准备好' : '需要下载 ' + queue.eligibleCount + ' 个 Mod' }
-  if (queue.lastError) return { ...controls, text: '下载已暂停：' + queue.lastError }
-  if (queue.success || queue.failed) return { ...controls, text: '下载已结束：成功 ' + queue.success + ' · 失败 ' + queue.failed }
-  return null
-})
-const queueDetails = computed(() => resolveModDownloadDetails(downloadQueue.value))
-
-function formatQueueEta(iso: string): string {
-  const at = Date.parse(iso)
-  if (!Number.isFinite(at)) {
-    return '即将重试'
-  }
-  const seconds = Math.max(0, Math.round((at - Date.now()) / 1000))
-  return seconds > 0 ? `${seconds} 秒后重试` : '即将重试'
-}
+const queueControl = computed(() => resolveModDownloadAction(downloadQueue.value))
 
 let queueWasRunning = false
 let lastIneffectiveNoticeAt = 0
@@ -1359,8 +1327,8 @@ function handleQueueChange(queue: ModDownloadQueueDto) {
 
 const queueActionPending = ref(false)
 
-/** 队列操作：开始/继续、暂停（批次边界生效）、取消当前批次 */
-async function runQueueAction(queueAction: 'start' | 'pause' | 'cancel') {
+/** 暂停使用中止当前批次的接口，保留未完成项，避免等待整批下载超时。 */
+async function runQueueAction(queueAction: 'start' | 'pause') {
   const action = actionScope.capture()
   if (!selectedInstanceId.value || queueActionPending.value) {
     return
@@ -1371,13 +1339,10 @@ async function runQueueAction(queueAction: 'start' | 'pause' | 'cancel') {
       await apiMod.startModDownloadQueue(action.instanceId, { retryFailed: false })
       if (!action.isCurrent()) return
     }
-    else if (queueAction === 'pause') {
-      await apiMod.pauseModDownloadQueue(action.instanceId)
-      if (!action.isCurrent()) return
-    }
     else {
-      await apiMod.cancelModDownloadQueue(action.instanceId)
+      const response = await apiMod.cancelModDownloadQueue(action.instanceId)
       if (!action.isCurrent()) return
+      downloadQueue.value = response.data
     }
     await refreshQueue()
     if (!action.isCurrent()) return
@@ -1385,10 +1350,7 @@ async function runQueueAction(queueAction: 'start' | 'pause' | 'cancel') {
       message.success('已开始下载 Mod')
     }
     else if (queueAction === 'pause') {
-      message.info(downloadQueue.value?.status === 'paused' ? '下载已暂停' : '当前下载完成后暂停')
-    }
-    else {
-      message.warning('已取消当前批次，未完成的 Mod 仍可继续下载')
+      message.info(downloadQueue.value?.status === 'paused' ? '下载已暂停，可恢复下载' : '正在暂停下载，未完成项会保留')
     }
   }
   catch (error: unknown) {
@@ -2173,7 +2135,7 @@ onMounted(async () => {
               </template>
               <div class="flex h-full min-h-0 flex-col overflow-y-auto">
                 <div class="flex shrink-0 flex-wrap items-center gap-3 pb-2">
-                  <template v-if="!isMobileMode">
+                  <div class="flex flex-wrap items-center gap-2">
                     <NButton
                       size="small"
                       :loading="checkingUpdates"
@@ -2203,6 +2165,18 @@ onMounted(async () => {
                       更新选中 ({{ selectedUpdatableMods.length }})
                     </NButton>
                     <NButton
+                      v-if="queueControl && hasPermission('mod:install')"
+                      size="small"
+                      :type="queueControl.action === 'start' ? 'primary' : 'default'"
+                      secondary
+                      :loading="queueActionPending || queueControl.disabled"
+                      :disabled="queueActionPending || queueControl.disabled"
+                      :aria-label="queueControl.label"
+                      @click="runQueueAction(queueControl.action)"
+                    >
+                      {{ queueControl.label }}
+                    </NButton>
+                    <NButton
                       v-if="((downloadQueue?.retryableFailedCount ?? 0) > 0) && hasPermission('mod:install')"
                       size="small"
                       type="warning"
@@ -2216,7 +2190,7 @@ onMounted(async () => {
                       共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · {{ pendingStatusLabel }} {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
                       <template v-if="lastUpdateCheckedAt"> · 上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</template>
                     </span>
-                  </template>
+                  </div>
                   <div class="flex shrink-0 gap-2" :class="{ 'ml-auto': !isMobileMode }">
                     <NButton v-if="hasPermission('mod:install')" size="small" :disabled="!selectedInstanceId" @click="localImportShow = true">
                       从本地导入
@@ -2235,55 +2209,6 @@ onMounted(async () => {
                 >
                   {{ modCheckHint }}
                 </NAlert>
-                <div
-                  v-if="queuePanel"
-                  class="mb-2 shrink-0 rounded-md border px-3 py-2 text-xs"
-                >
-                  <div class="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      class="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-                      :aria-expanded="queueDetailsOpen"
-                      aria-controls="mod-download-details"
-                      :aria-label="`下载详情：${queuePanel.text}`"
-                      @click="queueDetailsOpen = !queueDetailsOpen"
-                    >
-                      <ChevronRight class="size-4 shrink-0" :class="{ 'rotate-90': queueDetailsOpen }" aria-hidden="true" />
-                      <span>{{ queuePanel.text }}</span>
-                    </button>
-                    <NButton
-                      v-if="queuePanel.showStart && hasPermission('mod:install')"
-                      size="tiny"
-                      type="primary"
-                      :loading="queueActionPending"
-                      @click="runQueueAction('start')"
-                    >
-                      {{ downloadQueue?.status === 'paused' ? '继续下载' : '开始下载' }}
-                    </NButton>
-                    <NButton
-                      v-if="queuePanel.showPause && hasPermission('mod:install')"
-                      size="tiny"
-                      secondary
-                      :loading="queueActionPending"
-                      @click="runQueueAction('pause')"
-                    >
-                      暂停
-                    </NButton>
-                    <NButton
-                      v-if="queuePanel.showCancel && hasPermission('mod:install')"
-                      size="tiny"
-                      type="warning"
-                      secondary
-                      :loading="queueActionPending"
-                      @click="runQueueAction('cancel')"
-                    >
-                      取消当前批次
-                    </NButton>
-                  </div>
-                  <div id="mod-download-details" v-show="queueDetailsOpen" class="mt-2 space-y-1 border-t pt-2 text-muted-foreground">
-                    <p v-for="detail in queueDetails" :key="detail">{{ detail }}</p>
-                  </div>
-                </div>
                 <NAlert v-if="downloadQueue?.warnings.length" class="mb-2 shrink-0" type="warning" :bordered="false" :show-icon="false">
                   <p v-for="warning in downloadQueue.warnings" :key="warning">{{ warning }}</p>
                 </NAlert>
@@ -2313,40 +2238,6 @@ onMounted(async () => {
                   </template>
                 </NDataTable>
                 <div v-else class="dst-mod-subscribed-list shrink-0 flex-1 space-y-3 overflow-y-auto pr-1" :aria-busy="loadingInstalled">
-                  <div class="flex flex-wrap gap-2">
-                    <NButton
-                      size="small"
-                      :loading="checkingUpdates"
-                      :disabled="!hasSelectedInstance || installedMods.length === 0"
-                      @click="checkModUpdates"
-                    >
-                      检查更新
-                    </NButton>
-                    <NButton
-                      v-if="(updatableMods.length > 0) && hasPermission('mod:install')"
-                      size="small"
-                      type="primary"
-                      secondary
-                      :loading="batchUpdating"
-                      @click="updateAllOutdatedMods"
-                    >
-                      全部更新 ({{ updatableMods.length }})
-                    </NButton>
-                    <NButton
-                      v-if="((downloadQueue?.retryableFailedCount ?? 0) > 0) && hasPermission('mod:install')"
-                      size="small"
-                      type="warning"
-                      secondary
-                      :loading="retryingFailedMods"
-                      @click="retryAllFailedMods"
-                    >
-                      重试全部失败 ({{ downloadQueue?.retryableFailedCount ?? 0 }})
-                    </NButton>
-                  </div>
-                  <p class="text-xs text-muted-foreground">
-                    共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · {{ pendingStatusLabel }} {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
-                    <template v-if="lastUpdateCheckedAt"> · 上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</template>
-                  </p>
                   <NEmpty v-if="!loadingInstalled && installedMods.length === 0" size="small" :description="subscribedEmptyDescription" />
                   <div ref="subscribedCardsRef" class="space-y-3">
                   <article

@@ -1,23 +1,9 @@
-import { readBrandEnv } from '../../../../../shared/brand-env'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runSteamcmdWorkshopDownloadInContainer } from '../../container/steamcmd-runner'
 import { resolveDstSteamWorkshopModDir } from './constants'
 import { resolveDstLegacyModDir, resolveDstUgcModDir } from './ugc-mod-install'
-
-const DEFAULT_WORKSHOP_DOWNLOAD_TIMEOUT_MS = readPositiveIntEnv('BSP_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS', 10 * 60 * 1000)
-
-function readPositiveIntEnv(key: string, fallback: number): number {
-  const rawValue = readBrandEnv(key)
-  if (!rawValue) {
-    return fallback
-  }
-  const parsed = Number.parseInt(rawValue, 10)
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return fallback
-  }
-  return parsed
-}
+import type { SteamcmdTimeoutPhase } from '../../container/steamcmd-timeout'
 
 function normalizeWorkshopIds(workshopIds: string[]): string[] {
   const unique = new Set<string>()
@@ -105,13 +91,15 @@ export function resolveWorkshopDownloadIds(
   return options?.force ? requestedIds : collectMissingWorkshopIds(installPath, requestedIds)
 }
 
-export function formatModDownloadFailureMessage(output: string): string {
+export function formatModDownloadFailureMessage(output: string, timeoutPhase?: SteamcmdTimeoutPhase): string {
   const text = output.trim()
+  const technical = timeoutPhase && text ? `\n${text.slice(-2000)}` : ''
+  if (timeoutPhase === 'bootstrap') return `SteamCMD 自更新超时，尚未开始下载 Mod；未完成的自更新组件重试时可能重新下载${technical}`
   if (!text) {
     return 'Mod 下载失败，请检查 Steam 网络连接后重试'
   }
   if (/timed out|timeout|ETIMEDOUT/i.test(text)) {
-    return 'Mod 下载超时，请检查 Steam 网络连接后重试'
+    return `Mod 下载超时，请检查 Steam 网络连接后重试${technical}`
   }
   if (/Access Denied|No subscription|Invalid item/i.test(text)) {
     return '无法下载该 Mod，请确认创意工坊 ID 有效且为公开 Mod'
@@ -156,7 +144,8 @@ export async function downloadDstWorkshopMods(input: {
   force?: boolean
   onLogLine?: (line: string) => void
   onAwaitingSteamcmdLock?: () => void | Promise<void>
-  onDownloadStart?: () => void | Promise<void>
+  onDownloadStart?: () => void
+  onPreparingSteamcmd?: () => void
   /**
    * SteamCMD 任务的取消键。队列传 `modq-<instanceId>`，与实例安装（`<instanceId>`）
    * 分开：两类任务共用同一个键时，取消 Mod 下载会连带杀掉正在跑的游戏安装。
@@ -171,9 +160,15 @@ export async function downloadDstWorkshopMods(input: {
   }
 
   const confirmedIds = new Set<string>()
+  let downloadStarted = false
   const observe = (line: string) => {
-    const id = /Success\.\s+Downloaded item\s+(\d+)\b/i.exec(line)?.[1]
+    const id = /^Success\.\s+Downloaded item\s+(\d+)\b/i.exec(line.trim())?.[1]
     if (id) confirmedIds.add(id)
+    const downloadingId = /^(?:Downloading item|Success\.\s+Downloaded item)\s+(\d+)\b/i.exec(line.trim())?.[1]
+    if (!downloadStarted && downloadingId && missingIds.includes(downloadingId)) {
+      downloadStarted = true
+      input.onDownloadStart?.()
+    }
     input.onLogLine?.(line)
   }
   const result = await runSteamcmdWorkshopDownloadInContainer({
@@ -182,8 +177,7 @@ export async function downloadDstWorkshopMods(input: {
     cancelKey: input.cancelKey?.trim() || input.instanceId,
     onLogLine: observe,
     onAwaitingSteamcmdLock: input.onAwaitingSteamcmdLock,
-    onDownloadStart: input.onDownloadStart,
-    timeoutMs: DEFAULT_WORKSHOP_DOWNLOAD_TIMEOUT_MS,
+    onPreparingSteamcmd: input.onPreparingSteamcmd,
   })
   for (const line of result.output.split(/\r?\n/)) observe(line)
   const items = missingIds.map(workshopId => ({ workshopId, ok: confirmedIds.has(workshopId) && isDstWorkshopModPresent(input.hostInstallPath, workshopId) }))
@@ -193,7 +187,7 @@ export async function downloadDstWorkshopMods(input: {
       ok: false,
       error: result.cancelled
         ? '下载已取消'
-        : formatModDownloadFailureMessage(result.output),
+        : formatModDownloadFailureMessage(result.output, result.timeoutPhase),
       cancelled: result.cancelled === true,
       items,
     }
@@ -216,6 +210,11 @@ export async function downloadDstWorkshopMods(input: {
       error: formatMissingWorkshopModError(input.hostInstallPath, stillMissing),
       items,
     }
+  }
+
+  const unconfirmed = missingIds.filter(workshopId => !confirmedIds.has(workshopId))
+  if (unconfirmed.length > 0) {
+    return { ok: false, error: `Mod 下载未完成：SteamCMD 未确认以下 Mod 下载成功：${unconfirmed.join('、')}`, items }
   }
 
   return { ok: true, items: missingIds.map(workshopId => ({ workshopId, ok: true })) }

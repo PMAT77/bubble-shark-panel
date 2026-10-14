@@ -9,6 +9,9 @@ import {
   clearSteamcmdJobCancelFlag,
 } from './steamcmd-job.ts'
 import { classifySteamcmdInstallFailure } from './steamcmd-errors'
+import { runSteamcmdWorkshopDownloadInContainer } from './steamcmd-runner'
+import { withSteamcmdAppUpdateLock } from './steamcmd-app-update-queue'
+import { abortable } from '../../shared/abort'
 
 const previousProxy = process.env.BSP_STEAMCMD_HTTPS_PROXY
 afterEach(() => {
@@ -141,9 +144,66 @@ it('collects timeout diagnostics without classifying the kill as OOM', async () 
   const fake = fakeDocker({ timeout: true })
   const result = await runSteamcmdJob({ ...spec, timeoutMs: 20 })
   assert.equal(result.timedOut, true)
+  assert.equal(result.timeoutPhase, 'task')
   assert.equal(result.oomKilled, false)
   assert.equal(classifySteamcmdInstallFailure(result.output), 'timeout')
   assert.ok(fake.events.indexOf('archive') < fake.events.indexOf('remove'))
+})
+
+it('cancels Docker jobs during preparation and Workshop downloading and confirms cleanup', async () => {
+  for (const line of ['Checking for available updates...', 'Downloading item 123 ...']) {
+    const fake = fakeDocker({ timeout: true, text: line + '\n' })
+    const result = await runSteamcmdJob({ ...spec, onLogLine: value => {
+      if (value === line) void cancelSteamcmdInstallContainer(spec.jobId)
+    } })
+    assert.equal(result.cancelled, true)
+    assert.equal(result.timedOut, false)
+    assert.equal(result.timeoutPhase, undefined)
+    assert.ok(fake.events.includes('kill'))
+    assert.ok(fake.events.includes('remove'))
+    mock.restoreAll()
+  }
+})
+
+it('uses the shared bootstrap budget and calls preparation only after container start', async () => {
+  const fake = fakeDocker({ code: 0, text: 'Checking for available updates...\nSteam Console Client (c) Valve Corporation\nSuccess!\n' })
+  const result = await runSteamcmdJob({ ...spec, onStarted: () => {
+    assert.equal(fake.events.at(-1), 'start')
+    fake.events.push('prepared')
+  } })
+  assert.equal(result.ok, true)
+  assert.ok(fake.events.includes('prepared'))
+})
+
+it('pauses a queued Docker Mod job immediately and resumes only after the active lock is released', async () => {
+  const previousMode = process.env.BSP_RUNTIME_MODE
+  const previousCooldown = process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS
+  process.env.BSP_RUNTIME_MODE = 'docker'
+  process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
+  const fake = fakeDocker({ code: 0, text: 'Success! Downloaded item 123\n' })
+  let release!: () => void
+  const active = withSteamcmdAppUpdateLock('active-docker-job', () => new Promise<void>(resolve => { release = resolve }))
+  await new Promise(resolve => setImmediate(resolve))
+  const input = { hostInstallPath: '/tmp/bsp-queued-mod-fixture', workshopIds: ['123'], cancelKey: spec.jobId }
+  try {
+    const pending = runSteamcmdWorkshopDownloadInContainer(input)
+    await cancelSteamcmdInstallContainer(input.cancelKey)
+    assert.equal((await abortable(pending, AbortSignal.timeout(1000))).cancelled, true)
+    assert.equal(fake.events.includes('create'), false)
+    const resumed = runSteamcmdWorkshopDownloadInContainer(input)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(fake.events.includes('create'), false)
+    release()
+    assert.equal((await resumed).ok, true)
+    assert.equal(fake.events.includes('start'), true)
+  }
+  finally {
+    release(); await active
+    if (previousMode === undefined) delete process.env.BSP_RUNTIME_MODE
+    else process.env.BSP_RUNTIME_MODE = previousMode
+    if (previousCooldown === undefined) delete process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS
+    else process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = previousCooldown
+  }
 })
 
 it('cleans stopped managed containers on panel startup', async () => {

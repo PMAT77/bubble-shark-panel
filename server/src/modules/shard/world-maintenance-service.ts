@@ -72,6 +72,12 @@ async function preflight(instance: ResolvedLocalDstInstance, op: MaintenanceChec
 async function verify(instance: ResolvedLocalDstInstance, op: MaintenanceCheckpoint): Promise<void> {
   update(instance, op, { phase: 'verifying', canContinue: false })
   while (Date.now() < Date.parse(op.deadlineAt!)) {
+    const current = await maintenanceDependencies.getInstance(instance.id)
+    const startup = current?.lastStartupReport
+    if (startup && Date.parse(startup.startedAt) >= Date.parse(op.startedAt)) {
+      if (startup.status === 'cancelled' && current?.status === 'stopped') throw new Error('世界维护期间启动已取消，实例已停止，结果未确认；可启动后重新核验，不会自动重发命令')
+      if (startup.status === 'failed') throw new Error(`世界维护期间启动失败：${startup.diagnosis?.message ?? '请检查分片启动结果'}；结果未确认，不会自动重发命令`)
+    }
     const configured = configuredWorldShards(instance.installPath)
     const worlds = await maintenanceDependencies.query(instance.id, configured)
     const ready = configured.every(shard => worlds[shard]?.ready && worlds[shard]?.remoteConnected && worlds[shard]?.sessionId)

@@ -84,7 +84,7 @@ export default {
    * 且只要求调用方有自己模块的读权限点（`mod:read` / `backup:read` / `schedule:read` /
    * `member:read` / `instance:read` 任一），所以这些页面的菜单不必依赖「查看实例」。
    */
-  getInstanceOptions: (data?: InstanceListQuery) => api.post('app/instance/options', data) as Promise<{ data: InstanceSummaryItem[] }>,
+  getInstanceOptions: (data?: InstanceListQuery, options?: { signal?: AbortSignal }) => api.post('app/instance/options', data, options) as Promise<{ data: InstanceSummaryItem[] }>,
   getInstanceStatusCounts: (data?: InstanceStatusCountsQuery) => api.post('app/instance/status-counts', data) as Promise<{ data: InstanceStatusCounts }>,
   getInstanceMetrics: (ids?: string[], options?: { signal?: AbortSignal }) => api.post('app/instance/metrics', ids?.length ? { ids } : {}, options) as Promise<{ data: InstanceMetricsPayload }>,
   getInstallableGames: () => api.get('app/instance/games') as Promise<{ data: InstallableGameItem[] }>,

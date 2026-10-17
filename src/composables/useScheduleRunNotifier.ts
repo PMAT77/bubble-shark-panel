@@ -1,14 +1,16 @@
 import type { InstanceSummaryItem } from '@/api/modules/instance'
 import type { ScheduleRunBaseline, ScheduleTriggerNotice } from '@/views/ops/schedules/scheduleRunNotification'
 import { useNotification } from 'naive-ui'
+import { h, onMounted, ref, watch } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiSchedule from '@/api/modules/schedule'
 import { collectScheduleTriggerNotices, defaultScheduleTargetName } from '@/views/ops/schedules/scheduleRunNotification'
 import { FRONTEND_ROUTE_PATHS } from '../../shared/constants/frontend-routes'
+import { usePollingTask } from './usePollingTask'
 
-/** 轮询间隔：触发通知的最大延迟；计划任务列表查询很轻，10s 足够及时又不打扰 */
-const POLL_INTERVAL_MS = 10_000
-/** 连续失败（如当前账号没有 ops:read 权限）达到该次数后停止本会话轮询 */
+/** 可见标签页每 30 秒查询一次，隐藏期间暂停，返回时立即查询。 */
+const POLL_INTERVAL_MS = 30_000
+/** 连续失败达到该次数后停止，重新挂载或恢复权限时可重启。 */
 const MAX_CONSECUTIVE_FAILURES = 5
 
 /** taskId → 上次已知的 lastRunAt；用「触发时刻变化」识别一次新的触发 */
@@ -28,7 +30,7 @@ function resolveTargetName(instanceId: string): string {
   return instanceNames.get(instanceId) ?? defaultScheduleTargetName(instanceId)
 }
 
-async function loadInstanceNamesOnce(): Promise<void> {
+async function loadInstanceNamesOnce(signal: AbortSignal): Promise<void> {
   if (instanceNamesLoaded) {
     return
   }
@@ -36,7 +38,8 @@ async function loadInstanceNamesOnce(): Promise<void> {
    * 只要 id → 名称（通知里把任务目标写成实例名），走标识接口即可：
    * 它对 `schedule:read` 也放行，所以只有计划任务权限的账号不会在这一步吃 403。
    */
-  const response = await apiInstance.getInstanceOptions()
+  const response = await apiInstance.getInstanceOptions(undefined, { signal })
+  signal.throwIfAborted()
   for (const item of (response.data ?? []) as InstanceSummaryItem[]) {
     instanceNames.set(item.id, item.name)
   }
@@ -50,19 +53,10 @@ async function loadInstanceNamesOnce(): Promise<void> {
 export function useScheduleRunNotifier(): void {
   const notification = useNotification()
   const router = useRouter()
+  const { auth: hasPermission } = useAppAuth()
 
-  let timer: number | undefined
-  let stopped = false
-  let inFlight = false
+  const mounted = ref(false)
   let failures = 0
-
-  function stopPolling(): void {
-    stopped = true
-    if (timer !== undefined) {
-      window.clearTimeout(timer)
-      timer = undefined
-    }
-  }
 
   function showNotice(notice: ScheduleTriggerNotice): void {
     // 带上 taskId：计划任务列表据此滚动并高亮对应的那条任务
@@ -103,16 +97,14 @@ export function useScheduleRunNotifier(): void {
     }
   }
 
-  async function poll(): Promise<void> {
-    if (inFlight || stopped) {
-      return
-    }
-    inFlight = true
+  const poller = usePollingTask(async (signal) => {
     try {
-      const response = await apiSchedule.getScheduleList()
-      failures = 0
+      const response = await apiSchedule.getScheduleList(undefined, { signal })
+      signal.throwIfAborted()
       // 实例名只解析一次；失败不影响通知本身（回退显示实例 id）
-      await loadInstanceNamesOnce().catch(() => undefined)
+      await loadInstanceNamesOnce(signal).catch(() => undefined)
+      signal.throwIfAborted()
+      failures = 0
       const result = collectScheduleTriggerNotices(baseline, response.data ?? [], resolveTargetName)
       baseline = result.baseline
       for (const notice of result.notices) {
@@ -122,25 +114,23 @@ export function useScheduleRunNotifier(): void {
         }
       }
     }
-    catch {
+    catch (error) {
+      if (signal.aborted) return
       failures += 1
       if (failures >= MAX_CONSECUTIVE_FAILURES) {
-        stopPolling()
+        poller.stop()
       }
+      throw error
     }
-    finally {
-      inFlight = false
-      if (!stopped) {
-        timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS)
-      }
-    }
-  }
+  }, { intervalMs: POLL_INTERVAL_MS, pauseWhenHidden: true })
+
+  watch(() => mounted.value && hasPermission('schedule:read'), (allowed) => {
+    failures = 0
+    if (allowed) poller.start()
+    else poller.stop()
+  }, { flush: 'sync' })
 
   onMounted(() => {
-    void poll()
-  })
-
-  onBeforeUnmount(() => {
-    stopPolling()
+    mounted.value = true
   })
 }

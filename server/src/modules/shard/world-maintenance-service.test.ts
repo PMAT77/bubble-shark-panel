@@ -13,6 +13,7 @@ import { maintenanceRecords, resetMaintenanceStoreForTest, generationSeedGuard }
 import { resolveShardSaveDir } from '../../infra/game-adapter/dst/shard-layout'
 import { listShardSnapshots } from '../../infra/game-adapter/dst/world-maintenance'
 import { readWorldSeeds, writeObservedWorldSeed, markObservedWorldSeedStale, readObservedWorldSeed } from '../../infra/game-adapter/dst/panel-config-meta'
+import { withInstanceContentOperation } from '../../shared/instance-content/operation'
 const masterSession = '49156F29BABC4C94'
 const dirs: string[] = []
 const app = Fastify()
@@ -282,6 +283,38 @@ it('停止后生成遇到明确启动失败时结束 loading，不自动再次�
   assert.equal(starts, 1)
   recoverWorldMaintenance(app, f.instance)
   assert.equal(starts, 1)
+})
+
+it('生成后的异步启动取消或失败时立即结束核验并释放操作锁，保留结果待确认', async (t) => {
+  for (const status of ['cancelled', 'failed'] as const) {
+    const f = fixture(t); f.instance.status = 'stopped'
+    f.instance.resourceConfig!.shardReadyWaitSec = 300
+    t.mock.method(deps, 'inspect', async () => ({ unitExists: false, snapshot: null }))
+    let starts = 0
+    t.mock.method(deps, 'start', async () => {
+      starts += 1
+      f.instance.lastStartupReport = { status, startedAt: new Date().toISOString(), diagnosis: { message: '洞穴连接失败' } } as NonNullable<typeof f.instance.lastStartupReport>
+    })
+    t.mock.method(deps, 'query', async () => { throw new Error('终止的启动不应继续查询世界') })
+    const op = f.begin(f.payload('reset'))
+    await waitWorldMaintenanceForTest(op.id)
+    assert.equal(f.record().state, 'unknown')
+    assert.equal(f.record().phase, 'finished')
+    assert.match(f.record().message!, status === 'cancelled' ? /启动已取消/ : /洞穴连接失败/)
+    assert.equal(starts, 1)
+    assert.equal(f.counts().sends, 0)
+    await withInstanceContentOperation(f.instance.id, async () => {})
+    recoverWorldMaintenance(app, f.instance)
+    assert.equal(starts, 1)
+  }
+})
+
+it('历史启动失败不阻止新的世界维护核验', async (t) => {
+  const f = fixture(t)
+  f.instance.lastStartupReport = { status: 'failed', startedAt: new Date(Date.now() - 60_000).toISOString() } as NonNullable<typeof f.instance.lastStartupReport>
+  const op = f.begin(f.payload('reset'))
+  await waitWorldMaintenanceForTest(op.id)
+  assert.equal(f.record().state, 'completed')
 })
 
 it('无活动任务的旧 stale 标记不阻止真实种子回读，超时生成不无限提示正在生成', async (t) => {

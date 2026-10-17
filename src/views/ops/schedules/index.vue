@@ -6,11 +6,12 @@ import type { DataTableColumns, FormRules, SelectOption } from 'naive-ui'
 import type { ScheduleCreateRequest, ScheduleTaskItem } from '@/api/modules/schedule'
 import type { InstanceSummaryItem } from '@/api/modules/instance'
 import { NButton, NDataTable, NEmpty, NForm, NFormItem, NInput, NInputNumber, NModal, NSelect, NSpace, NSwitch, NTag, NTime, NTimePicker, NTooltip, useDialog } from 'naive-ui'
-import { computed, h, onActivated, onMounted, ref } from 'vue'
+import { computed, h, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import apiSchedule from '@/api/modules/schedule'
 import apiInstance from '@/api/modules/instance'
 import { suppressScheduleRunNotificationOnce } from '@/composables/useScheduleRunNotifier'
-import { useAdminPageState } from '@/composables/useAdminPageState'
+import { useLatestRequest } from '@/composables/useLatestRequest'
+import { usePollingTask } from '@/composables/usePollingTask'
 
 defineOptions({
   name: 'OpsSchedules',
@@ -25,10 +26,8 @@ const rows = ref<ScheduleTaskItem[]>([])
 const instances = ref<InstanceSummaryItem[]>([])
 const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 
-const {
-  loading,
-  runLoad,
-} = useAdminPageState(rows)
+const { pending: loading, execute: loadLatest, cancel: cancelLoad } = useLatestRequest()
+let active = false
 
 const kindMeta: Record<ScheduleTaskItem['kind'], { label: string, type: 'default' | 'info' | 'warning' | 'error' | 'success' }> = {
   restart: { label: '定时重启', type: 'warning' },
@@ -99,26 +98,34 @@ function scheduleRowClassName(row: ScheduleTaskItem): string {
 }
 
 function triggerLoad() {
+  if (!active || document.visibilityState === 'hidden' || !hasPermission('schedule:read')) return
+  runPoller.stop()
   // 列表就绪后再定位（行必须已经渲染才能滚动）
-  void runLoad(async () => {
+  void loadLatest(async (signal) => {
     const [scheduleResponse, instanceResponse] = await Promise.all([
-      apiSchedule.getScheduleList(),
-      apiInstance.getInstanceOptions().catch(() => ({ data: [] as InstanceSummaryItem[] })),
+      apiSchedule.getScheduleList(undefined, { signal }),
+      apiInstance.getInstanceOptions(undefined, { signal }).catch(() => ({ data: [] as InstanceSummaryItem[] })),
     ])
-    rows.value = scheduleResponse.data ?? []
-    instances.value = instanceResponse.data ?? []
-  }).then(focusTaskFromQuery)
+    signal.throwIfAborted()
+    return { rows: scheduleResponse.data ?? [], instances: instanceResponse.data ?? [] }
+  }).then((result) => {
+    if (!result || !active || document.visibilityState === 'hidden') return
+    rows.value = result.rows
+    instances.value = result.instances
+    focusTaskFromQuery()
+  }).catch(() => { /* 请求错误由 API 层提示；取消不修改已有列表。 */ }).finally(syncRunPoller)
 }
 
 /** 存在执行中的任务时按 5s 刷新列表，让「执行中」自动滚动到终态 */
 const hasRunningTask = computed(() => rows.value.some(row => row.lastRunStatus === 'running'))
-const runPoller = usePollingTask(async () => {
-  const response = await apiSchedule.getScheduleList()
+const runPoller = usePollingTask(async (signal) => {
+  const response = await apiSchedule.getScheduleList(undefined, { signal })
+  signal.throwIfAborted()
   rows.value = response.data ?? []
-}, { intervalMs: 5000, immediate: false })
+}, { intervalMs: 5000, immediate: false, pauseWhenHidden: true })
 
 function syncRunPoller() {
-  if (hasRunningTask.value) {
+  if (active && !loading.value && document.visibilityState !== 'hidden' && hasPermission('schedule:read') && hasRunningTask.value) {
     runPoller.start()
   }
   else {
@@ -128,18 +135,40 @@ function syncRunPoller() {
 
 watch(hasRunningTask, syncRunPoller)
 
-onMounted(() => {
+function activate() {
+  if (active) return
+  active = true
   triggerLoad()
-})
+}
 
-onActivated(() => {
-  triggerLoad()
-  syncRunPoller()
-})
-
-onDeactivated(() => {
+function deactivate() {
+  active = false
   runPoller.stop()
+  cancelLoad()
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    runPoller.stop()
+    cancelLoad()
+  }
+  else triggerLoad()
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  activate()
 })
+onActivated(activate)
+onDeactivated(deactivate)
+
+watch(() => hasPermission('schedule:read'), (allowed) => {
+  if (allowed) triggerLoad()
+  else {
+    runPoller.stop()
+    cancelLoad()
+  }
+}, { flush: 'sync' })
 
 // 已在计划任务页时再次点击通知（路由不变化）也要重新定位
 watch(() => route.query.taskId, (taskId) => {
@@ -149,6 +178,8 @@ watch(() => route.query.taskId, (taskId) => {
 })
 
 onBeforeUnmount(() => {
+  deactivate()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   if (highlightTimer !== undefined) {
     window.clearTimeout(highlightTimer)
   }

@@ -21,7 +21,7 @@ export type {
 
 export default {
   /** 计划任务列表；instanceId 缺省返回全部 */
-  getScheduleList: (instanceId?: string) => api.post('app/schedule/list', instanceId ? { instanceId } : {}) as Promise<{ data: ScheduleTaskItem[] }>,
+  getScheduleList: (instanceId?: string, options?: { signal?: AbortSignal }) => api.post('app/schedule/list', instanceId ? { instanceId } : {}, options) as Promise<{ data: ScheduleTaskItem[] }>,
   /** 创建计划任务（定时重启/备份/更新检查/数据库快照） */
   createScheduleTask: (data: ScheduleCreateRequest) => api.post('app/schedule/create', data) as Promise<{ data: ScheduleMutationResult }>,
   /** 更新调度配置或启停状态 */

@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { build } from 'esbuild'
+import { steamCdnBundlePlugin } from './steam-cdn-bundle.mjs'
 
 const repoRoot = path.resolve(import.meta.dirname, '..')
 const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
@@ -46,6 +47,7 @@ await build({
   entryPoints: {
     main: path.join(repoRoot, 'server', 'src', 'main.ts'),
     'modinfo-reader-worker': path.join(repoRoot, 'server/src/infra/game-adapter/dst/modinfo-reader-worker.mjs'),
+    'mod-download-worker': path.join(repoRoot, 'server/src/infra/game-adapter/dst/mod-download-worker.mjs'),
   },
   outdir: path.join(outputRoot, 'server', 'dist'),
   outExtension: { '.js': '.mjs' },
@@ -55,6 +57,7 @@ await build({
   target: 'node22',
   packages: 'bundle',
   external: ['cpu-features'],
+  plugins: [steamCdnBundlePlugin()],
   banner: {
     js: [
       'import { createRequire as __gshCreateRequire } from "node:module";',

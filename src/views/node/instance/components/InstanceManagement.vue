@@ -48,7 +48,7 @@ import { buildInstanceUpdateCheckNotice, canRetryInstanceInstall, resolveInstanc
 import { waitForInstanceUpdateCheckJob } from '../composables/instanceUpdateCheckJob'
 import InstanceInstallLogModal from './InstanceInstallLogModal.vue'
 import { useInstallRowProgress } from '../composables/useInstallRowProgress'
-import '../instanceInstallProgress.css'
+import '@/composables/taskRowProgress.css'
 
 defineOptions({
   name: 'NodeInstanceManagementPanel',
@@ -1163,7 +1163,7 @@ onBeforeUnmount(() => {
 
 <template>
   <FaPageMain title="实例管理">
-    <section :ref="bindProgressSurface" class="instance-install-surface p-4 border border-border rounded-xl bg-card space-y-4">
+    <section :ref="bindProgressSurface" class="task-progress-surface p-4 border border-border rounded-xl bg-card space-y-4">
       <div class="gap-3 grid grid-cols-3 md:grid-cols-6">
         <button
           v-for="card in STAT_CARDS"
@@ -1281,7 +1281,7 @@ onBeforeUnmount(() => {
           :key="instance.id"
           class="rounded-lg border border-border bg-card p-4 space-y-3"
           v-bind="installRowProps(instance)"
-          :class="{ 'instance-install-card': Boolean(installRowProps(instance).class) }"
+          :class="{ 'task-progress-card': Boolean(installRowProps(instance).class) }"
         >
           <div class="flex items-start justify-between gap-3">
             <AppAuth value="instance:update">

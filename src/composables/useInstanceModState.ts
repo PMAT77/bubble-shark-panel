@@ -38,7 +38,7 @@ export function useInstanceModState(instanceId: MaybeRefOrGetter<string>) {
   const subscribingPhases = computed(() => {
     const phases = new Map<string, ModInstallJobPhase>()
     for (const item of downloadQueue.value?.items ?? []) {
-      if (item.phase === 'downloading' || item.phase === 'preparing_steamcmd' || item.phase === 'waiting_steamcmd') phases.set(item.workshopId, item.phase)
+      if (['downloading', 'preparing_steamcmd', 'waiting_steamcmd', 'preparing_download', 'verifying', 'installing'].includes(item.phase)) phases.set(item.workshopId, item.phase as ModInstallJobPhase)
       else if (item.phase === 'queued') phases.set(item.workshopId, 'waiting_steamcmd')
     }
     return phases
@@ -63,8 +63,9 @@ export function useInstanceModState(instanceId: MaybeRefOrGetter<string>) {
         ? { ...mod, installStatus: item.installStatus, installError: item.error } : mod)
       if (!handlersById.has(item.workshopId)) continue
       const job: ModInstallJobDto = { instanceId: queue.instanceId, workshopId: item.workshopId,
+        taskId: item.taskId, progress: item.progress,
         status: item.phase === 'ready' ? 'success' : item.phase === 'failed' ? 'failed' : 'downloading',
-        phase: item.phase === 'downloading' || item.phase === 'preparing_steamcmd' || item.phase === 'waiting_steamcmd' ? item.phase : null,
+        phase: ['downloading', 'preparing_steamcmd', 'waiting_steamcmd', 'preparing_download', 'verifying', 'installing'].includes(item.phase) ? item.phase as ModInstallJobPhase : null,
         error: item.error, startedAt: queue.startedAt, finishedAt: terminal ? queue.updatedAt : null }
       const handlers = handlersById.get(item.workshopId)
       applyJob(job)

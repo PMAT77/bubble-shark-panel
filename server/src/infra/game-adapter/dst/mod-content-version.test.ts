@@ -52,6 +52,15 @@ afterEach(() => {
 })
 
 describe('resolveLocalModContentVersion', () => {
+  it('uses the downloaded manifest version ahead of stale SteamCMD evidence', () => {
+    const installPath = makeInstallPath()
+    writeWorkshopManifest(installPath, [{ workshopId: '111', timeupdated: 1_700_000_000 }])
+    const directory = resolveDownloadedModDir(installPath, '111')
+    writeModContent(directory, '2026-01-01T00:00:00.000Z')
+    fs.writeFileSync(path.join(directory, '.bsp-workshop-download.json'), JSON.stringify({ manifestId: '777', updatedAt: '2026-06-01T00:00:00.000Z' }))
+    assert.equal(resolveLocalModContentVersion(installPath, '111').updatedAt, '2026-06-01T00:00:00.000Z')
+    assert.equal(resolveLocalModContentVersion(installPath, '111').source, 'download-manifest')
+  })
   it('prefers the SteamCMD manifest time over file times', () => {
     const installPath = makeInstallPath()
     const manifestIso = new Date(1_800_000_000 * 1000).toISOString()

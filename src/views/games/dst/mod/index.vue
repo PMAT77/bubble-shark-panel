@@ -27,10 +27,12 @@ import apiMod from '@/api/modules/mod'
 import type { ModDownloadQueueDto } from '@/api/modules/mod'
 import { isInstallableGameInstance } from '@/composables/useGameInstance'
 import { useInstanceModState } from '@/composables/useInstanceModState'
+import { useTaskRowProgress, type TaskRowProgress } from '@/composables/useTaskRowProgress'
+import '@/composables/taskRowProgress.css'
 import ModConfigModal from '@/views/games/dst/mod/components/ModConfigModal.vue'
 import LocalModImportModal from '@/views/games/dst/mod/components/LocalModImportModal.vue'
 import ModAccessStatusPanel from '@/views/games/dst/mod/components/ModAccessStatusPanel.vue'
-import { resolveModDownloadAction } from '@/views/games/dst/mod/modDownloadPresentation'
+import { resolveModDownloadAction, resolveModDownloadItemLabel } from '@/views/games/dst/mod/modDownloadPresentation'
 import { resolveModUpdateCheckNotice } from '@/views/games/dst/mod/modUpdateCheckPresentation'
 import { countOutdatedMods, resolveUpdateIneffectiveNotice, selectUpdatableMods } from '@/views/games/dst/mod/modUpdateTargets'
 import { routeToDstModDetail, routeToNodeInstance } from '@/navigation/game-routes'
@@ -135,6 +137,18 @@ const steamTotalPages = ref<number | null>(null)
 const steamSourceUrl = ref('')
 const steamMods = ref<SteamModListQueryResultItem[]>([])
 const installedMods = ref<ModItemDto[]>([])
+const taskRows = computed<TaskRowProgress[]>(() => {
+  const queue = downloadQueue.value
+  if (!queue || queue.instanceId !== selectedInstanceId.value) return []
+  return queue.items.map(item => ({ id: item.workshopId, taskId: item.taskId, percent: item.progress?.percent,
+    state: item.phase === 'ready' ? 'success' : item.phase === 'failed' ? 'failed'
+      : queue.status === 'paused' || queue.status === 'pausing' || item.phase === 'retry_wait' ? 'paused'
+        : queue.currentWorkshopIds.includes(item.workshopId) ? 'active' : 'inactive' }))
+})
+const modRowProgress = useTaskRowProgress(taskRows)
+function bindModProgressSurface(element: unknown) { modRowProgress.surface.value = element as HTMLElement | null }
+watch(selectedInstanceId, modRowProgress.reset, { flush: 'sync' })
+watch([activeTab, isMobileMode], async () => { await nextTick(); modRowProgress.scheduleMeasure() }, { flush: 'post' })
 const steamMeta = ref<SteamModMeta | null>(null)
 const steamAbortController = shallowRef<AbortController | null>(null)
 const suppressSteamSortWatchUntil = ref(0)
@@ -420,8 +434,8 @@ function marketStatusType(row: SteamModListQueryResultItem): 'default' | 'succes
 }
 
 function pendingDownloadLabel(workshopId: string): string {
-  const phase = downloadQueue.value?.items.find(item => item.workshopId === workshopId)?.phase
-  return phase === 'downloading' ? '下载中' : phase === 'preparing_steamcmd' ? '准备下载环境' : phase === 'waiting_steamcmd' ? '等待其他任务' : phase === 'retry_wait' ? '等待重试' : phase === 'queued' ? '等待下载' : '待下载'
+  const item = downloadQueue.value?.items.find(item => item.workshopId === workshopId)
+  return resolveModDownloadItemLabel(item, downloadQueue.value?.status)
 }
 
 function modUpdateLabel(mod: ModItemDto): string {
@@ -439,6 +453,7 @@ function subscribedStatusLabel(row: ModItemDto): string {
 }
 
 function subscribedStatusType(row: ModItemDto): 'success' | 'warning' | 'error' {
+  if (downloadQueue.value?.items.some(item => item.workshopId === row.workshopId && item.phase === 'failed')) return 'error'
   if (row.installStatus === 'pending' || isPendingWorkshop(row.workshopId)) return 'warning'
   return row.installStatus === 'failed' ? 'error' : 'success'
 }
@@ -840,13 +855,13 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
   {
     title: '安装状态',
     key: 'installStatus',
-    width: 130,
+    width: 160,
     render: (row) => {
       const pending = row.installStatus === 'pending' || isPendingWorkshop(row.workshopId)
       const label = pending
         ? subscribedStatusLabel(row)
         : row.installStatus === 'failed' ? MOD_INSTALL_STATUS.failed.label : MOD_INSTALL_STATUS.ready.label
-      const type = pending ? 'warning' : row.installStatus === 'failed' ? 'error' : 'success'
+      const type = subscribedStatusType(row)
       const tag = h(NTag, { size: 'small', bordered: false, type }, { default: () => label })
       const errorText = row.installError?.trim()
       // 文件状态与「启用」是两件事：无论如何都要能悬停看懂，出错时优先说原因
@@ -1432,7 +1447,10 @@ const dragSnapshot = shallowRef<{
 const sortingDisabled = computed(() => !hasPermission('mod:toggle') || !hasSelectedInstance.value
   || loadingInstalled.value || reorderingMods.value || installedMods.value.filter(isReorderableInstalledMod).length < 2)
 function canDragMod(row: ModItemDto) { return !sortingDisabled.value && isReorderableInstalledMod(row) }
-function subscribedRowProps(row: ModItemDto) { return { class: 'mod-sort-row', 'data-mod-id': row.workshopId } }
+function subscribedRowProps(row: ModItemDto) {
+  const progress = modRowProgress.rowProps(row.workshopId)
+  return { ...progress, class: ['mod-sort-row', progress.class ?? ''].join(' '), 'data-mod-id': row.workshopId }
+}
 function restoreDragDom(snapshot: NonNullable<typeof dragSnapshot.value>) {
   // Sortable 先恢复 DOM，随后由 Vue 按服务端结果更新，避免 keyed diff 再移动一次。
   for (const node of snapshot.nodes) if (node.parentNode === snapshot.parent) snapshot.parent.appendChild(node)
@@ -2133,7 +2151,7 @@ onMounted(async () => {
               <template #tab>
                 已订阅 ({{ subscribedTabCount }})
               </template>
-              <div class="flex h-full min-h-0 flex-col overflow-y-auto">
+              <div :ref="bindModProgressSurface" class="task-progress-surface flex h-full min-h-0 flex-col overflow-y-auto">
                 <div class="flex shrink-0 flex-wrap items-center gap-3 pb-2">
                   <div class="flex flex-wrap items-center gap-2">
                     <NButton
@@ -2243,6 +2261,8 @@ onMounted(async () => {
                   <article
                     v-for="mod in installedMods"
                     :key="mod.workshopId"
+                    v-bind="subscribedRowProps(mod)"
+                    :class="{ 'task-progress-card': Boolean(modRowProgress.rowProps(mod.workshopId).class) }"
                     :data-mod-id="mod.workshopId"
                     class="rounded-lg border border-border bg-card p-3 space-y-3"
                   >

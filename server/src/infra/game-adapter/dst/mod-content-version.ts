@@ -31,7 +31,7 @@ import type { WorkshopInstalledItem } from './workshop-manifest'
 const CONTENT_MARKER_FILES = ['modinfo.lua', 'modmain.lua', 'mod.manifest']
 const LEGACY_ARCHIVE_SUFFIX = '_legacy.bin'
 
-export type LocalModContentVersionSource = 'workshop-manifest' | 'content-mtime' | 'migration-manifest'
+export type LocalModContentVersionSource = 'workshop-manifest' | 'content-mtime' | 'migration-manifest' | 'download-manifest'
 
 export interface LocalModContentVersion {
   /** 本机内容对应的时间（ISO）；无从得知为 null */
@@ -143,6 +143,14 @@ export function resolveLocalModContentVersion(
   }
   const downloadedMtimeMs = readDownloadedContentMtimeMs(installPath, normalizedId)
   const loadedCopyStale = isLoadedCopyStale(installPath, normalizedId, downloadedMtimeMs)
+  try {
+    const file = path.join(resolveDstWorkshopSourceDirs(installPath, normalizedId)[0]!, '.bsp-workshop-download.json')
+    const version = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (/^\d+$/.test(version.manifestId) && typeof version.updatedAt === 'string' && Number.isFinite(Date.parse(version.updatedAt))) {
+      return { updatedAt: version.updatedAt, source: 'download-manifest', loadedCopyStale }
+    }
+  }
+  catch { /* SteamCMD installations retain their existing version evidence. */ }
   const installedItems = options?.installedItems ?? readWorkshopInstalledItems(installPath)
   const fromManifest = unixSecondsToIsoOrNull(installedItems.get(normalizedId)?.timeupdated)
   if (fromManifest) {

@@ -127,9 +127,14 @@ export interface ModMutationResult {
 
 export type ModInstallJobStatus = 'downloading' | 'success' | 'failed' | 'not_found'
 
-export type ModInstallJobPhase = 'waiting_steamcmd' | 'preparing_steamcmd' | 'downloading'
+export type ModInstallJobPhase = 'waiting_steamcmd' | 'preparing_steamcmd' | 'preparing_download' | 'downloading' | 'verifying' | 'installing'
+
+/** Verified reusable content is excluded from this attempt's uncompressed bytes. */
+export interface ModDownloadProgress { downloadedBytes: number, totalBytes: number, percent: number }
 
 export interface ModInstallJobDto {
+  taskId?: string | null
+  progress?: ModDownloadProgress | null
   instanceId: string
   workshopId: string
   status: ModInstallJobStatus
@@ -151,6 +156,8 @@ export type ModDownloadQueueStatus = 'idle' | 'running' | 'pausing' | 'paused'
 export const modDownloadQueueStartSchema = z.object({ retryFailed: z.boolean().default(true) })
 export type ModDownloadItemPhase = ModInstallJobPhase | 'queued' | 'retry_wait' | 'ready' | 'failed' | 'inactive'
 export interface ModDownloadQueueItemDto {
+  taskId?: string | null
+  progress?: ModDownloadProgress | null
   workshopId: string
   installStatus: ModInstallStatus
   phase: ModDownloadItemPhase
@@ -200,7 +207,7 @@ export interface ModReorderResult {
 }
 
 /** 本机版本时间的来源：SteamCMD 清单里的 timeupdated / 内容文件的落地时间 */
-export type ModUpdateLocalVersionSource = 'workshop-manifest' | 'content-mtime' | 'migration-manifest'
+export type ModUpdateLocalVersionSource = 'workshop-manifest' | 'content-mtime' | 'migration-manifest' | 'download-manifest'
 
 /** 单个 Mod 的版本检查结果 */
 export interface ModUpdateInfo {

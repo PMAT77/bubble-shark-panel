@@ -126,6 +126,7 @@ declare global {
   const useRouter: typeof import('vue-router').useRouter
   const useScheduleRunNotifier: typeof import('../composables/useScheduleRunNotifier').useScheduleRunNotifier
   const useSlots: typeof import('vue').useSlots
+  const useTaskRowProgress: typeof import('../composables/useTaskRowProgress').useTaskRowProgress
   const useTemplateRef: typeof import('vue').useTemplateRef
   const useUnsavedChangesGuard: typeof import('../composables/useUnsavedChangesGuard').useUnsavedChangesGuard
   const useWorldMaintenance: typeof import('../composables/useWorldMaintenance').useWorldMaintenance
@@ -166,4 +167,7 @@ declare global {
   // @ts-ignore
   export type { PollingTaskOptions } from '../composables/usePollingTask'
   import('../composables/usePollingTask')
+  // @ts-ignore
+  export type { TaskRowProgress } from '../composables/useTaskRowProgress'
+  import('../composables/useTaskRowProgress')
 }

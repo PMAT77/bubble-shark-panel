@@ -1,4 +1,7 @@
 import { readBrandEnv } from '../../../../shared/brand-env'
+import { randomUUID } from 'node:crypto'
+import { cancelDstWorkshopDownloads } from '../../infra/game-adapter/dst/workshop-download'
+import { normalizeModDownloadProgress } from './mod-download-progress'
 import { assertInstanceContentAvailable, beginInstanceContentActivity } from '../../shared/instance-content/operation'
 import type {
   ModDownloadQueueDto,
@@ -7,6 +10,7 @@ import type {
   ModInstallJobDto,
   ModInstallJobPhase,
   ModInstallJobStatus,
+  ModDownloadProgress,
   ModInstallPayload,
 } from '../../../../shared/contracts/mod'
 import {
@@ -41,9 +45,9 @@ import type { DbInstanceMod } from '../../shared/db/index'
  * Mod 下载队列调度器。
  *
  * 导入存档带进来 30 个缺失 Mod 时，绝不为每个 Mod 各起一个后台任务：一个实例只有一条队列、
- * 一个 Queue Manager 决定「下一批下哪些」，一次 SteamCMD 处理一个 Batch。这样做的原因是
- * 上游 SteamCMD 本身全局串行（`steamcmd-app-update-queue.ts`），上层再造 N 个任务只会得到
- * N 个排队等锁的任务、N 份重复的批量集合，以及 N 轮 DB/文件系统收尾。
+ * 一个 Queue Manager 决定「下一批下哪些」，独立下载 worker 处理一个 Batch。
+ * 下载继续共享安装任务的全局锁（`steamcmd-app-update-queue.ts`），保持已有并发边界；
+ * 批次内逐项报告实测字节，统一处理依赖、重试与状态收尾。
  *
  * 队列状态本身不落库：待下载集合就是 `instance_mods.install_status = 'pending'`，
  * 退避进度落在 `retry_count` / `next_retry_at` 两列上。面板重启后队列为空，
@@ -59,6 +63,8 @@ export interface ModDownloadJobInput {
 }
 
 interface ModInstallJobRecord {
+  taskId?: string | null
+  progress?: ModDownloadProgress | null
   instanceId: string
   workshopId: string
   status: Exclude<ModInstallJobStatus, 'not_found'>
@@ -115,7 +121,7 @@ const modInstallJobs = new Map<string, ModInstallJobRecord>()
 const modInstallJobsInFlight = new Map<string, Promise<void>>()
 const queueStates = new Map<string, InstanceQueueState>()
 
-/** 单批上限：一次 SteamCMD 调用最多处理几个 Mod（默认 5，最大 10） */
+/** 单批上限：一次下载 worker 最多处理几个 Mod（默认 5，最大 10） */
 const MOD_DOWNLOAD_BATCH_SIZE_ENV = 'BSP_MOD_DOWNLOAD_COALESCE_LIMIT'
 const MOD_DOWNLOAD_BATCH_SIZE_DEFAULT = 5
 const MOD_DOWNLOAD_BATCH_SIZE_MAX = 10
@@ -199,6 +205,8 @@ function uniqueOrderedIds(ids: string[]): string[] {
 
 function toJobDto(record: ModInstallJobRecord): ModInstallJobDto {
   return {
+    taskId: record.taskId ?? null,
+    progress: record.progress ?? null,
     instanceId: record.instanceId,
     workshopId: record.workshopId,
     status: record.status,
@@ -236,6 +244,8 @@ function beginJobRecords(instanceId: string, workshopIds: string[]) {
   const startedAt = new Date().toISOString()
   for (const workshopId of workshopIds) {
     modInstallJobs.set(buildJobKey(instanceId, workshopId), {
+      taskId: randomUUID(),
+      progress: null,
       instanceId,
       workshopId,
       status: 'downloading',
@@ -599,6 +609,7 @@ async function runBatch(
   }
 
   beginJobRecords(state.instanceId, workshopIds)
+  const attempts = new Map(workshopIds.map(id => [id, modInstallJobs.get(buildJobKey(state.instanceId, id))?.taskId]))
   const releaseInFlight = trackBatchInFlight(state.instanceId, workshopIds)
 
   try {
@@ -617,6 +628,7 @@ async function runBatch(
     let cancelled = false
     let failureError: string | null = null
     const verifiedDownloads = new Set<string>()
+    const installedDownloads = new Set<string>()
     if (toDownload.length > 0) {
       const result = await modDownloadExecutor({
         hostInstallPath: state.installPath,
@@ -639,13 +651,24 @@ async function runBatch(
             patchJobRecord(state.instanceId, workshopId, { phase: 'downloading' })
           }
         },
+        onProgress: (event) => {
+          const job = modInstallJobs.get(buildJobKey(state.instanceId, event.workshopId))
+          if (!job || job.status !== 'downloading' || job.taskId !== attempts.get(event.workshopId) || state.cancelRequested) return
+          if (event.error) { finishJobRecord(state.instanceId, event.workshopId, 'failed', event.error); return }
+          patchJobRecord(state.instanceId, event.workshopId, {
+            phase: event.phase,
+            progress: event.progress ? normalizeModDownloadProgress(event.progress, job.progress) : (event.phase === 'preparing_download' ? null : job.progress),
+          })
+          state.updatedAt = new Date().toISOString()
+        },
       })
       cancelled = result.cancelled === true
       failureError = result.ok ? null : (result.error ?? 'Mod 下载失败，请稍后重试')
       observeSteamAccess('files', { status: result.cancelled ? 'cancelled' : result.ok ? 'success' : 'failed',
-        message: result.cancelled ? '本次下载已取消' : result.ok ? '最近一次 SteamCMD 文件下载成功' : '最近一次 SteamCMD 文件下载失败，请查看失败条目并重试或本地导入' }, state.instanceId)
+        message: result.cancelled ? '本次下载已取消' : result.ok ? '最近一次 Mod 文件下载成功' : '最近一次 Mod 文件下载失败，请查看失败条目并重试或本地导入' }, state.instanceId)
       for (const id of toDownload) {
         if (result.ok || result.items?.some(item => item.workshopId === id && item.ok)) verifiedDownloads.add(id)
+        if (result.items?.some(item => item.workshopId === id && item.ok && item.installed)) installedDownloads.add(id)
       }
     }
 
@@ -654,12 +677,14 @@ async function runBatch(
     const contentReadyIds = workshopIds.filter((workshopId) => {
       const contentPresent = isDstWorkshopModPresent(state.installPath, workshopId)
       // 强制更新时旧内容仍在盘上，文件存在不能证明这次下载成功，以 SteamCMD 结果为准
-      return contentPresent && (!force || verifiedDownloads.has(workshopId))
+      return contentPresent && (readyOnDisk.includes(workshopId) || verifiedDownloads.has(workshopId))
     })
     // 强制更新时必须重新落位：目标目录里还是旧内容，跳过落位等于「下载目录更新了、
     // 游戏读的还是旧文件」，版本状态会一直停在「有新版本」且再也清不掉
-    const layoutOutcomes = contentReadyIds.length > 0
-      ? await ensureDstUgcModLayout(state.installPath, contentReadyIds, { refresh: force })
+    const needsLayout = contentReadyIds.filter(id => !installedDownloads.has(id))
+    for (const id of needsLayout) patchJobRecord(state.instanceId, id, { phase: 'installing' })
+    const layoutOutcomes = needsLayout.length > 0
+      ? await ensureDstUgcModLayout(state.installPath, needsLayout, { refresh: force })
       : []
     const layoutFailed = new Map<string, string>()
     for (const outcome of layoutOutcomes) {
@@ -957,17 +982,19 @@ function launchQueueWorker(state: InstanceQueueState) {
 
 function toQueueDto(state: InstanceQueueState): ModDownloadQueueDto {
   const activeCount = state.active.length
+  const activePhases = state.active.map(item => modInstallJobs.get(buildJobKey(state.instanceId, item.workshopId))?.phase)
   const phase = state.active.length > 0
-    ? (modInstallJobs.get(buildJobKey(state.instanceId, state.active[0].workshopId))?.phase ?? 'waiting_steamcmd')
+    ? (activePhases.find(value => value === 'downloading') ?? activePhases.find(Boolean) ?? 'waiting_steamcmd')
     : state.nextBatchAt ? 'retry_wait' as const : null
   const queuedIds = new Set([...state.head.map(item => item.workshopId), ...state.waitingIds, ...state.eligibleIds])
   const items: ModDownloadQueueItemDto[] = state.mods.map(mod => {
     const active = state.active.some(item => item.workshopId === mod.workshopId)
     const job = modInstallJobs.get(buildJobKey(state.instanceId, mod.workshopId))
-    const status = active ? 'pending' : mod.installStatus
+    const status = active && job?.status === 'failed' ? 'failed' : active ? 'pending' : mod.installStatus
     return { workshopId: mod.workshopId, installStatus: status,
-      phase: active ? (job?.phase ?? 'waiting_steamcmd') : status === 'ready' ? 'ready' : status === 'failed' ? 'failed' : queuedIds.has(mod.workshopId) ? (mod.nextRetryAt ? 'retry_wait' : 'queued') : 'inactive',
-      error: mod.installError, nextRetryAt: mod.nextRetryAt }
+      taskId: job?.taskId ?? null, progress: job?.progress ?? null,
+      phase: active && job?.status === 'failed' ? 'failed' : active ? (job?.phase ?? 'waiting_steamcmd') : status === 'ready' ? 'ready' : status === 'failed' ? 'failed' : queuedIds.has(mod.workshopId) ? (mod.nextRetryAt ? 'retry_wait' : 'queued') : 'inactive',
+      error: job?.error ?? mod.installError, nextRetryAt: mod.nextRetryAt }
   })
   for (const id of queuedIds) {
     if (items.some(item => item.workshopId === id)) continue
@@ -983,7 +1010,7 @@ function toQueueDto(state: InstanceQueueState): ModDownloadQueueDto {
     retryableFailedCount: items.filter(item => item.phase === 'failed' && queuedIds.has(item.workshopId)).length,
     total: state.total,
     queued: Math.max(0, state.total - state.success - state.failed - activeCount),
-    downloading: phase === 'downloading' ? activeCount : 0,
+    downloading: activePhases.filter(value => value === 'downloading').length,
     success: state.success,
     failed: state.failed,
     currentWorkshopIds: state.active.map(item => item.workshopId),
@@ -1108,7 +1135,7 @@ export function pauseModDownloadQueue(instanceId: string): ModDownloadQueueDto |
   }
   state.pauseRequested = true
   if (state.active.length > 0 && state.active.every(item => modInstallJobs.get(buildJobKey(state.instanceId, item.workshopId))?.phase === 'waiting_steamcmd')) {
-    void cancelSteamcmdInstallContainer(`modq-${state.instanceId}`).catch(() => {})
+    if (!cancelDstWorkshopDownloads(`modq-${state.instanceId}`)) void cancelSteamcmdInstallContainer(`modq-${state.instanceId}`).catch(() => {})
   }
   state.status = state.runPromise ? 'pausing' : 'paused'
   state.updatedAt = new Date().toISOString()
@@ -1125,7 +1152,7 @@ export async function cancelModDownloadQueue(instanceId: string): Promise<ModDow
   state.status = state.runPromise ? 'pausing' : 'paused'
   state.updatedAt = new Date().toISOString()
   if (state.active.length > 0) {
-    await cancelSteamcmdInstallContainer(`modq-${state.instanceId}`)
+    if (!cancelDstWorkshopDownloads(`modq-${state.instanceId}`)) await cancelSteamcmdInstallContainer(`modq-${state.instanceId}`)
   }
   return toQueueDto(state)
 }

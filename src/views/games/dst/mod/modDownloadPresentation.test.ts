@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ModDownloadQueueDto } from '../../../../../shared/contracts/mod.ts'
-import { resolveModDownloadAction, resolveModDownloadHelp, summarizeModDownloadFailure } from './modDownloadPresentation.ts'
+import { resolveModDownloadAction, resolveModDownloadHelp, resolveModDownloadItemLabel, summarizeModDownloadFailure } from './modDownloadPresentation.ts'
 
 function queue(overrides: Partial<ModDownloadQueueDto> = {}): ModDownloadQueueDto {
   return { instanceId: 'test', status: 'idle', phase: null, items: [], eligibleCount: 0, inactiveMissingCount: 0,
@@ -12,6 +12,16 @@ function queue(overrides: Partial<ModDownloadQueueDto> = {}): ModDownloadQueueDt
 const failure = (error: string) => queue({ items: [{ workshopId: '100', phase: 'failed', installStatus: 'failed', error, nextRetryAt: null }], retryableFailedCount: 1 })
 
 describe('download presentation', () => {
+  it('shows actual percentages and keeps verification and installation separate from readiness', () => {
+    const item = { workshopId: '1', installStatus: 'pending' as const, phase: 'downloading' as const, error: null, nextRetryAt: null }
+    assert.equal(resolveModDownloadItemLabel(item), '下载中')
+    assert.equal(resolveModDownloadItemLabel({ ...item, phase: 'preparing_download' }), '准备下载')
+    assert.equal(resolveModDownloadItemLabel({ ...item, progress: { downloadedBytes: 45, totalBytes: 100, percent: 45 } }), '下载中 45%')
+    assert.equal(resolveModDownloadItemLabel({ ...item, progress: { downloadedBytes: 100, totalBytes: 100, percent: 100 } }), '下载完成，正在校验')
+    assert.equal(resolveModDownloadItemLabel({ ...item, phase: 'installing' }), '下载完成，正在安装')
+    assert.equal(resolveModDownloadItemLabel(item, 'paused'), '已暂停')
+    assert.equal(resolveModDownloadHelp(queue({ status: 'running', phase: 'verifying' })).summary, '正在校验 Mod 文件。')
+  })
   it('distinguishes preparation and bootstrap failures from Workshop downloading', () => {
     assert.equal(resolveModDownloadHelp(queue({ status: 'running', phase: 'preparing_steamcmd' })).summary, '正在准备下载环境。')
     assert.equal(summarizeModDownloadFailure('SteamCMD 自更新超时，尚未开始下载 Mod'), '下载环境准备超时，Mod 下载尚未开始。')

@@ -1,4 +1,13 @@
-import type { ModAccessObservation, ModDownloadQueueDto } from '../../../../../shared/contracts/mod'
+import type { ModAccessObservation, ModDownloadQueueDto, ModDownloadQueueItemDto } from '../../../../../shared/contracts/mod'
+
+export function resolveModDownloadItemLabel(item?: ModDownloadQueueItemDto, status?: ModDownloadQueueDto['status']) {
+  if (item?.phase === 'failed') return '下载失败'
+  if (status === 'paused' && item?.installStatus === 'pending') return '已暂停'
+  if (item?.phase === 'verifying') return '下载完成，正在校验'
+  if (item?.phase === 'installing') return '下载完成，正在安装'
+  if (item?.phase === 'downloading') return item.progress ? item.progress.percent >= 100 ? '下载完成，正在校验' : `下载中 ${Math.floor(item.progress.percent)}%` : '下载中'
+  return item?.phase === 'preparing_download' ? '准备下载' : item?.phase === 'preparing_steamcmd' ? '准备下载环境' : item?.phase === 'waiting_steamcmd' ? '等待其他任务' : item?.phase === 'retry_wait' ? '等待重试' : item?.phase === 'queued' ? '等待下载' : '待下载'
+}
 
 /** 只使用下载结果中已经明确的原因；未识别的输出留在技术信息中。 */
 export function summarizeModDownloadFailure(error: string | null): string {
@@ -31,7 +40,9 @@ export function resolveModDownloadHelp(queue: ModDownloadQueueDto | null, files?
   }
   if (queue?.status === 'pausing') return { summary: '正在暂停下载，未完成项会保留。', reasons: [], retryHint: null }
   if (queue?.status === 'paused') return { summary: '下载已暂停，未完成项仍可恢复下载。', reasons: [], retryHint: null }
-  if (queue?.status === 'running') return { summary: queue.phase === 'waiting_steamcmd' ? '正在等待其他安装或下载任务完成。' : queue.phase === 'preparing_steamcmd' ? '正在准备下载环境。' : '正在下载 Mod。', reasons: [], retryHint: null }
+  if (queue?.status === 'running') return { summary: queue.phase === 'waiting_steamcmd' ? '正在等待其他安装或下载任务完成。'
+    : queue.phase === 'preparing_steamcmd' || queue.phase === 'preparing_download' ? '正在准备下载环境。'
+      : queue.phase === 'verifying' ? '正在校验 Mod 文件。' : queue.phase === 'installing' ? '正在安装 Mod 文件。' : '正在下载 Mod。', reasons: [], retryHint: null }
   if (queue?.success || queue?.startedAt || files?.status === 'success') return { summary: '当前没有下载失败的 Mod。', reasons: [], retryHint: null }
   if (files?.status === 'failed') return { summary: '最近一次文件下载未完成。', reasons: [summarizeModDownloadFailure(files.message)], retryHint: null }
   if (files?.status === 'cancelled') return { summary: '上次下载已取消，未完成项仍可继续下载。', reasons: [], retryHint: null }

@@ -1,7 +1,7 @@
 {
   "name": "bubblesharkpanel",
   "type": "module",
-  "version": "0.20.5",
+  "version": "0.21.0",
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -81,6 +81,7 @@
     "reka-ui": "catalog:",
     "scule": "catalog:",
     "sortablejs": "^1.15.7",
+    "steam-user": "5.3.0",
     "tailwind-merge": "catalog:",
     "tar-stream": "3.2.0",
     "vee-validate": "catalog:",

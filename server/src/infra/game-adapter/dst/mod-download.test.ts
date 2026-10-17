@@ -12,7 +12,6 @@ import {
   isDstWorkshopModPresent,
   resolveDstSteamWorkshopModDir,
   resolveWorkshopDownloadIds,
-  downloadDstWorkshopMods,
 } from './mod-download'
 
 const tempDirs: string[] = []
@@ -112,35 +111,7 @@ describe('mod-download', () => {
     assert.equal(detectWorkshopDownloadFailure(''), null)
   })
 
-  it('requires actual command confirmation for an existing Mod and emits truthful phases', { skip: process.platform !== 'linux' }, async (t) => {
-    const installPath = createInstallPath()
-    writeModMarker(installPath, '12345', 'steamapps')
-    const keys = ['BSP_RUNTIME_MODE', 'BSP_NATIVE_STEAMCMD_PATH', 'BSP_NATIVE_RUNTIME_DIR', 'BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS']
-    const previous = keys.map(key => process.env[key])
-    t.after(() => keys.forEach((key, index) => {
-      if (previous[index] === undefined) delete process.env[key]
-      else process.env[key] = previous[index]
-    }))
-    const script = path.join(installPath, 'fixture-steamcmd.sh')
-    process.env.BSP_RUNTIME_MODE = 'native'
-    process.env.BSP_NATIVE_STEAMCMD_PATH = script
-    process.env.BSP_NATIVE_RUNTIME_DIR = installPath
-    process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
-    fs.writeFileSync(script, '#!/bin/sh\nprintf "Checking for available updates...\\nSteam Console Client (c) Valve Corporation\\n"\n', { mode: 0o755 })
-    const phases: string[] = []
-    const input = { instanceId: 'confirmation', hostInstallPath: installPath, workshopIds: ['12345'], force: true,
-      onPreparingSteamcmd: () => { phases.push('prepare') }, onDownloadStart: () => { phases.push('download') } }
-    const unconfirmed = await downloadDstWorkshopMods(input)
-    assert.equal(unconfirmed.ok, false)
-    assert.equal(unconfirmed.items?.[0]?.ok, false)
-    assert.match(unconfirmed.error ?? '', /未确认/)
-    assert.deepEqual(phases, ['prepare'])
-    phases.length = 0
-    fs.appendFileSync(script, 'printf "Downloading item 12345 ...\\nSuccess. Downloaded item 12345\\n"\n')
-    const confirmed = await downloadDstWorkshopMods(input)
-    assert.equal(confirmed.ok, true)
-    assert.deepEqual(phases, ['prepare', 'download'])
-  })
+
 })
 
 describe('buildSteamcmdWorkshopDownloadArgs', () => {

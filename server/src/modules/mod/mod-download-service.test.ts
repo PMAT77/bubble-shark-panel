@@ -190,6 +190,49 @@ afterEach(() => {
 })
 
 describe('scoped download requests', () => {
+  it('keeps byte progress attempt-scoped and waits for installation before success', async () => {
+    installDbHooks()
+    const installPath = createInstallPath()
+    const instanceId = 'byte-progress'
+    let oldCallback: Parameters<Parameters<typeof setModDownloadExecutorForTest>[0]>[0]['onProgress']
+    let calls = 0
+    let previousTask: string | null | undefined
+    setModDownloadExecutorForTest(async input => {
+      calls++
+      const event = (downloadedBytes: number) => ({ workshopId: '1', phase: 'downloading' as const, progress: { downloadedBytes, totalBytes: 10, percent: 999 } })
+      if (calls === 1) {
+        previousTask = getModInstallJob(instanceId, '1').taskId
+        input.onProgress?.({ workshopId: '1', phase: 'preparing_download', progress: null })
+        assert.equal(getModInstallJob(instanceId, '1').progress, null)
+        input.onProgress?.(event(5))
+        input.onProgress?.(event(3))
+        assert.equal(getModInstallJob(instanceId, '1').progress?.percent, 50)
+        oldCallback = input.onProgress
+        input.onProgress?.({ workshopId: '1', phase: 'verifying', progress: null, error: 'fixture failure' })
+        assert.equal(getModDownloadQueueSnapshot(instanceId)?.items[0]?.phase, 'failed')
+        return { ok: false, error: 'fixture failure' }
+      }
+      assert.notEqual(getModInstallJob(instanceId, '1').taskId, previousTask)
+      oldCallback?.(event(9))
+      assert.equal(getModInstallJob(instanceId, '1').progress, null)
+      input.onProgress?.(event(2))
+      assert.equal(getModInstallJob(instanceId, '1').progress?.percent, 20)
+      input.onProgress?.({ ...event(10), phase: 'verifying' })
+      assert.equal(getModInstallJob(instanceId, '1').status, 'downloading')
+      writeWorkshopMod(installPath, '1')
+      return { ok: true }
+    })
+    await enqueueModDownload({ instanceId, installPath, payload: { workshopId: '1' } })
+    await waitForModDownloadQueueIdle(instanceId)
+    oldCallback?.({ workshopId: '1', phase: 'downloading', progress: { downloadedBytes: 10, totalBytes: 10, percent: 100 } })
+    assert.equal(getModInstallJob(instanceId, '1').progress?.percent, 50)
+    await enqueueModDownload({ instanceId, installPath, payload: { workshopId: '1' } })
+    await waitForModDownloadQueueIdle(instanceId)
+    const result = getModDownloadQueueSnapshot(instanceId)?.items.find(item => item.workshopId === '1')
+    assert.equal(result?.phase, 'ready')
+    assert.equal(result?.progress?.percent, 100)
+    assert.ok(result?.taskId)
+  })
   it('deduplicates simultaneous requests before the worker has started', async () => {
     installDbHooks()
     const installPath = createInstallPath()

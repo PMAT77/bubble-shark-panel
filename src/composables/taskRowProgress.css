@@ -1,0 +1,70 @@
+@property --task-progress-ratio {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+.task-progress-row,
+.task-progress-card { transition: --task-progress-ratio 600ms ease-out; }
+.task-progress-surface {
+  --task-progress-fill-alpha: .10;
+  --task-progress-wave-alpha: .06;
+}
+.dark .task-progress-surface {
+  --task-progress-fill-alpha: .14;
+  --task-progress-wave-alpha: .08;
+}
+.task-progress-row > td,
+.task-progress-card {
+  isolation: isolate;
+  --task-progress-cell-fill: clamp(0px, calc(var(--task-progress-canvas-width, 0px) * var(--task-progress-ratio, 0) - var(--task-progress-cell-offset, 0px)), var(--task-progress-cell-width, 0px));
+}
+.task-progress-row > td:not(.n-data-table-td--fixed-right):not(.n-data-table-td--fixed-left),
+.task-progress-card { position: relative; }
+.task-progress-row > td:not(.n-data-table-td--fixed-left)::after,
+.task-progress-row > td.n-data-table-td--fixed-left::before,
+.task-progress-card::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--task-progress-cell-fill);
+  z-index: -1;
+  pointer-events: none;
+  opacity: 1;
+  background-color: rgb(56 189 248 / var(--task-progress-fill-alpha));
+  background-image: repeating-radial-gradient(ellipse at 0 50%, transparent 0 34px, rgb(56 189 248 / var(--task-progress-wave-alpha)) 36px, transparent 40px 72px);
+  background-size: var(--task-progress-canvas-width, 100%) 100%;
+  background-position: calc(0px - var(--task-progress-cell-offset, 0px)) 50%;
+  mask-image: linear-gradient(to right, #000 max(0px, calc(100% - clamp(0px, calc(var(--task-progress-cell-width, 100%) - var(--task-progress-cell-fill)), 8px))), transparent);
+  transition: opacity 250ms ease-out;
+  animation: task-progress-ripple 2.4s linear infinite;
+}
+.task-progress-card {
+  overflow: hidden;
+  --task-progress-cell-fill: calc(100% * var(--task-progress-ratio, 0));
+}
+.task-progress-paused > td:not(.n-data-table-td--fixed-left)::after,
+.task-progress-paused > td.n-data-table-td--fixed-left::before,
+.task-progress-paused.task-progress-card::after,
+.task-progress-finishing > td:not(.n-data-table-td--fixed-left)::after,
+.task-progress-finishing > td.n-data-table-td--fixed-left::before,
+.task-progress-finishing.task-progress-card::after,
+[data-task-paused='true'] .task-progress-row > td:not(.n-data-table-td--fixed-left)::after,
+[data-task-paused='true'] .task-progress-row > td.n-data-table-td--fixed-left::before,
+[data-task-paused='true'] .task-progress-card::after { animation-play-state: paused; }
+.task-progress-fading > td:not(.n-data-table-td--fixed-left)::after,
+.task-progress-fading > td.n-data-table-td--fixed-left::before,
+.task-progress-fading.task-progress-card::after { opacity: 0; }
+@keyframes task-progress-ripple {
+  to { background-position: calc(76px - var(--task-progress-cell-offset, 0px)) 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-progress-row,
+  .task-progress-card { transition: none; }
+  .task-progress-row > td:not(.n-data-table-td--fixed-left)::after,
+  .task-progress-row > td.n-data-table-td--fixed-left::before,
+  .task-progress-card::after {
+    animation: none;
+    transition: none;
+    background-image: none;
+  }
+}

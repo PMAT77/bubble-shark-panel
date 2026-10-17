@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { runSteamcmdWorkshopDownloadInContainer } from '../../container/steamcmd-runner'
+import { runWorkshopDownload, type WorkshopDownloadInput, type WorkshopDownloadResult } from './workshop-download'
 import { resolveDstSteamWorkshopModDir } from './constants'
 import { resolveDstLegacyModDir, resolveDstUgcModDir } from './ugc-mod-install'
 import type { SteamcmdTimeoutPhase } from '../../container/steamcmd-timeout'
@@ -130,92 +130,7 @@ export function detectWorkshopDownloadFailure(output: string): string | null {
   return WORKSHOP_DOWNLOAD_FAILURE_PATTERN.test(text) ? text : null
 }
 
-export async function downloadDstWorkshopMods(input: {
-  hostInstallPath: string
-  workshopIds: string[]
-  instanceId: string
-  /**
-   * 为 true 时忽略「本机已有内容」，把请求的 id 全部交给 SteamCMD 重新校验下载。
-   *
-   * 更新已订阅 Mod 必须走这条路：SteamCMD 自己会比对工坊清单，内容已是最新时是一次
-   * 廉价空跑，有新版本时才会真正重新下载。为 false（订阅/补齐）时保持短路，
-   * 避免对已就绪的 Mod 白跑一次 SteamCMD。
-   */
-  force?: boolean
-  onLogLine?: (line: string) => void
-  onAwaitingSteamcmdLock?: () => void | Promise<void>
-  onDownloadStart?: () => void
-  onPreparingSteamcmd?: () => void
-  /**
-   * SteamCMD 任务的取消键。队列传 `modq-<instanceId>`，与实例安装（`<instanceId>`）
-   * 分开：两类任务共用同一个键时，取消 Mod 下载会连带杀掉正在跑的游戏安装。
-   */
-  cancelKey?: string
-}): Promise<{ ok: boolean, error?: string, cancelled?: boolean, items?: Array<{ workshopId: string, ok: boolean }> }> {
-  const missingIds = resolveWorkshopDownloadIds(input.hostInstallPath, input.workshopIds, {
-    force: input.force,
-  })
-  if (missingIds.length === 0) {
-    return { ok: true }
-  }
-
-  const confirmedIds = new Set<string>()
-  let downloadStarted = false
-  const observe = (line: string) => {
-    const id = /^Success\.\s+Downloaded item\s+(\d+)\b/i.exec(line.trim())?.[1]
-    if (id) confirmedIds.add(id)
-    const downloadingId = /^(?:Downloading item|Success\.\s+Downloaded item)\s+(\d+)\b/i.exec(line.trim())?.[1]
-    if (!downloadStarted && downloadingId && missingIds.includes(downloadingId)) {
-      downloadStarted = true
-      input.onDownloadStart?.()
-    }
-    input.onLogLine?.(line)
-  }
-  const result = await runSteamcmdWorkshopDownloadInContainer({
-    hostInstallPath: input.hostInstallPath,
-    workshopIds: missingIds,
-    cancelKey: input.cancelKey?.trim() || input.instanceId,
-    onLogLine: observe,
-    onAwaitingSteamcmdLock: input.onAwaitingSteamcmdLock,
-    onPreparingSteamcmd: input.onPreparingSteamcmd,
-  })
-  for (const line of result.output.split(/\r?\n/)) observe(line)
-  const items = missingIds.map(workshopId => ({ workshopId, ok: confirmedIds.has(workshopId) && isDstWorkshopModPresent(input.hostInstallPath, workshopId) }))
-
-  if (!result.ok) {
-    return {
-      ok: false,
-      error: result.cancelled
-        ? '下载已取消'
-        : formatModDownloadFailureMessage(result.output, result.timeoutPhase),
-      cancelled: result.cancelled === true,
-      items,
-    }
-  }
-
-  // 退出码为 0 但日志里已经报错：旧文件还在盘上，文件存在性检查发现不了，必须单独拦下
-  const failureOutput = detectWorkshopDownloadFailure(result.output)
-  if (failureOutput) {
-    return {
-      ok: false,
-      error: formatModDownloadFailureMessage(failureOutput),
-      items,
-    }
-  }
-
-  const stillMissing = collectMissingWorkshopIds(input.hostInstallPath, missingIds)
-  if (stillMissing.length > 0) {
-    return {
-      ok: false,
-      error: formatMissingWorkshopModError(input.hostInstallPath, stillMissing),
-      items,
-    }
-  }
-
-  const unconfirmed = missingIds.filter(workshopId => !confirmedIds.has(workshopId))
-  if (unconfirmed.length > 0) {
-    return { ok: false, error: `Mod 下载未完成：SteamCMD 未确认以下 Mod 下载成功：${unconfirmed.join('、')}`, items }
-  }
-
-  return { ok: true, items: missingIds.map(workshopId => ({ workshopId, ok: true })) }
+export async function downloadDstWorkshopMods(input: WorkshopDownloadInput): Promise<WorkshopDownloadResult> {
+  const workshopIds = resolveWorkshopDownloadIds(input.hostInstallPath, input.workshopIds, { force: input.force })
+  return runWorkshopDownload({ ...input, workshopIds })
 }

@@ -9,6 +9,7 @@ export function renderModPreview(previewImage: string | null) {
   }
   return h(NImage, {
     src: previewImage,
+    alt: '',
     width: 48,
     height: 48,
     objectFit: 'cover',

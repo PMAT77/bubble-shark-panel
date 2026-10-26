@@ -1,5 +1,6 @@
 import type { TabbarRecordRaw } from '@fantastic-admin/types'
 import type { RouteLocationNormalized } from 'vue-router'
+import { findTabbarRecord, replaceTabbarQuery } from '@/utils/tabbarQuery'
 
 const TABBAR_MEMORY_STORAGE_KEY = 'app-tabbar-memory'
 
@@ -54,7 +55,7 @@ export const useAppTabbarStore = defineStore(
       const meta = route.matched.at(-1)?.meta
       const tabId = route.fullPath
       if (route.name !== 'reload') {
-        const findTab = list.value.find(item => item.tabId === tabId)
+        const findTab = findTabbarRecord(list.value, route)
         // 新增标签页
         if (!findTab) {
           const listItem = {
@@ -84,6 +85,11 @@ export const useAppTabbarStore = defineStore(
       }
       updateStorage()
     }
+    function replaceQuery(previousId: string, fullPath: string) {
+      list.value = replaceTabbarQuery(list.value, previousId, fullPath)
+      updateStorage()
+    }
+
     // 删除指定标签页
     function remove(tabId: TabbarRecordRaw['tabId']) {
       const keepName: string[] = []
@@ -206,6 +212,7 @@ export const useAppTabbarStore = defineStore(
       list,
       leaveIndex,
       add,
+      replaceQuery,
       remove,
       removeOtherSide,
       removeLeftSide,

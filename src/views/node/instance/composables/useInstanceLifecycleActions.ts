@@ -14,9 +14,9 @@ import {
   isInstancePortConflictError,
   type InstancePortConflictAction,
 } from '@/utils/instancePortConflict'
-import { canForceUpdateInstance, canRetryInstanceInstall, isInstanceUpToDate } from '../instanceUpdatePresentation'
+import { canForceUpdateInstance, canRetryInstanceInstall } from '../instanceUpdatePresentation'
 import { trackStartupAccepted } from './useInstanceStartup'
-export { canForceUpdateInstance, canUpdateInstance, isInstanceUpToDate } from '../instanceUpdatePresentation'
+export { canForceUpdateInstance, canUpdateInstance, getUpdateInstanceButtonTitle, isInstanceUpToDate } from '../instanceUpdatePresentation'
 import {
   blocksDefaultStart,
   buildInstanceStartGuideContext,
@@ -433,19 +433,4 @@ export function useInstanceLifecycleActions(options: UseInstanceLifecycleActions
     confirmForceUpdateInstances,
     confirmDangerousInstanceAction,
   }
-}
-
-/** 「更新服务端」按钮禁用时的 tooltip */
-export function getUpdateInstanceButtonTitle(instance: InstanceItem) {
-  if (instance.status === 'running') {
-    return '请先停止实例'
-  }
-  if (instance.status === 'pending_install' || instance.status === 'installing') {
-    return '安装进行中'
-  }
-  if (canRetryInstanceInstall(instance)) return '重试安装服务端文件'
-  if (isInstanceUpToDate(instance)) {
-    return '已是最新版本'
-  }
-  return instance.updateCheckError ?? '请先检查更新，确认有更新后再更新服务端'
 }

@@ -39,6 +39,15 @@ it('主世界健康时只展示洞穴失败，并读取分片诊断', () => {
   assert.deepEqual(anomalies, [{ reason: '未能连接主世界', world: 'caves' }])
 })
 
+it('版本查询原始错误保留在异常详情，独立于世界启动错误', () => {
+  const raw = `SteamCMD 版本查询失败：${'Waiting for client config...\n'.repeat(60)}ERROR! Timeout`
+  assert.deepEqual(collectInstanceAnomalies(instance({ status: 'stopped', updateCheckError: raw })), [{ reason: raw, world: null }])
+  assert.deepEqual(collectInstanceAnomalies(instance({ updateCheckError: raw, startup: startup() })), [
+    { reason: '启动失败，请查看控制台日志和服务器配置', world: 'master' },
+    { reason: raw, world: null },
+  ])
+})
+
 it('安装失败保留；安装过程中和已停止实例不展示历史启动诊断', () => {
   assert.equal(collectInstanceAnomalies(instance({ lastErrorPhase: 'install', lastError: '安装包下载失败' })).length, 1)
   assert.deepEqual(collectInstanceAnomalies(instance({ status: 'installing', lastError: '旧安装失败', startup: startup() })), [])

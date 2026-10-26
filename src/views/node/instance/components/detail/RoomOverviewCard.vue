@@ -10,7 +10,6 @@ import {
   routeToDstPlayerManage,
   routeToDstRoomSettings,
   routeToDstWorldSettings,
-  routeToInstanceConsole,
 } from '@/navigation/game-routes'
 import { instanceSupportsDstRoom } from '@/composables/useGameInstance'
 import { dstGameModeLabel } from '../../instanceCommandShortcuts'
@@ -111,12 +110,6 @@ const cavesText = computed(() => {
   return enabled ? '已开启' : '未开启'
 })
 
-function goConsole() {
-  if (props.instance) {
-    router.push(routeToInstanceConsole(props.instance.id))
-  }
-}
-
 /** 房间玩家页按实例打开：在线玩家、踢人封禁与三份名单都在那里 */
 function goPlayerManage() {
   if (props.instance) {
@@ -137,47 +130,53 @@ function goWorldSettings() {
 }
 
 function goMods() {
-  router.push(routeToDstModList())
+  if (props.instance) router.push(routeToDstModList(props.instance.id, 'subscribed'))
 }
 </script>
 
 <template>
-  <NCard title="房间概览" size="small">
+  <NCard size="small">
+    <h2 class="mb-4 text-base font-medium">房间概览</h2>
     <NSpin v-if="loading && !instance" class="block mx-auto my-6" />
     <template v-else-if="instance">
       <div
         v-if="isDst && installed"
-        class="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4 lg:grid-cols-6"
+        class="space-y-4"
       >
-        <NStatistic label="房间名" :value="canViewRoom ? roomName : '—'" />
-        <NStatistic label="游戏模式">
-          {{ canViewRoom ? dstGameModeLabel(cluster?.gameMode) : '—' }}
-        </NStatistic>
-        <NStatistic label="联网模式">
-          {{ canViewRoom || canViewConsole ? networkModeLabel : '—' }}
-        </NStatistic>
-        <NStatistic label="在线玩家">
-          <span :class="onlinePlayers?.running ? '' : 'text-muted-foreground'">
-            {{ canViewPlayers ? playerCountText : '—' }}
-          </span>
-        </NStatistic>
-        <NStatistic label="Mod（已生效 / 总数）">
-          {{ canViewMods ? modCountText : '—' }}
-          <NTag
-            v-if="canViewMods && notReadyModCount > 0"
-            size="tiny"
-            :bordered="false"
-            type="warning"
-            class="ml-1"
-          >
-            {{ notReadyModCount }} 个未就绪
-          </NTag>
-        </NStatistic>
-        <NStatistic label="洞穴">
-          <NTag size="small" :bordered="false" :type="cavesText === '已开启' ? 'success' : 'default'">
-            {{ canViewRoom ? cavesText : '—' }}
-          </NTag>
-        </NStatistic>
+        <div class="min-w-0">
+          <p class="mb-1 text-sm text-muted-foreground">房间名</p>
+          <p class="break-words text-lg font-medium">{{ canViewRoom ? roomName : '—' }}</p>
+        </div>
+        <div class="room-overview-grid">
+          <NStatistic label="游戏模式">
+            {{ canViewRoom ? dstGameModeLabel(cluster?.gameMode) : '—' }}
+          </NStatistic>
+          <NStatistic label="联网模式">
+            {{ canViewRoom || canViewConsole ? networkModeLabel : '—' }}
+          </NStatistic>
+          <NStatistic label="在线玩家">
+            <span :class="onlinePlayers?.running ? '' : 'text-muted-foreground'">
+              {{ canViewPlayers ? playerCountText : '—' }}
+            </span>
+          </NStatistic>
+          <NStatistic label="Mod（已生效 / 总数）">
+            {{ canViewMods ? modCountText : '—' }}
+            <NTag
+              v-if="canViewMods && notReadyModCount > 0"
+              size="tiny"
+              :bordered="false"
+              type="warning"
+              class="ml-1"
+            >
+              {{ notReadyModCount }} 个未就绪
+            </NTag>
+          </NStatistic>
+          <NStatistic label="洞穴">
+            <NTag size="small" :bordered="false" :type="cavesText === '已开启' ? 'success' : 'default'">
+              {{ canViewRoom ? cavesText : '—' }}
+            </NTag>
+          </NStatistic>
+        </div>
       </div>
       <NEmpty
         v-else-if="isDst"
@@ -195,9 +194,6 @@ function goMods() {
         而是在路由解析阶段直接抛 `No match`，按钮看起来完全失灵。
       -->
       <div v-if="installed" class="mt-4 flex flex-wrap gap-2">
-        <NButton v-if="canViewConsole" size="small" secondary @click="goConsole">
-          控制台
-        </NButton>
         <NButton v-if="isDst && canViewPlayers" size="small" secondary @click="goPlayerManage">
           玩家管理
         </NButton>
@@ -217,3 +213,12 @@ function goMods() {
     <NEmpty v-else description="未找到实例" size="small" />
   </NCard>
 </template>
+
+<style scoped>
+.room-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  gap: 16px 24px;
+  font-variant-numeric: tabular-nums;
+}
+</style>

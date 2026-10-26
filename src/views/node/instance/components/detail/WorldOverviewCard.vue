@@ -136,28 +136,29 @@ function goWorldSettings() {
 </script>
 
 <template>
-  <NCard title="世界概览" size="small">
+  <NCard size="small">
+    <h2 class="mb-4 text-base font-medium">世界概览</h2>
     <NSpin v-if="loading && !shardList" class="block mx-auto my-6" />
     <template v-else-if="instance && shardList">
       <!--
         这一行始终占位：读数在刷新与轮询之间会短暂为空（实例未运行、查询失败或还没回来），
         用 v-if 把整行收掉会让卡片高度塌一下再弹回来。
       -->
-      <p class="mb-3 text-xs text-muted-foreground">
+      <p class="mb-3 text-sm text-muted-foreground">
         游戏进度：<span class="text-foreground">{{ worldStateText ?? '—' }}</span>
         <span v-if="worldState && !worldState.available && worldState.message" class="ml-1">{{ worldState.message }}</span>
       </p>
 
-      <div class="grid gap-3 md:grid-cols-2">
+      <div class="world-overview-grid">
         <div
-          v-for="view in [masterView, cavesView]"
-          :key="view?.shard.id ?? Math.random()"
+          v-for="(view, index) in [masterView, cavesView]"
+          :key="view?.shard.id ?? index"
           v-show="view"
           class="rounded-lg border border-border p-3 space-y-2"
         >
           <template v-if="view">
             <div class="flex items-center justify-between gap-2">
-              <span class="text-sm font-medium">{{ view.shard.isMaster ? '地上' : '洞穴' }}</span>
+              <h3 class="text-sm font-medium">{{ view.shard.isMaster ? '地上' : '洞穴' }}</h3>
               <div class="flex flex-wrap items-center justify-end gap-2">
                 <NTag size="small" :bordered="false" :type="view.tagType">
                   {{ view.descriptor.label }}
@@ -170,14 +171,14 @@ function goWorldSettings() {
                 </NButton>
               </div>
             </div>
-            <dl class="text-xs text-muted-foreground space-y-1">
+            <dl class="text-sm text-muted-foreground space-y-1">
               <div class="flex justify-between gap-2">
                 <dt>世界生成</dt>
                 <dd>{{ view.shard.worldGenerated ? '已生成' : '未生成' }}</dd>
               </div>
               <div class="flex justify-between gap-2">
                 <dt>地图预设</dt>
-                <dd>{{ presetLabel(view.shard.worldgenPreset) }}</dd>
+                <dd class="min-w-0 break-words text-right">{{ presetLabel(view.shard.worldgenPreset) }}</dd>
               </div>
               <div class="flex justify-between gap-2">
                 <dt>游戏端口</dt>
@@ -217,3 +218,11 @@ function goWorldSettings() {
     <NEmpty v-else description="未找到实例" size="small" />
   </NCard>
 </template>
+
+<style scoped>
+.world-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 12px;
+}
+</style>

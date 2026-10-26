@@ -34,8 +34,10 @@ export function routeToNodeInstance(): RouteLocationRaw {
   return { name: ROUTE_NAMES.nodeInstance }
 }
 
-export function routeToInstanceDetail(instanceId: string): RouteLocationRaw {
-  return { name: ROUTE_NAMES.nodeInstanceDetail, params: { instanceId } }
+export type InstanceDetailTab = 'overview' | 'commands' | 'files' | 'migration'
+
+export function routeToInstanceDetail(instanceId: string, tab?: InstanceDetailTab): RouteLocationRaw {
+  return { name: ROUTE_NAMES.nodeInstanceDetail, params: { instanceId }, ...(tab ? { query: { tab } } : {}) }
 }
 
 export function routeToInstanceConsole(instanceId: string): RouteLocationRaw {

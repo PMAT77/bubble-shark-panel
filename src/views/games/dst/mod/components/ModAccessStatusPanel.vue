@@ -48,7 +48,7 @@ function toggle(event: Event) {
 </script>
 
 <template>
-  <details :key="instanceId" ref="panelElement" :open="open" class="max-h-64 shrink-0 overflow-auto rounded-md border px-3 py-2 text-xs" @toggle="toggle">
+  <details :key="instanceId" ref="panelElement" :open="open" class="rounded-md border px-3 py-2 text-sm" @toggle="toggle">
     <summary class="cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">连接与下载帮助</summary>
     <div class="mt-2 flex flex-col gap-2">
       <p>{{ help.summary }}</p>

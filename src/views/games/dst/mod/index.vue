@@ -13,14 +13,14 @@ import type {
   SteamModTrendDays,
 } from '@/api/modules/mod'
 import type { InstanceSummaryItem } from '@/api/modules/instance'
-import { useDebounceFn } from '@vueuse/core'
+import { useDebounceFn, useElementSize } from '@vueuse/core'
 import { GripVertical } from 'lucide-vue-next'
 import { useSortable } from '@vueuse/integrations/useSortable'
 import type { SortableEvent } from 'sortablejs'
 import { moveModLoadOrder } from './modLoadOrder'
 import { renderModPreview } from './modPreview'
 import type { NotificationReactive } from 'naive-ui'
-import { NAlert, NButton, NCard, NDataTable, NEmpty, NImage, NInput, NPagination, NRate, NSelect, NSwitch, NTabPane, NTabs, NTag, NTooltip, useDialog, useMessage, useNotification } from 'naive-ui'
+import { NAlert, NButton, NCheckbox, NDataTable, NEmpty, NImage, NInput, NPagination, NPopover, NRate, NSelect, NTabPane, NTabs, NTag, useDialog, useMessage, useNotification } from 'naive-ui'
 import AdminListToolbar from '@/components/AdminListToolbar.vue'
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import apiInstance from '@/api/modules/instance'
@@ -39,6 +39,10 @@ import { countOutdatedMods, resolveUpdateIneffectiveNotice, selectUpdatableMods 
 import { routeToDstModDetail, routeToNodeInstance } from '@/navigation/game-routes'
 import { MOD_INSTALL_STATUS, MOD_UPDATE_STATUS } from '@/constants/statusDictionary'
 import { getInstanceState } from '@/views/node/instance/instanceDisplay'
+import ModEnabledControl from './components/ModEnabledControl.vue'
+import SubscribedModActions from './components/SubscribedModActions.vue'
+import SubscribedModStatus from './components/SubscribedModStatus.vue'
+import { keyboardTabProps } from '@/utils/keyboardTab'
 
 defineOptions({
   name: 'DstModList',
@@ -50,7 +54,10 @@ const message = useMessage()
 const dialog = useDialog()
 const notification = useNotification()
 const appSettingsStore = useAppSettingsStore()
-const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
+const listElement = ref<HTMLElement | null>(null)
+const { width: listWidth } = useElementSize(listElement)
+const isMobileMode = computed(() => appSettingsStore.mode === 'mobile' || (listWidth.value > 0 && listWidth.value < 960))
+const addModOpen = ref(false)
 
 /** 订阅成功引导卡：持久展示，引导用户去世界设置开启 Mod */
 const subscribeGuideNotificationRef = ref<NotificationReactive | null>(null)
@@ -99,6 +106,10 @@ watch(selectedInstanceId, () => {
   queueActionPending.value = false
   checkingUpdates.value = false
   reorderingMods.value = false
+  addModOpen.value = false
+  manualWorkshopInput.value = ''
+  manualWorkshopError.value = ''
+  manualSubscribing.value = false
 }, { flush: 'sync' })
 const {
   downloadingMods,
@@ -247,9 +258,6 @@ const instanceSelectPlaceholder = computed(() => {
   return '暂无可管理的 DST 实例'
 })
 const hasSelectedInstance = computed(() => Boolean(selectedInstanceId.value))
-const selectedInstanceName = computed(() =>
-  instanceOptions.value.find(item => item.value === selectedInstanceId.value)?.label ?? '-',
-)
 const marketEmptyDescription = computed(() => {
   if (!selectedInstanceId.value) {
     return '请先选择实例'
@@ -348,11 +356,6 @@ function canRedownloadMod(mod: ModItemDto): boolean {
   return mod.installStatus === 'ready'
     && mod.updateStatus === 'unknown'
     && !isPendingWorkshop(mod.workshopId)
-}
-
-function modUpdateTagType(status: ModItemDto['updateStatus']): 'default' | 'success' | 'warning' {
-  if (status === 'outdated') return 'warning'
-  return status === 'up_to_date' ? 'success' : 'default'
 }
 
 /** 无法判断版本的原因提示：让「未检查」与「查不到」区分开，而不是笼统一句不知道 */
@@ -664,28 +667,17 @@ function renderMarketStatus(row: SteamModListQueryResultItem) {
 
 const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
   {
-    title: '缩略图',
-    key: 'previewImage',
-    width: 72,
-    render: row => renderModPreview(row.previewImage),
-  },
-  {
-    title: 'Mod 名称',
+    title: 'Mod',
     key: 'title',
-    minWidth: 220,
-    render: row => row.title,
-  },
-  {
-    title: '评价',
-    key: 'rating',
-    width: 130,
-    render: row => renderModRating(row.rating),
-  },
-  {
-    title: '创意工坊 ID',
-    key: 'workshopId',
-    width: 150,
-    render: row => row.workshopId,
+    minWidth: 280,
+    render: row => h('div', { class: 'flex min-w-0 items-start gap-3' }, [
+      row.previewImage ? renderModPreview(row.previewImage) : null,
+      h('div', { class: 'min-w-0 space-y-1' }, [
+        h('span', { class: 'block break-words font-medium' }, row.title),
+        h('span', { class: 'block font-mono text-xs text-muted-foreground' }, `ID ${row.workshopId}`),
+        ...(row.rating != null ? [renderModRating(row.rating)] : []),
+      ]),
+    ]),
   },
   {
     title: '状态',
@@ -764,12 +756,37 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
   },
 ]
 
+function subscribedStatusProps(row: ModItemDto) {
+  return { name: row.name, label: subscribedStatusLabel(row), tone: subscribedStatusType(row),
+    version: modUpdateLabel(row), versionHint: modUpdateTooltip(row), error: row.installError }
+}
+function subscribedEnabledProps(row: ModItemDto) {
+  return { name: row.name, ready: row.installStatus === 'ready', enabled: row.enabled,
+    disabled: !hasSelectedInstance.value || isPendingWorkshop(row.workshopId) || unsubscribingWorkshopIds.value.has(row.workshopId),
+    loading: unsubscribingWorkshopIds.value.has(row.workshopId), onToggle: () => void toggleSubscribedMod(row) }
+}
+function subscribedActionsProps(row: ModItemDto) {
+  return { name: row.name, status: row.installStatus, disabled: !hasSelectedInstance.value,
+    pending: isPendingWorkshop(row.workshopId), unsubscribing: unsubscribingWorkshopIds.value.has(row.workshopId),
+    updatable: isModUpdatable(row), redownloadable: canRedownloadMod(row),
+    onRetry: () => void retryFailedInstall(row), onUpdate: () => void updateInstalledMod(row),
+    onConfigure: () => openModConfig(row), onImport: () => { localImportShow.value = true },
+    onUnsubscribe: () => confirmUnsubscribe(row), onDetail: () => goToModDetail(row.workshopId) }
+}
+const allModsSelected = computed(() => installedMods.value.length > 0 && installedMods.value.every(mod => checkedRowKeys.value.includes(mod.workshopId)))
+function selectMod(workshopId: string, selected: boolean) {
+  checkedRowKeys.value = selected
+    ? [...new Set([...checkedRowKeys.value, workshopId])]
+    : checkedRowKeys.value.filter(key => key !== workshopId)
+}
+function selectAllMods(selected: boolean) {
+  checkedRowKeys.value = selected ? installedMods.value.map(mod => mod.workshopId) : []
+}
+
 const subscribedColumns: DataTableColumns<ModItemDto> = [
+  { type: 'selection', width: 40 },
   {
-    type: 'selection',
-  },
-  {
-    title: '顺序', key: 'loadOrder', width: 64,
+    title: '顺序', key: 'loadOrder', width: 56,
     render: row => hasPermission('mod:toggle') ? h('button', {
       type: 'button', class: 'mod-sort-handle', disabled: !canDragMod(row),
       'aria-label': `调整 ${row.name} 的加载顺序`, title: '拖动调整加载顺序，也可使用上下方向键',
@@ -777,187 +794,20 @@ const subscribedColumns: DataTableColumns<ModItemDto> = [
     }, [h(GripVertical, { size: 16, 'aria-hidden': true })]) : String(row.loadOrder + 1),
   },
   {
-    title: '缩略图',
-    key: 'previewImage',
-    width: 72,
-    render: row => renderModPreview(row.previewImage),
-  },
-  {
-    title: 'Mod 名称',
-    key: 'name',
-    minWidth: 220,
-    render: (row) => {
-      if (isModNameIdentified(row)) {
-        return row.name
-      }
-      // 名称没认出来时明确标出来，而不是显示一串看不出所以然的占位名
-      return h('div', { class: 'flex items-center gap-2' }, [
-        h('span', { class: 'text-muted-foreground' }, `workshop-${row.workshopId}`),
-        h(NTag, { size: 'tiny', bordered: false, type: 'warning' }, { default: () => '未识别名称' }),
-      ])
-    },
-  },
-  {
-    title: '评价',
-    key: 'rating',
-    width: 130,
-    render: row => renderModRating(row.rating),
-  },
-  {
-    title: '创意工坊 ID',
-    key: 'workshopId',
-    width: 150,
-    render: row => row.workshopId,
-  },
-  {
-    title: '版本',
-    key: 'updateStatus',
-    width: 120,
-    render: (row) => {
-      const tag = h(
-        NTag,
-        { size: 'small', bordered: false, type: modUpdateTagType(row.updateStatus) },
-        { default: () => modUpdateLabel(row) },
-      )
-      return h(
-        NTooltip,
-        { trigger: 'hover' },
-        { trigger: () => tag, default: () => modUpdateTooltip(row) },
-      )
-    },
-  },
-  {
-    title: '安装状态',
-    key: 'installStatus',
-    width: 160,
-    render: (row) => {
-      const pending = row.installStatus === 'pending' || isPendingWorkshop(row.workshopId)
-      const label = pending
-        ? subscribedStatusLabel(row)
-        : row.installStatus === 'failed' ? MOD_INSTALL_STATUS.failed.label : MOD_INSTALL_STATUS.ready.label
-      const type = subscribedStatusType(row)
-      const tag = h(NTag, { size: 'small', bordered: false, type }, { default: () => label })
-      const errorText = row.installError?.trim()
-      // 文件状态与「启用」是两件事：无论如何都要能悬停看懂，出错时优先说原因
-      const tooltipText = errorText
-        ? (errorText.length > 160 ? `${errorText.slice(0, 160)}…` : errorText)
-        : (label === MOD_INSTALL_STATUS.ready.label
-            ? 'Mod 文件已下载并放入服务器目录；是否在游戏里生效看「启用」开关'
-            : 'Mod 文件尚未就绪，就绪后才能启用')
-      return h(
-        NTooltip,
-        { trigger: 'hover' },
-        {
-          trigger: () => tag,
-          default: () => tooltipText,
-        },
-      )
-    },
-  },
-  {
-    title: '启用',
-    key: 'enabled',
-    width: 90,
-    // 未就绪时不展示保存的启用设置；只读账号在就绪后显示状态标签。
-    render: row => row.installStatus !== 'ready'
-      ? h('span', { class: 'text-xs text-muted-foreground whitespace-normal' }, '未就绪，无法启用')
-      : (hasPermission('mod:toggle')
-      ? h(NSwitch, {
-          size: 'small',
-          value: row.enabled,
-          disabled: !hasSelectedInstance.value
-            || isPendingWorkshop(row.workshopId)
-            || unsubscribingWorkshopIds.value.has(row.workshopId),
-          'onUpdate:value': () => void toggleSubscribedMod(row),
-        })
-      : h(NTag, { size: 'small', bordered: false }, { default: () => (row.enabled ? '已启用' : '已停用') })),
-  },
-  {
-    title: '操作',
-    key: 'actions',
-    width: 400,
-    render: row => h('div', { class: 'flex items-center gap-3' }, [
-      ...(row.installStatus === 'pending' && !isPendingWorkshop(row.workshopId) && hasPermission('mod:install')
-        ? [h(NButton, { size: 'tiny', onClick: () => void retryFailedInstall(row) }, { default: () => '下载' })] : []),
-      ...(row.installStatus === 'failed' && hasPermission('mod:install')
-        ? [h(NButton, {
-            size: 'tiny',
-            type: 'primary',
-            disabled: !hasSelectedInstance.value || unsubscribingWorkshopIds.value.has(row.workshopId) || isPendingWorkshop(row.workshopId),
-            onClick: () => void retryFailedInstall(row),
-          }, { default: () => '重试' })] : []),
-      ...(row.installStatus !== 'ready' && hasPermission('mod:install')
-        ? [h(NButton, { size: 'tiny', onClick: () => { localImportShow.value = true } }, { default: () => '本地导入' })] : []),
-      ...(row.installStatus === 'ready'
-        ? [
-            // 「更新」只在创意工坊确实有新版本时出现，否则这个按钮点下去毫无意义
-            ...(isModUpdatable(row) && hasPermission('mod:install')
-              ? [h(
-                  NButton,
-                  {
-                    size: 'tiny',
-                    type: 'primary',
-                    disabled: !hasSelectedInstance.value || isPendingWorkshop(row.workshopId),
-                    class: 'w-14',
-                    onClick: () => void updateInstalledMod(row),
-                  },
-                  { default: () => '更新' },
-                )]
-              : []),
-            // 版本无法判断时留一个出口：重新下载一次，让本机内容与工坊对齐
-            ...(canRedownloadMod(row) && hasPermission('mod:install')
-              ? [h(
-                  NButton,
-                  {
-                    size: 'tiny',
-                    disabled: !hasSelectedInstance.value || isPendingWorkshop(row.workshopId),
-                    class: 'w-16',
-                    onClick: () => void updateInstalledMod(row),
-                  },
-                  { default: () => '重新下载' },
-                )]
-              : []),
-            ...(hasPermission('mod:config')
-              ? [h(
-                  NButton,
-                  {
-                    size: 'tiny',
-                    disabled: !hasSelectedInstance.value || isPendingWorkshop(row.workshopId),
-                    class: 'w-14',
-                    onClick: () => openModConfig(row),
-                  },
-                  { default: () => '配置' },
-                )]
-              : [])]
-        : []),
-      ...(hasPermission('mod:install')
-        ? [h(
-            NButton,
-            {
-              size: 'tiny',
-              disabled: !hasSelectedInstance.value
-                || unsubscribingWorkshopIds.value.has(row.workshopId)
-                || row.installStatus === 'pending'
-                || isPendingWorkshop(row.workshopId),
-              loading: unsubscribingWorkshopIds.value.has(row.workshopId),
-              class: 'w-16',
-              onClick: () => confirmUnsubscribe(row),
-            },
-            { default: () => '取消订阅' },
-          )]
-        : []),
-      h(
-        NButton,
-        {
-          size: 'tiny',
-          text: true,
-          disabled: !hasSelectedInstance.value,
-          onClick: () => goToModDetail(row.workshopId),
-        },
-        { default: () => '详情' },
-      ),
+    title: 'Mod', key: 'name', minWidth: 260,
+    render: row => h('div', { class: 'flex min-w-0 items-start gap-3' }, [
+      row.previewImage ? renderModPreview(row.previewImage) : null,
+      h('div', { class: 'min-w-0 space-y-1' }, [
+        h('span', { class: 'block break-words font-medium' }, row.name),
+        ...(!isModNameIdentified(row) ? [h(NTag, { size: 'tiny', bordered: false, type: 'warning' }, { default: () => '未识别名称' })] : []),
+        h('span', { class: 'block text-xs text-muted-foreground font-mono' }, `ID ${row.workshopId}`),
+        ...(row.rating != null ? [renderModRating(row.rating)] : []),
+      ]),
     ]),
   },
+  { title: '状态', key: 'status', width: 200, render: row => h(SubscribedModStatus, subscribedStatusProps(row)) },
+  { title: '启用', key: 'enabled', width: 90, render: row => h(ModEnabledControl, subscribedEnabledProps(row)) },
+  { title: '操作', key: 'actions', width: 210, render: row => h(SubscribedModActions, subscribedActionsProps(row)) },
 ]
 
 async function loadInstances() {
@@ -1006,6 +856,7 @@ async function loadInstalledMods() {
       return
     }
     installedMods.value = response.data.mods
+    checkedRowKeys.value = checkedRowKeys.value.filter(key => response.data.mods.some(mod => mod.workshopId === key))
     modInstanceStatus.value = response.data.instanceStatus
     riskTipBanner.value = response.data.riskTip?.trim() || null
     void restoreInstallJobs({
@@ -1761,6 +1612,7 @@ async function unsubscribeMod(workshopId: string) {
     await apiMod.deleteMod(selectedInstanceId.value, workshopId)
     if (!action.isCurrent()) return
     installedMods.value = installedMods.value.filter(item => item.workshopId !== workshopId)
+    checkedRowKeys.value = checkedRowKeys.value.filter(key => key !== workshopId)
     steamMods.value = steamMods.value.map(item => (
       item.workshopId === workshopId
         ? {
@@ -1791,6 +1643,10 @@ async function unsubscribeMod(workshopId: string) {
 }
 
 const manualWorkshopInput = ref('')
+const manualWorkshopInputRef = ref<InstanceType<typeof NInput> | null>(null)
+const manualWorkshopError = ref('')
+const manualSubscribing = ref(false)
+watch(manualWorkshopInput, () => { manualWorkshopError.value = '' })
 
 /** 从工坊详情页链接或纯数字输入中提取 Workshop ID */
 function extractWorkshopId(input: string): string | null {
@@ -1808,10 +1664,12 @@ function extractWorkshopId(input: string): string | null {
 
 /** 粘贴工坊 ID/链接直接订阅（不依赖创意工坊列表可用） */
 async function subscribeManualWorkshop() {
+  if (manualSubscribing.value) return
   const action = actionScope.capture()
   const workshopId = extractWorkshopId(manualWorkshopInput.value)
   if (!workshopId) {
-    message.warning('请输入有效的创意工坊 ID 或 Mod 详情页链接')
+    manualWorkshopError.value = '请输入有效的创意工坊 ID 或 Mod 详情页链接'
+    manualWorkshopInputRef.value?.focus()
     return
   }
   if (!selectedInstanceId.value) {
@@ -1824,6 +1682,7 @@ async function subscribeManualWorkshop() {
     return
   }
   ensurePendingInInstalledList({ workshopId, title: `工坊 ${workshopId}`, previewImage: null })
+  manualSubscribing.value = true
   try {
     await installMod({
       workshopId,
@@ -1833,6 +1692,7 @@ async function subscribeManualWorkshop() {
     })
     if (!action.isCurrent()) return
     manualWorkshopInput.value = ''
+    addModOpen.value = false
   }
   catch (error: unknown) {
     if (!action.isCurrent()) return
@@ -1841,6 +1701,7 @@ async function subscribeManualWorkshop() {
     }
     message.error(getErrorMessage(error, '订阅失败，请稍后重试'))
   }
+  finally { if (action.isCurrent()) manualSubscribing.value = false }
 }
 
 function onInstanceChange(value: string) {
@@ -1860,6 +1721,9 @@ function onInstanceChange(value: string) {
   steamTotalCount.value = null
   steamTotalPages.value = null
   checkedRowKeys.value = []
+  installedMods.value = []
+  modInstanceStatus.value = ''
+  riskTipBanner.value = null
   resetState()
   void Promise.all([loadSteamMods(true, true), loadInstalledMods()])
 }
@@ -1905,6 +1769,13 @@ watch(() => route.query, (query) => {
   if (id && id !== selectedInstanceId.value && instances.value.some(item => item.id === id)) onInstanceChange(id)
 })
 
+watch([selectedInstanceId, activeTab], ([instanceId, tab]) => {
+  if (!pageActive || loadingInstances.value || !instanceId) return
+  if (route.query.instanceId !== instanceId || route.query.tab !== tab) {
+    void router.replace({ query: { ...route.query, instanceId, tab } })
+  }
+})
+
 onMounted(async () => {
   await loadInstances()
   if (!pageActive) return
@@ -1913,573 +1784,204 @@ onMounted(async () => {
 </script>
 
 <template>
-  <!-- 整屏工作台：高度用 layout 的内容区高度变量自撑，不再用 `absolute inset-0`（父级高度为 0 会把整页裁掉） -->
-  <div class="dst-mod-page flex h-[var(--g-main-content-height)] flex-col overflow-hidden p-3 md:p-4">
-    <FaPageMain 
-      class="flex min-h-0 flex-1 flex-col overflow-hidden !m-0 h-full"
-      main-class="dst-mod-main flex min-h-0 flex-1 flex-col overflow-y-auto gap-4"
-    >
-      <div>
-        <h2 class="m-0 text-lg font-semibold">
-          Mod 订阅
-        </h2>
-        <p class="mt-1 text-sm text-muted-foreground">
-          Mod 开关的改动需重启实例后生效。
-        </p>
-      </div>
-
-      <NCard size="small" title="实例选择" class="mb-0 shrink-0">
+  <div class="dst-mod-page min-w-0 p-3 md:p-4">
+    <FaPageMain class="!m-0 min-w-0" main-class="!p-3 sm:!p-5">
+      <template #title>
         <div class="flex flex-wrap items-center gap-3">
-          <NSelect
-            class="w-full md:w-80"
-            :value="selectedInstanceId || null"
-            :loading="loadingInstances"
-            :options="instanceOptions"
-            :disabled="!hasInstallableInstances"
-            :placeholder="instanceSelectPlaceholder"
-            @update:value="onInstanceChange"
-          />
-          <NButton
-            v-if="!hasInstallableInstances && !loadingInstances && hasPermission('instance:read')"
-            type="primary"
-            @click="router.push(routeToNodeInstance())"
-          >
-            前往实例管理
-          </NButton>
-          <span v-if="hasSelectedInstance" class="text-xs text-muted-foreground">
-            当前目标实例：{{ selectedInstanceName }}
-          </span>
+          <h1 class="mr-auto text-lg font-semibold">Mod 管理</h1>
+          <NSelect class="mod-instance-select" :value="selectedInstanceId || null" :loading="loadingInstances"
+            :options="instanceOptions" :disabled="!hasInstallableInstances" :placeholder="instanceSelectPlaceholder"
+            aria-label="目标实例" @update:value="onInstanceChange" />
+          <NPopover v-if="hasPermission('mod:install')" v-model:show="addModOpen" trigger="click" placement="bottom-end" :show-arrow="false">
+            <template #trigger>
+              <NButton type="primary" size="small" :disabled="!hasSelectedInstance">添加 Mod</NButton>
+            </template>
+            <form class="mod-add-form space-y-3" @submit.prevent="subscribeManualWorkshop">
+              <label for="mod-workshop-id" class="block text-sm font-medium">工坊 ID 或详情页链接</label>
+              <NInput ref="manualWorkshopInputRef" v-model:value="manualWorkshopInput" :input-props="{ id: 'mod-workshop-id', spellcheck: false, 'aria-invalid': Boolean(manualWorkshopError), 'aria-describedby': manualWorkshopError ? 'mod-workshop-error' : undefined }"
+                placeholder="例如 378160973 或工坊详情页链接" :disabled="manualSubscribing" clearable />
+              <p v-if="manualWorkshopError" id="mod-workshop-error" role="alert" class="text-sm text-rose-600 dark:text-rose-400">{{ manualWorkshopError }}</p>
+              <div class="flex flex-wrap gap-2">
+                <NButton type="primary" size="small" attr-type="submit" :loading="manualSubscribing" :disabled="!hasSelectedInstance">订阅</NButton>
+                <NButton size="small" :disabled="!hasSelectedInstance || manualSubscribing" @click="addModOpen = false; localImportShow = true">从本地导入</NButton>
+              </div>
+            </form>
+          </NPopover>
         </div>
-      </NCard>
+      </template>
 
-      <NAlert
-        v-if="riskTipBanner"
-        type="warning"
-        class="mb-4 shrink-0"
-        closable
-        @close="riskTipBanner = null"
-      >
-        {{ riskTipBanner }}
-      </NAlert>
+      <NButton v-if="!hasInstallableInstances && !loadingInstances && hasPermission('instance:read')"
+        type="primary" class="mb-3" @click="router.push(routeToNodeInstance())">前往实例管理</NButton>
+      <NAlert v-if="riskTipBanner" type="warning" class="mb-3" closable @close="riskTipBanner = null">{{ riskTipBanner }}</NAlert>
 
-      <NCard
-        size="small"
-        :title="activeTab === 'market' ? 'Steam 创意工坊' : '已订阅 Mod'"
-        class="dst-mod-workshop-card flex flex-1 flex-col"
-        content-class="flex min-h-0 flex-1 flex-col"
-      >
-        <div class="flex min-h-0 flex-1 flex-col gap-3">
-          <div v-if="hasPermission('mod:install')" class="flex shrink-0 flex-wrap items-center gap-2">
-            <NInput
-              v-model:value="manualWorkshopInput"
-              class="w-full md:w-64"
-              placeholder="粘贴工坊 ID 或详情页链接"
-              :disabled="!selectedInstanceId"
-              clearable
-              @keydown.enter="subscribeManualWorkshop"
-            />
-            <NButton :disabled="!selectedInstanceId" @click="subscribeManualWorkshop">直接订阅</NButton>
-            <NButton :disabled="!selectedInstanceId" @click="localImportShow = true">从本地导入</NButton>
-          </div>
-          <div v-if="activeTab === 'market'" class="flex shrink-0 flex-wrap items-center gap-3">
-            <NAlert
-              v-if="marketConnectionTitle"
-              :title="marketConnectionTitle"
-              type="warning"
-              class="w-full"
-              :bordered="false"
-              role="status"
-            >
-              <p v-if="steamLoadError">{{ steamLoadError }}</p>
-              <p v-else-if="steamMeta?.offline && steamMods.length > 0">{{ resolveSteamOfflineHint(steamMeta) }}</p>
-              <p v-else>请稍后重试，或查看代理配置说明。已订阅 Mod 仍可管理。<template v-if="hasPermission('mod:install')">也可按工坊 ID 订阅或从本地导入。</template></p>
-              <div class="mt-2 flex flex-wrap gap-2">
-                <NButton size="small" :loading="loadingSteam" :disabled="!selectedInstanceId" @click="loadSteamMods(false)">重试</NButton>
-                <NButton size="small" @click="accessStatusPanel?.openConfiguration()">代理配置说明</NButton>
+      <div ref="listElement" class="min-w-0">
+        <NTabs v-model:value="activeTab" type="line">
+          <NTabPane name="subscribed" display-directive="if" :tab-props="keyboardTabProps(activeTab === 'subscribed')">
+            <template #tab>已订阅 ({{ subscribedTabCount }})</template>
+            <div :ref="bindModProgressSurface" class="task-progress-surface min-w-0 space-y-3">
+              <div class="flex flex-wrap items-center gap-2">
+                <NButton size="small" :loading="checkingUpdates" :disabled="!hasSelectedInstance || installedMods.length === 0" @click="checkModUpdates">检查更新</NButton>
+                <NButton v-if="hasPermission('mod:install') && updatableMods.length > 0" size="small" type="primary" secondary
+                  :loading="batchUpdating" @click="updateAllOutdatedMods">全部更新 ({{ updatableMods.length }})</NButton>
+                <NButton v-if="checkedRowKeys.length > 0 && hasPermission('mod:install')" size="small" secondary
+                  :loading="batchUpdating" :disabled="selectedUpdatableMods.length === 0" @click="batchUpdateSelectedMods">更新选中 ({{ selectedUpdatableMods.length }})</NButton>
+                <NButton v-if="queueControl && hasPermission('mod:install')" size="small" :type="queueControl.action === 'start' ? 'primary' : 'default'"
+                  secondary :loading="queueActionPending || queueControl.disabled" :disabled="queueActionPending || queueControl.disabled"
+                  :aria-label="queueControl.label" @click="runQueueAction(queueControl.action)">{{ queueControl.label }}</NButton>
+                <NButton v-if="(downloadQueue?.retryableFailedCount ?? 0) > 0 && hasPermission('mod:install')" size="small"
+                  type="warning" secondary :loading="retryingFailedMods" @click="retryAllFailedMods">重试全部失败 ({{ downloadQueue?.retryableFailedCount ?? 0 }})</NButton>
+                <NButton size="small" class="ml-auto" :disabled="!hasSelectedInstance" :loading="loadingInstalled" @click="loadInstalledMods()">刷新</NButton>
               </div>
-            </NAlert>
-            <AdminListToolbar
-              v-model:keyword="steamKeyword"
-              keyword-placeholder="按名称搜索 Mod"
-              :search-loading="loadingSteam"
-              :disable-search-loading="loadingSteam"
-              :reset-disabled="!steamKeyword && steamSort === 'trend' && steamTrendDays === 7"
-              @search="loadSteamMods(true)"
-              @reset="() => { steamKeyword = ''; steamSort = 'trend'; steamTrendDays = 7 }"
-            >
-              <template #filters>
-                <NSelect
-                  v-model:value="steamSort"
-                  class="w-full md:w-36"
-                  :options="steamSortOptions"
-                />
-                <NSelect
-                  v-model:value="steamTrendDays"
-                  class="w-full md:w-36"
-                  :disabled="!isSteamTrendSort"
-                  :options="steamTrendDaysOptions"
-                />
-              </template>
-              <template #actions>
-                <NButton type="primary" :loading="loadingSteam" :disabled="!selectedInstanceId" @click="loadSteamMods(false)">
-                  刷新列表
-                </NButton>
-              </template>
-            </AdminListToolbar>
-            <span v-if="steamPagingSummary" class="text-xs text-muted-foreground whitespace-nowrap">
-              {{ steamPagingSummary }}
-            </span>
-            <span v-if="steamMetaText" class="text-xs text-muted-foreground whitespace-nowrap">
-              {{ steamMetaText }}
-            </span>
-            <span v-if="steamSourceUrl" class="text-xs text-muted-foreground whitespace-nowrap">
-              数据来源：<a :href="steamSourceUrl" target="_blank" class="underline">Steam Workshop</a>
-            </span>
-          </div>
-
-          <ModAccessStatusPanel ref="accessStatusPanel" :instance-id="selectedInstanceId" :queue="downloadQueue" />
-          <NTabs v-model:value="activeTab" type="segment" class="dst-mod-tabs min-h-0 flex-1">
-            <NTabPane
-              name="subscribed"
-              display-directive="if"
-              class="h-full min-h-0"
-            >
-              <template #tab>
-                已订阅 ({{ subscribedTabCount }})
-              </template>
-              <div :ref="bindModProgressSurface" class="task-progress-surface flex h-full min-h-0 flex-col overflow-y-auto">
-                <div class="flex shrink-0 flex-wrap items-center gap-3 pb-2">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <NButton
-                      size="small"
-                      :loading="checkingUpdates"
-                      :disabled="!hasSelectedInstance || installedMods.length === 0"
-                      @click="checkModUpdates"
-                    >
-                      检查更新
-                    </NButton>
-                    <NButton
-                      size="small"
-                      type="primary"
-                      secondary
-                      :loading="batchUpdating"
-                      :disabled="updatableMods.length === 0"
-                      @click="updateAllOutdatedMods"
-                     v-if="hasPermission('mod:install')">
-                      全部更新 ({{ updatableMods.length }})
-                    </NButton>
-                    <NButton
-                      v-if="(checkedRowKeys.length > 0) && hasPermission('mod:install')"
-                      size="small"
-                      secondary
-                      :loading="batchUpdating"
-                      :disabled="selectedUpdatableMods.length === 0"
-                      @click="batchUpdateSelectedMods"
-                    >
-                      更新选中 ({{ selectedUpdatableMods.length }})
-                    </NButton>
-                    <NButton
-                      v-if="queueControl && hasPermission('mod:install')"
-                      size="small"
-                      :type="queueControl.action === 'start' ? 'primary' : 'default'"
-                      secondary
-                      :loading="queueActionPending || queueControl.disabled"
-                      :disabled="queueActionPending || queueControl.disabled"
-                      :aria-label="queueControl.label"
-                      @click="runQueueAction(queueControl.action)"
-                    >
-                      {{ queueControl.label }}
-                    </NButton>
-                    <NButton
-                      v-if="((downloadQueue?.retryableFailedCount ?? 0) > 0) && hasPermission('mod:install')"
-                      size="small"
-                      type="warning"
-                      secondary
-                      :loading="retryingFailedMods"
-                      @click="retryAllFailedMods"
-                    >
-                      重试全部失败 ({{ downloadQueue?.retryableFailedCount ?? 0 }})
-                    </NButton>
-                    <span class="text-xs text-muted-foreground">
-                      共 {{ subscribedSummary.total }} · 就绪 {{ subscribedSummary.ready }} · {{ pendingStatusLabel }} {{ subscribedSummary.pending }} · 失败 {{ subscribedSummary.failed }}
-                      <template v-if="lastUpdateCheckedAt"> · 上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</template>
-                    </span>
-                  </div>
-                  <div class="flex shrink-0 gap-2" :class="{ 'ml-auto': !isMobileMode }">
-                    <NButton size="small" :disabled="!selectedInstanceId" :loading="loadingInstalled" @click="loadInstalledMods()">
-                      刷新列表
-                    </NButton>
-                  </div>
-                </div>
-                <NAlert
-                  v-if="!isMobileMode && modCheckHint"
-                  class="mb-2 shrink-0"
-                  type="info"
-                  :bordered="false"
-                  closable
-                >
-                  {{ modCheckHint }}
-                </NAlert>
-                <NAlert v-if="downloadQueue?.warnings.length" class="mb-2 shrink-0" type="warning" :bordered="false" :show-icon="false">
-                  <p v-for="warning in downloadQueue.warnings" :key="warning">{{ warning }}</p>
-                </NAlert>
-                <NDataTable
-                  v-if="!isMobileMode"
-                  :key="`subscribed-${selectedInstanceId}`"
-                  ref="subscribedTableRef"
-                  :bordered="false"
-                  :single-line="false"
-                  :columns="subscribedColumns"
-                  :data="installedMods"
-                  :loading="loadingInstalled"
-                  :pagination="false"
-                  :row-key="(row: ModItemDto) => row.workshopId"
-                  :row-props="subscribedRowProps"
-                  :checked-row-keys="checkedRowKeys"
-                  class="dst-mod-table dst-mod-subscribed-table shrink-0 flex-1"
-                  flex-height
-                  :scroll-x="1310"
-                  @update:checked-row-keys="(keys: Array<string | number>) => checkedRowKeys = keys"
-                >
-                  <template #empty>
-                    <div class="dst-mod-table-empty">
-                      <NEmpty size="large" :description="subscribedEmptyDescription" />
-                    </div>
-                  </template>
-                </NDataTable>
-                <div v-else class="dst-mod-subscribed-list shrink-0 flex-1 space-y-3 overflow-y-auto pr-1" :aria-busy="loadingInstalled">
-                  <NEmpty v-if="!loadingInstalled && installedMods.length === 0" size="small" :description="subscribedEmptyDescription" />
-                  <div ref="subscribedCardsRef" class="space-y-3">
-                  <article
-                    v-for="mod in installedMods"
-                    :key="mod.workshopId"
-                    v-bind="subscribedRowProps(mod)"
-                    :class="{ 'task-progress-card': Boolean(modRowProgress.rowProps(mod.workshopId).class) }"
-                    :data-mod-id="mod.workshopId"
-                    class="rounded-lg border border-border bg-card p-3 space-y-3"
-                  >
-                    <div class="flex gap-3">
-                      <NImage
-                        v-if="mod.previewImage"
-                        :src="mod.previewImage"
-                        width="64"
-                        height="64"
-                        object-fit="cover"
-                        class="shrink-0 rounded"
-                      />
-                      <div class="min-w-0 flex-1">
-                        <h3 class="line-clamp-2 font-medium">
-                          {{ mod.name }}
-                          <NTag v-if="!isModNameIdentified(mod)" class="ml-1" size="tiny" :bordered="false" type="warning">
-                            未识别名称
-                          </NTag>
-                        </h3>
-                        <p class="mt-1 text-xs text-muted-foreground">Workshop ID: {{ mod.workshopId }}</p>
-                        <NRate v-if="mod.rating != null" class="mt-1" readonly allow-half size="small" :value="mod.rating" />
-                        <p class="mt-1 text-xs text-muted-foreground">
-                          版本：{{ modUpdateLabel(mod) }}
-                        </p>
-                      </div>
-                      <NTag size="small" :bordered="false" :type="subscribedStatusType(mod)">
-                        {{ subscribedStatusLabel(mod) }}
-                      </NTag>
-                    </div>
-                    <p v-if="mod.installError" class="text-sm text-rose-600 dark:text-rose-400">{{ mod.installError }}</p>
-                    <div class="flex gap-2">
-                      <NButton
-                        v-if="mod.installStatus === 'failed' && hasPermission('mod:install')"
-                        class="flex-1"
-                        type="primary"
-                        :disabled="!hasSelectedInstance || unsubscribingWorkshopIds.has(mod.workshopId) || isPendingWorkshop(mod.workshopId)"
-                        @click="retryFailedInstall(mod)"
-                      >
-                        重试
-                      </NButton>
-                      <NButton
-                        v-if="isModUpdatable(mod) && hasPermission('mod:install')"
-                        class="flex-1"
-                        type="primary"
-                        :disabled="!hasSelectedInstance || isPendingWorkshop(mod.workshopId)"
-                        @click="updateInstalledMod(mod)"
-                      >
-                        更新
-                      </NButton>
-                      <NButton
-                        v-else-if="canRedownloadMod(mod) && hasPermission('mod:install')"
-                        class="flex-1"
-                        :disabled="!hasSelectedInstance || isPendingWorkshop(mod.workshopId)"
-                        @click="updateInstalledMod(mod)"
-                      >
-                        重新下载
-                      </NButton>
-                      <NButton
-                        v-if="mod.installStatus === 'ready' && hasPermission('mod:config')"
-                        class="flex-1"
-                        :disabled="!hasSelectedInstance || isPendingWorkshop(mod.workshopId)"
-                        @click="openModConfig(mod)"
-                      >
-                        配置
-                      </NButton>
-                      <NButton
-                        class="flex-1"
-                        :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
-                        :disabled="!hasSelectedInstance || unsubscribingWorkshopIds.has(mod.workshopId) || mod.installStatus === 'pending' || isPendingWorkshop(mod.workshopId)"
-                        @click="confirmUnsubscribe(mod)"
-                        v-if="hasPermission('mod:install')"
-                      >
-                        取消订阅
-                      </NButton>
-                      <NButton :disabled="!hasSelectedInstance" @click="goToModDetail(mod.workshopId)">
-                        详情
-                      </NButton>
-                    </div>
-                    <div v-if="mod.installStatus !== 'ready' && hasPermission('mod:install')" class="flex gap-2">
-                      <NButton v-if="mod.installStatus === 'pending' && !isPendingWorkshop(mod.workshopId)" @click="retryFailedInstall(mod)">下载</NButton>
-                      <NButton @click="localImportShow = true">本地导入</NButton>
-                    </div>
-                    <button v-if="hasPermission('mod:toggle')" type="button" class="mod-sort-handle ml-auto"
-                      :disabled="!canDragMod(mod)" :aria-label="`调整 ${mod.name} 的加载顺序`"
-                      title="拖动调整加载顺序，也可使用上下方向键" @keydown="onModSortKeydown($event, mod)">
-                      <GripVertical :size="20" aria-hidden="true" /><span>加载顺序</span>
-                    </button>
-                  </article>
-                  </div>
-                </div>
+              <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground" role="status">
+                <span>就绪 {{ subscribedSummary.ready }}<template v-if="subscribedSummary.pending"> · {{ pendingStatusLabel }} {{ subscribedSummary.pending }}</template><template v-if="subscribedSummary.failed"> · 失败 {{ subscribedSummary.failed }}</template></span>
+                <span v-if="lastUpdateCheckedAt">上次检查 {{ formatCheckedAt(lastUpdateCheckedAt) }}</span>
+                <span class="text-sm">开关与加载顺序的改动需重启实例后生效。</span>
               </div>
-            </NTabPane>
-            <NTabPane name="market" tab="Mod 市场" display-directive="show" class="h-full">
-              <NDataTable
-                v-if="!isMobileMode"
-                :bordered="false"
-                :single-line="false"
-                :columns="marketColumns"
-                :data="steamMods"
-                :loading="loadingSteam"
-                :pagination="pagination"
-                :row-key="(row: SteamModListQueryResultItem) => row.workshopId"
-                class="dst-mod-table h-full"
-                flex-height
-                remote
-                :scroll-x="1180"
-              >
-                <template #empty>
-                  <div class="dst-mod-table-empty">
-                    <NEmpty size="large" :description="marketEmptyDescription" />
-                  </div>
-                </template>
+              <p v-if="modCheckHint" class="text-sm text-muted-foreground">{{ modCheckHint }}</p>
+              <NAlert v-if="downloadQueue?.warnings.length" type="warning" :bordered="false">
+                <p v-for="warning in downloadQueue.warnings" :key="warning">{{ warning }}</p>
+              </NAlert>
+
+              <NDataTable v-if="!isMobileMode" :key="'subscribed-' + selectedInstanceId" ref="subscribedTableRef"
+                :bordered="false" :single-line="false" :columns="subscribedColumns" :data="installedMods"
+                :loading="loadingInstalled" :pagination="false" :row-key="(row: ModItemDto) => row.workshopId"
+                :row-props="subscribedRowProps" :checked-row-keys="checkedRowKeys" class="dst-mod-table"
+                max-height="max(320px, calc(var(--g-main-content-height) - 300px))"
+                @update:checked-row-keys="(keys: Array<string | number>) => checkedRowKeys = keys">
+                <template #empty><NEmpty size="large" :description="subscribedEmptyDescription" /></template>
               </NDataTable>
-              <div v-else class="dst-mod-market-list space-y-3 overflow-y-auto pr-1" :aria-busy="loadingSteam">
-                <NEmpty v-if="!loadingSteam && steamMods.length === 0" size="small" :description="marketEmptyDescription" />
-                <article
-                  v-for="mod in steamMods"
-                  :key="mod.workshopId"
-                  class="rounded-lg border border-border bg-card p-3 space-y-3"
-                >
+              <div v-else :aria-busy="loadingInstalled">
+                <div v-if="installedMods.length" class="mb-3 flex items-center gap-3">
+                  <NCheckbox :checked="allModsSelected" :indeterminate="checkedRowKeys.length > 0 && !allModsSelected" @update:checked="selectAllMods">全选</NCheckbox>
+                  <span v-if="checkedRowKeys.length" class="text-sm text-muted-foreground">已选 {{ checkedRowKeys.length }} 项</span>
+                </div>
+                <NEmpty v-if="!loadingInstalled && installedMods.length === 0" size="small" :description="subscribedEmptyDescription" />
+                <p v-if="loadingInstalled && installedMods.length === 0" role="status" class="py-6 text-center text-sm text-muted-foreground">正在加载 Mod…</p>
+                <div ref="subscribedCardsRef" class="space-y-3">
+                  <article v-for="mod in installedMods" :key="mod.workshopId" v-bind="subscribedRowProps(mod)"
+                    :class="{ 'task-progress-card': Boolean(modRowProgress.rowProps(mod.workshopId).class) }"
+                    :data-mod-id="mod.workshopId" class="min-w-0 rounded-lg border border-border bg-card p-3 space-y-3">
+                    <div class="flex items-start gap-3">
+                      <NCheckbox :checked="checkedRowKeys.includes(mod.workshopId)" :aria-label="'选择 ' + mod.name"
+                        @update:checked="selectMod(mod.workshopId, $event)" />
+                      <NImage v-if="mod.previewImage" :src="mod.previewImage" width="56" height="56" object-fit="cover"
+                        :alt="mod.name" lazy class="shrink-0 rounded" />
+                      <div class="min-w-0 flex-1">
+                        <h2 class="break-words text-sm font-medium">{{ mod.name }}</h2>
+                        <NTag v-if="!isModNameIdentified(mod)" size="tiny" :bordered="false" type="warning">未识别名称</NTag>
+                        <p class="mt-1 break-all font-mono text-xs text-muted-foreground">ID {{ mod.workshopId }}</p>
+                        <NRate v-if="mod.rating != null" class="mt-1" readonly allow-half size="small" :value="mod.rating" />
+                      </div>
+                    </div>
+                    <div class="flex items-start justify-between gap-3">
+                      <SubscribedModStatus v-bind="subscribedStatusProps(mod)" />
+                      <ModEnabledControl v-bind="subscribedEnabledProps(mod)" />
+                    </div>
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                      <SubscribedModActions v-bind="subscribedActionsProps(mod)" />
+                      <button v-if="hasPermission('mod:toggle')" type="button" class="mod-sort-handle ml-auto"
+                        :disabled="!canDragMod(mod)" :aria-label="'调整 ' + mod.name + ' 的加载顺序'"
+                        title="拖动调整加载顺序，也可使用上下方向键" @keydown="onModSortKeydown($event, mod)">
+                        <GripVertical :size="18" aria-hidden="true" /><span class="text-xs">顺序</span>
+                      </button>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </div>
+          </NTabPane>
+
+          <NTabPane name="market" tab="Mod 市场" display-directive="show" :tab-props="keyboardTabProps(activeTab === 'market')">
+            <div class="min-w-0 space-y-3">
+              <NAlert v-if="marketConnectionTitle" :title="marketConnectionTitle" type="warning" :bordered="false" role="status">
+                <p v-if="steamLoadError">{{ steamLoadError }}</p>
+                <p v-else-if="steamMeta?.offline && steamMods.length > 0">{{ resolveSteamOfflineHint(steamMeta) }}</p>
+                <p v-else>暂时无法读取市场，可重试或查看连接帮助。</p>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <NButton size="small" :loading="loadingSteam" :disabled="!hasSelectedInstance" @click="loadSteamMods(false)">重试</NButton>
+                  <NButton size="small" @click="accessStatusPanel?.openConfiguration()">代理配置说明</NButton>
+                </div>
+              </NAlert>
+              <AdminListToolbar v-model:keyword="steamKeyword" keyword-placeholder="按名称搜索 Mod" :search-loading="loadingSteam"
+                :disable-search-loading="loadingSteam" :reset-disabled="!steamKeyword && steamSort === 'trend' && steamTrendDays === 7"
+                @search="loadSteamMods(true)" @reset="() => { steamKeyword = ''; steamSort = 'trend'; steamTrendDays = 7 }">
+                <template #filters>
+                  <NSelect v-model:value="steamSort" class="w-36" :options="steamSortOptions" aria-label="市场排序" />
+                  <NSelect v-model:value="steamTrendDays" class="w-36" :disabled="!isSteamTrendSort" :options="steamTrendDaysOptions" aria-label="热度时间范围" />
+                </template>
+                <template #actions>
+                  <NButton size="small" :loading="loadingSteam" :disabled="!hasSelectedInstance" @click="loadSteamMods(false)">刷新列表</NButton>
+                </template>
+              </AdminListToolbar>
+              <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span v-if="steamPagingSummary">{{ steamPagingSummary }}</span>
+                <span v-if="steamMetaText">{{ steamMetaText }}</span>
+                <span v-if="steamSourceUrl">数据来源：<a :href="steamSourceUrl" target="_blank" rel="noopener noreferrer" class="underline">Steam Workshop</a></span>
+              </div>
+              <NDataTable v-if="!isMobileMode && (!marketConnectionTitle || steamMods.length > 0)" :bordered="false" :single-line="false" :columns="marketColumns"
+                :data="steamMods" :loading="loadingSteam" :pagination="pagination"
+                :row-key="(row: SteamModListQueryResultItem) => row.workshopId" class="dst-mod-table"
+                max-height="max(320px, calc(var(--g-main-content-height) - 300px))" remote>
+                <template #empty><NEmpty size="large" :description="marketEmptyDescription" /></template>
+              </NDataTable>
+              <div v-else-if="isMobileMode" class="space-y-3" :aria-busy="loadingSteam">
+                <NEmpty v-if="!loadingSteam && steamMods.length === 0 && !marketConnectionTitle" size="small" :description="marketEmptyDescription" />
+                <p v-if="loadingSteam && steamMods.length === 0" role="status" class="py-6 text-center text-sm text-muted-foreground">正在加载市场…</p>
+                <article v-for="mod in steamMods" :key="mod.workshopId" class="min-w-0 rounded-lg border border-border bg-card p-3 space-y-3">
                   <div class="flex gap-3">
-                    <NImage
-                      v-if="mod.previewImage"
-                      :src="mod.previewImage"
-                      width="64"
-                      height="64"
-                      object-fit="cover"
-                      lazy
-                      class="shrink-0 rounded"
-                    />
+                    <NImage v-if="mod.previewImage" :src="mod.previewImage" width="56" height="56" object-fit="cover"
+                      :alt="mod.title" lazy class="shrink-0 rounded" />
                     <div class="min-w-0 flex-1">
-                      <h3 class="line-clamp-2 font-medium">{{ mod.title }}</h3>
-                      <p class="mt-1 text-xs text-muted-foreground">Workshop ID: {{ mod.workshopId }}</p>
+                      <h2 class="break-words text-sm font-medium">{{ mod.title }}</h2>
+                      <p class="mt-1 font-mono text-xs text-muted-foreground">ID {{ mod.workshopId }}</p>
                       <NRate v-if="mod.rating != null" class="mt-1" readonly allow-half size="small" :value="mod.rating" />
                     </div>
-                    <NTag size="small" :bordered="false" :type="marketStatusType(mod)">
-                      {{ marketStatusLabel(mod) }}
-                    </NTag>
+                    <NTag size="small" :bordered="false" :type="marketStatusType(mod)">{{ marketStatusLabel(mod) }}</NTag>
                   </div>
-                  <div class="flex gap-2">
-                    <NButton
-                      class="flex-1"
-                      type="primary"
-                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
-                      :disabled="marketActionDisabled(mod)"
-                      @click="handleMarketAction(mod)"
-                      v-if="hasPermission('mod:install')"
-                    >
-                      {{ marketActionLabel(mod) }}
-                    </NButton>
-                    <NButton
-                      v-if="resolveMarketSubscribeStatus(mod) === 'failed' && hasPermission('mod:install')"
-                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
-                      :disabled="marketActionDisabled(mod)"
-                      @click="confirmUnsubscribeFromMarket(mod)"
-                    >
-                      取消订阅
-                    </NButton>
-                    <NButton :disabled="!hasSelectedInstance" @click="goToModDetail(mod.workshopId)">
-                      详情
-                    </NButton>
+                  <div class="flex flex-wrap gap-2">
+                    <NButton v-if="hasPermission('mod:install')" size="small" type="primary" secondary
+                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)" :disabled="marketActionDisabled(mod)"
+                      @click="handleMarketAction(mod)">{{ marketActionLabel(mod) }}</NButton>
+                    <NButton v-if="resolveMarketSubscribeStatus(mod) === 'failed' && hasPermission('mod:install')" size="small"
+                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)" :disabled="marketActionDisabled(mod)"
+                      @click="confirmUnsubscribeFromMarket(mod)">取消订阅</NButton>
+                    <NButton size="small" :disabled="!hasSelectedInstance" @click="goToModDetail(mod.workshopId)">详情</NButton>
                   </div>
                 </article>
-                <NPagination
-                  v-if="resolvedPageCount > 1"
-                  :page="steamPage"
-                  :page-count="resolvedPageCount"
-                  :disabled="loadingSteam"
-                  simple
-                  class="justify-center py-2"
-                  @update:page="changeSteamPage"
-                />
+                <NPagination v-if="resolvedPageCount > 1" :page="steamPage" :page-count="resolvedPageCount"
+                  :disabled="loadingSteam" simple class="justify-center py-2" @update:page="changeSteamPage" />
               </div>
-            </NTabPane>
+            </div>
+          </NTabPane>
+        </NTabs>
+      </div>
+      <ModAccessStatusPanel ref="accessStatusPanel" class="mt-4" :instance-id="selectedInstanceId" :queue="downloadQueue" />
 
-          </NTabs>
-        </div>
-      </NCard>
-
-      <ModConfigModal
-        :key="`config-${selectedInstanceId}`"
-        v-model:show="configModalShow"
-        :instance-id="selectedInstanceId"
-        :workshop-id="configTarget?.workshopId ?? ''"
-        :mod-name="configTarget?.name ?? ''"
-        @saved="onModConfigSaved"
-      />
-      <LocalModImportModal
-        :key="`import-${selectedInstanceId}`"
-        v-model:show="localImportShow"
-        :instance-id="selectedInstanceId"
-        :stopped="modInstanceStatus === 'stopped'"
-        :existing-ids="installedMods.map(mod => mod.workshopId)"
-        @imported="loadInstalledMods"
-      />
+      <ModConfigModal :key="'config-' + selectedInstanceId" v-model:show="configModalShow" :instance-id="selectedInstanceId"
+        :workshop-id="configTarget?.workshopId ?? ''" :mod-name="configTarget?.name ?? ''" @saved="onModConfigSaved" />
+      <LocalModImportModal :key="'import-' + selectedInstanceId" v-model:show="localImportShow" :instance-id="selectedInstanceId"
+        :stopped="modInstanceStatus === 'stopped'" :existing-ids="installedMods.map(mod => mod.workshopId)" @imported="loadInstalledMods" />
     </FaPageMain>
   </div>
 </template>
 
 <style scoped>
+.mod-instance-select { width: min(100%, 20rem); }
+.mod-add-form { width: min(320px, calc(100vw - 64px)); }
 .dst-mod-page :deep(.mod-sort-handle) {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem;
-  border-radius: 0.25rem;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 4px;
   cursor: grab;
   touch-action: none;
 }
 .dst-mod-page :deep(.mod-sort-handle:disabled) { cursor: default; opacity: 0.35; }
 .dst-mod-page :deep(.mod-sort-handle:focus-visible) { outline: 2px solid currentColor; outline-offset: 2px; }
 .dst-mod-page :deep(.mod-sort-ghost) { opacity: 0.4; }
-.dst-mod-page :deep(.group\/pagemain) {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
-/*
- * FaPageMain 的内容区默认是 p-5，移动端这里要还一部分给列表。
- * 用 !important 是因为 p-5 由 UnoCSS 生成，注入顺序不保证在 scoped 样式之后。
- */
-.dst-mod-main {
-  padding: 0.75rem !important;
-}
-
-@media (min-width: 768px) {
-  .dst-mod-main {
-    padding: 1.25rem !important;
-  }
-}
-
-/*
- * 表格所在卡片的兜底高度：矮屏下工具栏会换行、卡片被 flex 压扁，
- * 表格只剩表头甚至完全不可见。给一个下限后内容区改为滚动，
- * 表格始终保有约 300px 可用高度（表头 + 分页 + 4~5 行）。
- */
-.dst-mod-workshop-card {
-  min-height: 480px;
-}
-
-/* 列表默认（桌面表格模式）不参与高度分配，由表格自己 flex-height */
-.dst-mod-market-list {
-  min-height: 0;
-}
-
-/* 展开的诊断允许整个面板滚动，仍为本地列表保留可操作的区域。 */
-.dst-mod-subscribed-table {
-  min-height: 220px;
-}
-
-.dst-mod-subscribed-list {
-  min-height: 320px;
-}
-
-/*
- * 移动端的列表高度。
- *
- * 移动端这里渲染的是卡片列表而不是表格，工具区（搜索框 + 排序/时间范围两个下拉）
- * 竖排堆叠后要吃掉 300px 以上，而卡片的兜底高度只有 480px，留给列表的不到 200px，
- * 只够看一张卡片，翻起来非常难受。
- *
- * 所以移动端把卡片下限抬高、并给列表一个明确的最小高度：列表内容超出时在框内滚动，
- * 浏览时整块区域都用来显示 Mod；配合下面压缩掉的页面内边距与移动端隐藏的说明段落，
- * 实际可用高度比之前多出约 200px。
- */
-@media (max-width: 1023px) {
-  .dst-mod-workshop-card {
-    min-height: 640px;
-  }
-
-  .dst-mod-market-list {
-    /* 约 2.5 张卡片，滚动时列表本身占满大部分可视区域 */
-    min-height: 420px;
-  }
-}
-
-.dst-mod-workshop-card :deep(.n-card-header) {
-  flex-shrink: 0;
-}
-
-.dst-mod-tabs :deep(.n-tabs) {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.dst-mod-tabs :deep(.n-tabs-nav) {
-  flex-shrink: 0;
-}
-
-.dst-mod-tabs :deep(.n-tabs-pane-wrapper) {
-  flex: 1;
-  min-height: 0;
-}
-
-.dst-mod-tabs :deep(.n-tab-pane) {
-  height: 100%;
-}
-
-.dst-mod-table :deep(.n-data-table-base-table-body) {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-}
-
-/*
- * 表格设置了 scroll-x 时，naive-ui 会给空态节点加内联样式 position: sticky，
- * 内联优先级高于选择器，会让这里的 absolute 失效、空态贴在表格顶部。
- * 因此必须用 !important 覆盖，空态才能铺满表格区域并垂直居中。
- */
-.dst-mod-table :deep(.n-data-table-empty) {
-  position: absolute !important;
-  inset: 0 !important;
-  width: auto !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-
-.dst-mod-table-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.dst-mod-table { font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .mod-instance-select { order: 1; width: 100%; }
 }
 </style>

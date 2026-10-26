@@ -27,8 +27,15 @@ function extendReplace(router: Router) {
     if (appSettingsStore.settings.topbar.tabbar) {
       const tabId = getId(router)
       const appTabbarStore = useAppTabbarStore(pinia)
-      return originalReplace(to).then(() => {
-        appTabbarStore.remove(tabId)
+      const previous = router.currentRoute.value
+      return originalReplace(to).then((result) => {
+        if (result) return result
+        const current = router.currentRoute.value
+        if (previous.name === current.name && previous.path === current.path
+          && (current.name === 'nodeInstanceDetail' || current.name === 'dstModList')) {
+          appTabbarStore.replaceQuery(tabId, current.fullPath)
+        }
+        else appTabbarStore.remove(tabId)
       })
     }
     else {

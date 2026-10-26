@@ -3,6 +3,8 @@ import { formatDateTime } from './utils'
 import { resolveInstanceUpdateState } from '../../../../shared/instance-update-state'
 export { resolveInstanceUpdateState } from '../../../../shared/instance-update-state'
 
+export const INSTANCE_VERSION_UNKNOWN_NOTICE = '无法确认版本，请重新检查更新'
+
 export function isInstanceUpToDate(instance: Pick<InstanceItem, 'updateCheckedAt' | 'localBuildId' | 'remoteBuildId' | 'updateAvailable' | 'updateCheckError'>) {
   return resolveInstanceUpdateState(instance) === 'current'
 }
@@ -21,6 +23,17 @@ export function canForceUpdateInstance(instance: Pick<InstanceItem, 'status'> & 
   return !instance.installTask?.cleanupPending && (instance.status === 'stopped' || instance.status === 'error')
 }
 
+/** 更新操作只展示可理解的状态说明，原始错误保留在异常详情。 */
+export function getUpdateInstanceButtonTitle(instance: InstanceItem) {
+  if (instance.status === 'running') return '请先停止实例'
+  if (instance.status === 'pending_install' || instance.status === 'installing') return '安装进行中'
+  if (canRetryInstanceInstall(instance)) return '重试安装服务端文件'
+  if (isInstanceUpToDate(instance)) return '已是最新版本'
+  return resolveInstanceUpdateState(instance) === 'unknown'
+    ? INSTANCE_VERSION_UNKNOWN_NOTICE
+    : '请先检查更新，确认有更新后再更新服务端'
+}
+
 export function buildInstanceUpdateCheckNotice(items: InstanceUpdateStatusItem[]): {
   tone: 'success' | 'info' | 'warning'
   message: string
@@ -33,9 +46,9 @@ export function buildInstanceUpdateCheckNotice(items: InstanceUpdateStatusItem[]
   const unknown = items.filter(item => resolveInstanceUpdateState(item) === 'unknown' || resolveInstanceUpdateState(item) === 'unchecked').length
   const available = items.filter(item => resolveInstanceUpdateState(item) === 'available').length
   if (unknown) {
-    const reasons = items.filter(item => resolveInstanceUpdateState(item) !== 'current' && resolveInstanceUpdateState(item) !== 'available')
-      .map(item => `${item.name}：${item.updateCheckError ?? item.message ?? '尚未检查版本'}`)
-    return { tone: 'warning', message: `有 ${available} 个实例可更新，${unknown} 个实例无法判断版本${reasons.length ? `；${reasons.join('；')}` : ''}${checkedTime}` }
+    return { tone: 'warning', message: items.length === 1
+      ? INSTANCE_VERSION_UNKNOWN_NOTICE
+      : `${available ? `有 ${available} 个实例可更新，` : ''}${unknown} 个实例无法判断版本，请稍后重新检查` }
   }
   return available
     ? { tone: 'info', message: `有 ${available} 个实例可更新${checkedTime}` }

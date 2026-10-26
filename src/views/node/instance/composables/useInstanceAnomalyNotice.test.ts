@@ -116,6 +116,19 @@ it('异常通知生命周期与启动失败接管', async (t) => {
       assert.equal(notifications.length, before + 1)
       assert.deepEqual(hook.anomalies.value, [{ reason: '本轮进程退出', world: 'master' }])
     })
+    await t.test('长版本错误只在主动查看的详情中保留，自动通知使用简短提示', async () => {
+      const raw = `SteamCMD 版本查询失败：${'Update complete, launching Steamcmd...\n'.repeat(60)}ERROR! Timeout`
+      item.value = { ...item.value, startup: null, lastError: null, runtimeWarning: null, updateCheckError: raw }
+      await nextTick()
+      assert.equal(notifications.at(-1)?.content, '请查看异常详情了解原因')
+      assert.deepEqual(hook.anomalies.value, [{ reason: raw, world: null }])
+      assert.equal(hook.detailsVisible.value, false)
+      hook.showDetails()
+      assert.equal(hook.detailsVisible.value, true)
+      item.value = { ...item.value, updateCheckError: null }
+      await nextTick()
+      assert.equal(hook.detailsVisible.value, false)
+    })
     await t.test('停止页面通知，列表默认失败提示保留、详情接管不重复弹失败提示', async () => {
       active.value = false
       await nextTick()

@@ -293,13 +293,7 @@ watch(() => props.instanceId, () => {
 </script>
 
 <template>
-  <NCard title="文件管理" size="small">
-    <template #header-extra>
-      <NButton size="tiny" :loading="loading" @click="loadEntries()">
-        刷新
-      </NButton>
-    </template>
-
+  <NCard size="small" aria-label="文件管理">
     <div v-if="keyFiles.length > 0" class="mb-4 rounded-lg border p-3">
       <p class="mb-2 text-sm font-medium">
         关键配置文件
@@ -333,7 +327,8 @@ watch(() => props.instanceId, () => {
         </NButton>
       </template>
       <span class="grow" />
-      <NButton size="tiny" :loading="uploading" @click="openUploadPicker" v-if="hasPermission('file:upload')">
+      <NButton size="small" :loading="loading" aria-label="刷新文件列表" @click="loadEntries()">刷新</NButton>
+      <NButton size="small" :loading="uploading" @click="openUploadPicker" v-if="hasPermission('file:upload')">
         上传到当前目录
       </NButton>
       <span v-if="uploading" class="text-xs text-muted-foreground">已上传 {{ uploadPercent }}%</span>

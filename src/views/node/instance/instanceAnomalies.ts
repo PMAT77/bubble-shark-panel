@@ -57,6 +57,10 @@ export function collectInstanceAnomalies(instance: InstanceItem | null): Instanc
     if (!['installing', 'pending_install'].includes(instance.status)) add(instance.lastError)
   }
   if (failedStartup && !result.length) add('启动失败，请查看控制台日志和服务器配置', failedWorld)
+  const versionError = instance.updateCheckError?.trim()
+  if (versionError && !result.some(item => item.reason === versionError)) {
+    result.push({ reason: versionError, world: null })
+  }
   return result
 }
 

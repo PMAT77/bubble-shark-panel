@@ -2,7 +2,7 @@ import type { InstanceItem } from '@/api/modules/instance'
 import type { NotificationReactive } from 'naive-ui'
 import { NButton, useNotification } from 'naive-ui'
 import { computed, h, onBeforeUnmount, ref, watch, type Ref } from 'vue'
-import { collectInstanceAnomalies, createInstanceAnomalyTracker, instanceAnomalyText } from '../instanceAnomalies'
+import { collectInstanceAnomalies, createInstanceAnomalyTracker } from '../instanceAnomalies'
 
 // 与启动 swap 提示一样，按浏览器标签页记住已提示的异常。
 let storage: Storage | undefined
@@ -34,16 +34,13 @@ export function useInstanceAnomalyNotice(instance: Readonly<Ref<InstanceItem | n
     if (!isActive || !item) return
     const changed = tracker.consume(item.id, item.startup?.taskId ?? null, anomalies.value)
     if (!anomalies.value.length) return
-    const content = () => h('div', { class: 'space-y-2 max-h-[50vh] overflow-auto break-words text-sm' },
-      anomalies.value.map(anomaly => h('p', instanceAnomalyText(anomaly))))
     if (!changed) {
-      if (notice) notice.content = content
       return
     }
     closeNotice()
     const options = {
       title: `${item.name} · 异常提醒`,
-      content,
+      content: '请查看异常详情了解原因',
       duration: 8000,
       closable: true,
       keepAliveOnHover: true,

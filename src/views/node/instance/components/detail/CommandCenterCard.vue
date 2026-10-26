@@ -213,7 +213,7 @@ defineExpose({
 </script>
 
 <template>
-  <NCard title="游戏指令" size="small">
+  <NCard size="small" aria-label="游戏指令">
     <NTabs v-model:value="activeTab" type="line" size="small" @update:value="onTabChange">
       <NTabPane display-directive="show" :tab-props="keyboardTabProps(activeTab === 'quick')" name="quick" tab="快捷指令">
         <WorldMaintenancePanel v-if="instance" :instance-id="instance.id" :instance-name="instance.name" :running="running" @refreshed="emit('refreshed')" @busy="maintenanceBusy = $event" />

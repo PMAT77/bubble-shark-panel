@@ -44,7 +44,7 @@ import { useInstanceRuntimeObservability } from '../composables/useInstanceRunti
 import { useInstanceStartup } from '../composables/useInstanceStartup'
 import { isInstanceWorldReady, isStartupActive, startupPhaseLabel } from '../startupPresentation'
 import { formatDateTime } from '../utils'
-import { buildInstanceUpdateCheckNotice, canRetryInstanceInstall, resolveInstanceUpdateState } from '../instanceUpdatePresentation'
+import { buildInstanceUpdateCheckNotice, canRetryInstanceInstall, resolveInstanceUpdateState, INSTANCE_VERSION_UNKNOWN_NOTICE } from '../instanceUpdatePresentation'
 import { waitForInstanceUpdateCheckJob } from '../composables/instanceUpdateCheckJob'
 import InstanceInstallLogModal from './InstanceInstallLogModal.vue'
 import { useInstallRowProgress } from '../composables/useInstallRowProgress'
@@ -918,7 +918,7 @@ async function refreshVersionStatusAfterSuccessfulInstall(instanceId: string) {
 
 function notifyInstanceUpdateCheckResult(status: InstanceUpdateCheckJobPayload) {
   if (status.error) {
-    faToast.error(status.error)
+    faToast.error(INSTANCE_VERSION_UNKNOWN_NOTICE)
     return
   }
   const notice = buildInstanceUpdateCheckNotice(status.result?.items ?? [])
@@ -1078,8 +1078,8 @@ async function checkAllInstanceUpdates() {
     await fetchInstances()
     notifyInstanceUpdateCheckResult(finalStatus)
   }
-  catch (error) {
-    faToast.error(error instanceof Error ? error.message : '版本检查失败，请稍后重试')
+  catch {
+    faToast.error(INSTANCE_VERSION_UNKNOWN_NOTICE)
   }
   finally {
     updateCheckLoading.value = false

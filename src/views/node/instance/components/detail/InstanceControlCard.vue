@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { InstanceItem } from '@/api/modules/instance'
-import { NButton, NCard, NModal, NStatistic, NTooltip, useMessage } from 'naive-ui'
+import { NButton, NCard, NDropdown, NModal, NStatistic, useMessage } from 'naive-ui'
+import type { DropdownOption } from 'naive-ui'
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { routeToInstanceConsole } from '@/navigation/game-routes'
 import { statusBadgeClass } from '@/constants/statusDictionary'
@@ -20,7 +21,7 @@ import {
 import { useInstanceRuntimeObservability } from '../../composables/useInstanceRuntimeObservability'
 import InstanceInstallLogModal from '../InstanceInstallLogModal.vue'
 import apiInstance from '@/api/modules/instance'
-import { canRetryInstanceInstall, resolveInstanceUpdateState, buildInstanceUpdateCheckNotice } from '../../instanceUpdatePresentation'
+import { canRetryInstanceInstall, resolveInstanceUpdateState, buildInstanceUpdateCheckNotice, INSTANCE_VERSION_UNKNOWN_NOTICE } from '../../instanceUpdatePresentation'
 import { waitForInstanceUpdateCheckJob } from '../../composables/instanceUpdateCheckJob'
 import { formatDateTime } from '../../utils'
 import { isStartupActive } from '../../startupPresentation'
@@ -128,14 +129,14 @@ async function checkUpdates() {
     const status = res.data.checking ? await waitForInstanceUpdateCheckJob(signal) : res.data
     if (signal.aborted) return
     emit('refreshed')
-    if (status.error) message.error(status.error)
+    if (status.error) message.error(INSTANCE_VERSION_UNKNOWN_NOTICE)
     else {
       const notice = buildInstanceUpdateCheckNotice(status.result?.items ?? [])
       message[notice.tone](notice.message)
     }
   }
-  catch (error) {
-    if (!signal.aborted) message.error(error instanceof Error ? error.message : '检查更新失败')
+  catch {
+    if (!signal.aborted) message.error(INSTANCE_VERSION_UNKNOWN_NOTICE)
   }
   finally { updateCheckLoading.value = false }
 }
@@ -208,14 +209,39 @@ function goConsole() {
     router.push(routeToInstanceConsole(props.instance.id))
   }
 }
+
+const maintenanceOptions = computed(() => {
+  const options: DropdownOption[] = []
+  if (hasPermission('instance:update')) {
+    options.push({ key: 'check', label: updateCheckLoading.value ? '正在检查更新…' : '检查更新', disabled: isInstalling.value || actionRunning.value || updateCheckLoading.value })
+    const target = props.instance
+    if (target) options.push({
+      key: 'update', label: canRetryInstanceInstall(target) ? '重试安装' : '更新服务端',
+      disabled: actionRunning.value || !canUpdateInstance(target),
+      props: { title: getUpdateInstanceButtonTitle(target) },
+    })
+  }
+  if (hasPermission('instance.install-log:read')) options.push({ key: 'log', label: '安装日志' })
+  if (hasPermission('instance:delete')) {
+    if (options.length) options.push({ key: 'divider', type: 'divider' })
+    options.push({ key: 'delete', label: '删除实例', disabled: !canDelete(), props: { class: 'text-rose-600 dark:text-rose-400' } })
+  }
+  return options
+})
+function runMaintenance(key: string) {
+  if (key === 'check') void checkUpdates()
+  else if (key === 'update') requestUpdate()
+  else if (key === 'log') installLogVisible.value = true
+  else if (key === 'delete') requestDangerous('delete')
+}
 </script>
 
 <template>
-  <NCard title="实例控制" size="small">
+  <NCard size="small" aria-label="实例状态与控制">
     <template v-if="instance && state">
       <div class="flex flex-wrap items-center gap-2 mb-4">
         <span
-          class="text-xs px-2 py-0.5 rounded-full"
+          class="text-sm px-2 py-0.5 rounded-full"
           :class="statusBadgeClass(state.tone)"
         >
           {{ state.label }}
@@ -224,8 +250,8 @@ function goConsole() {
         <span v-if="updateState === 'available'" class="text-xs text-amber-600 dark:text-amber-400">
           服务端需要更新
         </span>
-        <span v-else-if="updateState === 'unknown'" class="text-xs text-amber-600 dark:text-amber-400">
-          版本未知：{{ instance.updateCheckError || '无法确认版本，请重新检查更新' }}
+        <span v-else-if="updateState === 'unknown'" class="text-sm text-amber-600 dark:text-amber-400 break-words">
+          {{ INSTANCE_VERSION_UNKNOWN_NOTICE }}
         </span>
         <span v-else class="text-xs text-muted-foreground">{{ updateState === 'current' ? '已是最新版本' : '尚未检查版本' }}</span>
         <span v-if="instance.updateCheckedAt" class="text-xs text-muted-foreground">检查时间：{{ formatDateTime(instance.updateCheckedAt) }}</span>
@@ -238,9 +264,7 @@ function goConsole() {
         </span>
       </div>
 
-      <p v-if="isInstalling" class="mb-4 text-sm text-muted-foreground">正在安装</p>
-
-      <div class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 mb-4">
+      <div class="instance-resource-grid mb-4">
         <NStatistic label="CPU（单核）">
           {{ instance.status === 'running' && metrics?.cpuUsageRate != null ? `${metrics.cpuUsageRate.toFixed(1)}%` : '—' }}
         </NStatistic>
@@ -252,10 +276,6 @@ function goConsole() {
         </NStatistic>
       </div>
       <div class="flex flex-wrap gap-2">
-        <NButton size="small" quaternary :loading="updateCheckLoading" :disabled="isInstalling || actionRunning" @click="checkUpdates" v-if="hasPermission('instance:update')">检查更新</NButton>
-        <NButton size="small" quaternary @click="installLogVisible = true" v-if="hasPermission('instance.install-log:read')">
-          安装日志
-        </NButton>
         <NButton
           size="small"
           type="primary"
@@ -287,35 +307,14 @@ function goConsole() {
         >
           重启
         </NButton>
-        <NTooltip trigger="hover" :disabled="canUpdateInstance(instance)" v-if="hasPermission('instance:update')">
-          <template #trigger>
-            <NButton
-              size="small"
-              type="warning"
-              secondary
-              :loading="isActionLoading(instance.id, 'update')"
-              :disabled="actionRunning || !canUpdateInstance(instance)"
-              @click="requestUpdate"
-            >
-              {{ canRetryInstanceInstall(instance) ? '重试安装' : '更新服务端' }}
-            </NButton>
-          </template>
-          {{ getUpdateInstanceButtonTitle(instance) }}
-        </NTooltip>
         <NButton size="small" secondary :disabled="isInstalling" @click="goConsole" v-if="hasPermission('instance.console:read')">
           控制台
         </NButton>
-        <NButton
-          size="small"
-          type="error"
-          quaternary
-          class="ml-2"
-          :disabled="!canDelete()"
-          @click="requestDangerous('delete')"
-          v-if="hasPermission('instance:delete')"
-        >
-          删除
-        </NButton>
+        <NDropdown v-if="maintenanceOptions.length" trigger="click" :options="maintenanceOptions" @select="runMaintenance">
+          <NButton size="small" :loading="updateCheckLoading || isActionLoading(instance.id, 'update')" :aria-label="`${instance.name} 的维护操作`">
+            维护 <FaIcon name="i-lucide:chevron-down" class="ml-1" />
+          </NButton>
+        </NDropdown>
       </div>
     </template>
     <p v-else class="text-sm text-muted-foreground">
@@ -350,3 +349,12 @@ function goConsole() {
 
   </NCard>
 </template>
+
+<style scoped>
+.instance-resource-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  gap: 12px 24px;
+  font-variant-numeric: tabular-nums;
+}
+</style>

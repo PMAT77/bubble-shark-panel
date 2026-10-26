@@ -7,7 +7,7 @@ import apiCluster from '@/api/modules/cluster'
 import apiInstance from '@/api/modules/instance'
 import apiMod from '@/api/modules/mod'
 import apiShard from '@/api/modules/shard'
-import { NButton, NCard, NEmpty, NSpin } from 'naive-ui'
+import { NButton, NSpin, NTabPane, NTabs } from 'naive-ui'
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { routeToNodeInstance } from '@/navigation/game-routes'
 import { isInstanceWorldReady } from './startupPresentation'
@@ -20,6 +20,9 @@ import InstanceControlCard from './components/detail/InstanceControlCard.vue'
 import RoomOverviewCard from './components/detail/RoomOverviewCard.vue'
 import WorldOverviewCard, { type InstanceWorldState } from './components/detail/WorldOverviewCard.vue'
 import { instanceSupportsDstRoom } from '@/composables/useGameInstance'
+import { keyboardTabProps } from '@/utils/keyboardTab'
+import type { InstanceDetailTab } from '@/navigation/game-routes'
+import { availableInstanceDetailTabs, resolveInstanceDetailTab } from './instanceDetailTabs'
 
 defineOptions({
   name: 'NodeInstanceDetail',
@@ -50,10 +53,15 @@ const modList = ref<ModListDto | null>(null)
 const connectInfo = ref<InstanceConnectInfo | null>(null)
 const worldState = ref<InstanceWorldState | null>(null)
 
-const pageTitle = computed(() => instance.value
-  ? `实例详情 · ${instance.value.name}`
-  : '实例详情')
-
+const pageTitle = computed(() => instance.value?.name || '实例详情')
+const availableTabs = computed(() => availableInstanceDetailTabs(hasPermission, Boolean(instance.value && instanceSupportsDstRoom(instance.value))))
+const activeTab = computed(() => resolveInstanceDetailTab(route.query.tab, availableTabs.value))
+function changeTab(tab: InstanceDetailTab) {
+  void router.replace({ query: { ...route.query, tab } })
+}
+watch([() => route.query.tab, availableTabs, instance], () => {
+  if (instance.value && ownsCurrentPage() && route.query.tab !== activeTab.value) changeTab(activeTab.value)
+})
 
 /**
  * 有权限就拉，没有就不发；单项失败给 `null`（不阻塞其余区块）。
@@ -259,100 +267,43 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <FaPageMain :title="pageTitle">
+  <FaPageMain main-class="!p-3 sm:!p-5" class="instance-detail-page">
+    <template #title>
+      <div class="flex flex-wrap items-center gap-3">
+        <NButton size="small" quaternary aria-label="返回实例列表" @click="goBack">
+          <template #icon><FaIcon name="i-lucide:arrow-left" /></template>
+          返回列表
+        </NButton>
+        <h1 class="min-w-0 flex-1 break-words text-lg font-semibold">{{ pageTitle }}</h1>
+        <NButton size="small" secondary :loading="loading" @click="() => loadDetail()">
+          <template #icon><FaIcon name="i-lucide:refresh-cw" /></template>
+          刷新
+        </NButton>
+      </div>
+    </template>
     <NSpin v-if="loading && !instance" class="block mx-auto my-10" />
-    <div v-else class="space-y-4">
-      <div class="flex flex-wrap gap-2 items-center justify-between">
-        <div class="flex flex-wrap items-center gap-2 min-w-0">
-          <NButton size="small" quaternary @click="goBack">
-            <template #icon>
-              <FaIcon name="i-lucide:arrow-left" />
-            </template>
-            返回列表
-          </NButton>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <NButton size="small" secondary :loading="loading" @click="() => loadDetail()">
-            <template #icon>
-              <FaIcon name="i-lucide:refresh-cw" />
-            </template>
-            刷新
-          </NButton>
-        </div>
-      </div>
-
-      <RoomOverviewCard
-        :instance="instance"
-        :cluster="cluster"
-        :online-players="onlinePlayers"
-        :mod-list="modList"
-        :connect-info="connectInfo"
-        :loading="loading"
-      />
-
-      <div class="grid gap-4 lg:grid-cols-2">
-        <InstanceControlCard
-          :instance="instance"
-          @refreshed="() => loadDetail({ silent: true })"
-        />
-        <WorldOverviewCard
-          :instance="instance"
-          :shard-list="shardList"
-          :world-state="worldState"
-          :loading="loading"
-          @refreshed="() => loadDetail({ silent: true })"
-        />
-      </div>
-
-      <!--
-        指令中心、文件、迁移三块各有自己的权限点：无权时给一句说明，而不是挂载一个
-        会立刻 403 的组件（它的加载失败会被吞成空数据，看起来像"这里没有内容"）。
-      -->
-      <AppAuth :value="['console:command', 'world:read', 'world:rollback', 'world:reset', 'instance.console:read']">
-        <CommandCenterCard
-          :instance="instance"
-          :connect-info="connectInfo"
-          @refreshed="() => loadDetail({ silent: true })"
-        />
-        <template #no-auth>
-          <NCard size="small" title="游戏指令">
-            <NEmpty size="small" description="无权使用游戏指令" />
-          </NCard>
-        </template>
-      </AppAuth>
-
-      <AppAuth value="file:read">
-        <InstanceFilesCard
-          v-if="instance"
-          :instance-id="instance.id"
-        />
-        <template #no-auth>
-          <NCard size="small" title="文件管理">
-            <NEmpty size="small" description="无权浏览文件" />
-          </NCard>
-        </template>
-      </AppAuth>
-
-      <AppAuth value="instance.migration:read">
-        <InstanceMigrationCard
-          v-if="instance && instanceSupportsDstRoom(instance)"
-          :instance-id="instance.id"
-          :stopped="instance.status === 'stopped'"
-        />
-        <template #no-auth>
-          <NCard
-            v-if="instance && instanceSupportsDstRoom(instance)"
-            size="small"
-            title="迁移到其他机器"
-          >
-            <NEmpty size="small" description="无权查看迁移报告" />
-          </NCard>
-        </template>
-      </AppAuth>
-
-      <p v-if="instance" class="text-xs text-muted-foreground">
-        实例 ID：{{ instance.id }}
-      </p>
+    <div v-else-if="instance" :key="instance.id" class="min-w-0 space-y-4">
+      <InstanceControlCard :instance="instance" @refreshed="() => loadDetail({ silent: true })" />
+      <NTabs :value="activeTab" type="line" @update:value="changeTab">
+        <NTabPane name="overview" tab="概览" display-directive="show:lazy" :tab-props="keyboardTabProps(activeTab === 'overview')">
+          <div class="min-w-0 space-y-4">
+            <RoomOverviewCard v-if="instanceSupportsDstRoom(instance)" :instance="instance" :cluster="cluster"
+              :online-players="onlinePlayers" :mod-list="modList" :connect-info="connectInfo" :loading="loading" />
+            <WorldOverviewCard v-if="instanceSupportsDstRoom(instance) && hasPermission('world:read')" :instance="instance"
+              :shard-list="shardList" :world-state="worldState" :loading="loading" @refreshed="() => loadDetail({ silent: true })" />
+            <dl class="text-xs text-muted-foreground"><dt class="inline">实例 ID：</dt><dd class="inline break-all font-mono">{{ instance.id }}</dd></dl>
+          </div>
+        </NTabPane>
+        <NTabPane v-if="availableTabs.includes('commands')" name="commands" tab="游戏指令" display-directive="show:lazy" :tab-props="keyboardTabProps(activeTab === 'commands')">
+          <CommandCenterCard :instance="instance" :connect-info="connectInfo" @refreshed="() => loadDetail({ silent: true })" />
+        </NTabPane>
+        <NTabPane v-if="availableTabs.includes('files')" name="files" tab="文件管理" display-directive="show:lazy" :tab-props="keyboardTabProps(activeTab === 'files')">
+          <InstanceFilesCard :instance-id="instance.id" />
+        </NTabPane>
+        <NTabPane v-if="availableTabs.includes('migration')" name="migration" tab="迁移" display-directive="show:lazy" :tab-props="keyboardTabProps(activeTab === 'migration')">
+          <InstanceMigrationCard :instance-id="instance.id" :stopped="instance.status === 'stopped'" />
+        </NTabPane>
+      </NTabs>
     </div>
   </FaPageMain>
 </template>

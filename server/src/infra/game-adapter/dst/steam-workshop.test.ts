@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, it } from 'node:test'
+import { after, afterEach, before, describe, it } from 'node:test'
 import {
   __steamWorkshopTestUtils,
   fetchDstSteamWorkshopMods,
@@ -14,6 +14,17 @@ import {
 } from './steam-workshop.ts'
 
 const originalFetch = globalThis.fetch
+// These tests mock fetch; an inherited CONNECT proxy would bypass the fixture and contact Steam.
+const inheritedProxyEnv = new Map([
+  'BSP_STEAM_HTTPS_PROXY', 'BSP_STEAM_HTTP_PROXY', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy',
+].map(key => [key, process.env[key]]))
+before(() => { for (const key of inheritedProxyEnv.keys()) delete process.env[key] })
+after(() => {
+  for (const [key, value] of inheritedProxyEnv) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+})
 const testDir = path.dirname(fileURLToPath(import.meta.url))
 const steamSampleHtmlPath = path.resolve(testDir, '../../../scripts/steam-sample.html')
 

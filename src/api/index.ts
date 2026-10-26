@@ -15,6 +15,8 @@ declare module 'axios' {
     retryCount?: number
     fake?: boolean
     skipAuthRefresh?: boolean
+    /** 由调用页面展示错误；认证与权限处理仍然生效。 */
+    suppressErrorToast?: boolean
   }
 }
 
@@ -152,18 +154,19 @@ async function handleError(error: any) {
     useAppAccountStore().requestLogout()
     return rejectRequest()
   }
+  if (responseData?.code === 'AUTH_FORBIDDEN') {
+    void healStalePermissionSnapshot()
+  }
+  const showErrorToast = config?.suppressErrorToast !== true || responseData?.code === 'AUTH_FORBIDDEN'
   // 下载失败时如实显示后端给的原因，而不是 "Request failed with status code 404"
   if (binaryRequest && typeof responseData?.error === 'string' && responseData.error) {
-    if (responseData.code === 'AUTH_FORBIDDEN') {
-      void healStalePermissionSnapshot()
-    }
-    toastBusinessErrorOnce(responseData.error)
+    if (showErrorToast) toastBusinessErrorOnce(responseData.error)
     return rejectRequest()
   }
   if (error.status === 401) {
     useAppAccountStore().requestLogout()
   }
-  else {
+  else if (showErrorToast) {
     faToast.error('请求失败', {
       description: error.message,
     })
@@ -229,6 +232,7 @@ api.interceptors.response.use(
           if (
             response.data.code !== 'INSTANCE_PORT_CONFLICT'
             && response.data.code !== 'HOST_MEMORY_PRESSURE'
+            && (response.config.suppressErrorToast !== true || response.data.code === 'AUTH_FORBIDDEN')
           ) {
             toastBusinessErrorOnce(response.data.error)
           }

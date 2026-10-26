@@ -134,6 +134,7 @@ export default {
   ) => api.get(`app/instances/${instanceId}/mods/steam`, {
     params,
     signal: options?.signal,
+    suppressErrorToast: true,
     // 单独给超时：后端对上游的总预算是 10 秒，走到降级也会在这个量级返回结果。
     // 沿用全局 60 秒的话，上游被干扰时用户要对着转圈等一分钟才知道「连不上」。
     timeout: 15_000,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { NButton } from 'naive-ui'
 import apiMod from '@/api/modules/mod'
 import type { ModAccessStatusDto, ModAccessObservation, ModDownloadQueueDto } from '../../../../../../shared/contracts/mod'
@@ -7,6 +7,8 @@ import { resolveModDownloadHelp } from '../modDownloadPresentation'
 const props = defineProps<{ instanceId: string, queue: ModDownloadQueueDto | null }>()
 const { auth: hasPermission } = useAppAuth()
 const open = ref(false)
+const configurationOpen = ref(false)
+const panelElement = ref<HTMLDetailsElement | null>(null)
 const loading = ref(false)
 const result = ref<ModAccessStatusDto | null>(null)
 const error = ref('')
@@ -29,7 +31,15 @@ async function load() {
   catch { if (current === generation) error.value = '暂时无法读取诊断记录，请稍后重试' }
   finally { if (current === generation) loading.value = false }
 }
-watch(() => props.instanceId, () => { generation += 1; result.value = null; open.value = false; error.value = ''; loading.value = false })
+watch(() => props.instanceId, () => { generation += 1; result.value = null; open.value = false; configurationOpen.value = false; error.value = ''; loading.value = false })
+async function openConfiguration() {
+  configurationOpen.value = true
+  if (open.value) void load()
+  open.value = true
+  await nextTick()
+  panelElement.value?.scrollIntoView({ block: 'nearest' })
+}
+defineExpose({ openConfiguration })
 function toggle(event: Event) {
   if (event.target !== event.currentTarget) return
   open.value = (event.target as HTMLDetailsElement).open
@@ -38,8 +48,8 @@ function toggle(event: Event) {
 </script>
 
 <template>
-  <details :key="instanceId" :open="open" class="mb-2 max-h-64 shrink-0 overflow-auto rounded-md border px-3 py-2 text-xs" @toggle="toggle">
-    <summary class="cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">下载遇到问题</summary>
+  <details :key="instanceId" ref="panelElement" :open="open" class="max-h-64 shrink-0 overflow-auto rounded-md border px-3 py-2 text-xs" @toggle="toggle">
+    <summary class="cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">连接与下载帮助</summary>
     <div class="mt-2 flex flex-col gap-2">
       <p>{{ help.summary }}</p>
       <p v-for="reason in help.reasons" :key="reason">{{ reason }}</p>
@@ -66,7 +76,7 @@ function toggle(event: Event) {
           <div><NButton size="tiny" :disabled="!instanceId" :loading="loading" @click="load">刷新记录</NButton></div>
         </div>
       </details>
-      <details>
+      <details :open="configurationOpen" @toggle="configurationOpen = ($event.currentTarget as HTMLDetailsElement).open">
         <summary class="cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">管理员配置说明</summary>
         <div class="mt-2 flex flex-col gap-2 break-words">
           <p v-if="result">运行环境：{{ result.configuration.runtime }}；文件下载代理{{ result.configuration.steamcmdProxyConfigured ? '已配置' : '未配置' }}；市场与详情代理{{ result.configuration.httpProxyConfigured ? '已配置' : '未配置' }}。</p>
@@ -76,6 +86,7 @@ function toggle(event: Event) {
             <li>保存并重启面板，然后重新尝试对应操作。</li>
           </ol>
           <p>已配置代理或市场访问成功，不能证明文件下载正常。</p>
+          <p>按工坊 ID 或链接直接订阅可以跳过市场列表，文件下载仍需要服务器能够访问 Steam 下载服务。</p>
           <p v-if="result?.configuration.runtime === 'docker'">代理须从下载容器可达；面板的 host.docker.internal 映射不会自动传给下载容器。下载容器网络模式：{{ result.configuration.networkMode }}。</p>
           <p v-else>代理地址须从对应运行环境可达。</p>
           <p>BSP_STEAM_WEBAPI_BASE_URL 可配置 Web API 地址。Relay 仅提供市场列表，不代理文件下载。</p>

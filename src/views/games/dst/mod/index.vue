@@ -8,6 +8,7 @@ import type {
   ModInstallStatus,
   ModItemDto,
   SteamModListQueryResultItem,
+  SteamModListMeta,
   SteamModSort,
   SteamModTrendDays,
 } from '@/api/modules/mod'
@@ -55,30 +56,12 @@ const isMobileMode = computed(() => appSettingsStore.mode === 'mobile')
 const subscribeGuideNotificationRef = ref<NotificationReactive | null>(null)
 /** 服务端下发的 Mod 风险提示横幅（加载列表/切换开关时更新） */
 const riskTipBanner = ref<string | null>(null)
-/** Steam 列表加载失败时使用通用空状态，避免显示搜索无结果 */
+/** 面板请求失败与上游不可达分别展示，避免把连接问题当成搜索无结果。 */
 const steamLoadError = ref<string | null>(null)
 
 interface BusinessErrorLike {
   error?: string
   code?: string
-}
-
-interface SteamModMeta {
-  cached: boolean
-  stale: boolean
-  cacheAgeMs: number
-  source?: 'live' | 'cache-fresh' | 'cache-stale'
-  upstreamSource: 'official' | 'relay' | 'html'
-  lastSuccessSource?: 'official' | 'relay' | 'html'
-  lastSuccessAt?: string
-  retryAfterMs?: number
-  upstreamUnavailable?: boolean
-  upstreamMessage?: string
-  steamErrorCode?: string
-  /** 命中的是离线兜底数据：上游连不上，列表停在最后一次成功拉取的版本 */
-  offline?: boolean
-  /** 离线数据的最后成功拉取时间（ISO） */
-  dataFetchedAt?: string
 }
 
 const loadingInstances = ref(false)
@@ -96,8 +79,10 @@ const reorderingMods = ref(false)
 const configModalShow = ref(false)
 const localImportShow = ref(false)
 let listRequest = 0
-let previewRequestInstance = ''
 let renderedSteamQuery = ''
+let attemptedSteamQuery = ''
+let pendingSteamQuery = ''
+let pageActive = true
 const modInstanceStatus = ref('')
 const configTarget = ref<{ workshopId: string, name: string } | null>(null)
 const instances = ref<InstanceSummaryItem[]>([])
@@ -125,7 +110,7 @@ const {
   refreshQueue,
   resetState,
 } = useInstanceModState(() => selectedInstanceId.value)
-const activeTab = ref<'market' | 'subscribed'>(route.query.tab === 'subscribed' ? 'subscribed' : 'market')
+const activeTab = ref<'market' | 'subscribed'>(route.query.tab === 'market' ? 'market' : 'subscribed')
 const steamKeyword = ref('')
 const steamSort = ref<SteamModSort>('trend')
 const steamTrendDays = ref<SteamModTrendDays>(7)
@@ -149,9 +134,9 @@ const modRowProgress = useTaskRowProgress(taskRows)
 function bindModProgressSurface(element: unknown) { modRowProgress.surface.value = element as HTMLElement | null }
 watch(selectedInstanceId, modRowProgress.reset, { flush: 'sync' })
 watch([activeTab, isMobileMode], async () => { await nextTick(); modRowProgress.scheduleMeasure() }, { flush: 'post' })
-const steamMeta = ref<SteamModMeta | null>(null)
+const steamMeta = ref<SteamModListMeta | null>(null)
 const steamAbortController = shallowRef<AbortController | null>(null)
-const suppressSteamSortWatchUntil = ref(0)
+const accessStatusPanel = ref<InstanceType<typeof ModAccessStatusPanel> | null>(null)
 
 /** 离线兜底数据展示用：把 ISO 时间转成本地可读格式 */
 function formatDateTime(value: string | null): string {
@@ -270,13 +255,15 @@ const marketEmptyDescription = computed(() => {
     return '请先选择实例'
   }
   if (steamLoadError.value || steamMeta.value?.upstreamUnavailable) {
-    return '暂无 Mod 数据'
+    return steamLoadError.value ? '市场列表加载失败' : '暂时无法连接 Steam 创意工坊'
   }
   if (steamKeyword.value.trim()) {
     return '未找到符合条件的 Mod'
   }
   return '暂无 Mod 数据'
 })
+const marketConnectionTitle = computed(() => steamLoadError.value ? '市场列表加载失败'
+  : steamMeta.value?.upstreamUnavailable || steamMeta.value?.offline ? '暂时无法连接 Steam 创意工坊' : '')
 const subscribedEmptyDescription = computed(() => {
   if (!selectedInstanceId.value) {
     return '请先选择实例'
@@ -527,7 +514,7 @@ function applyJobResultToInstalledMods(workshopId: string, mod?: ModItemDto, err
 const hasRenderedSteamRows = computed(() => steamMods.value.length > 0)
 
 /** 离线兜底的横幅：说清「为什么是旧的」以及「怎么办」 */
-function resolveSteamOfflineHint(meta: SteamModMeta): string {
+function resolveSteamOfflineHint(meta: SteamModListMeta): string {
   const fetchedAt = meta.dataFetchedAt ? formatDateTime(meta.dataFetchedAt) : null
   return fetchedAt
     ? `暂时连不上 Steam 创意工坊，当前显示的是 ${fetchedAt} 的缓存内容`
@@ -614,10 +601,6 @@ function isRequestCanceled(error: unknown): boolean {
     && (error as { code?: string }).code === 'ERR_CANCELED'
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
 function showSubscribeSuccessGuide() {
   subscribeGuideNotificationRef.value?.destroy()
   subscribeGuideNotificationRef.value = notification.success({
@@ -677,15 +660,6 @@ function renderMarketStatus(row: SteamModListQueryResultItem) {
     { size: 'small', bordered: false, type: 'success' },
     { default: () => '已订阅' },
   )
-}
-
-function isSteamTransientError(error: unknown): boolean {
-  if (typeof error === 'object' && error && 'data' in error) {
-    const data = (error as { data?: { steamErrorCode?: string } }).data
-    const code = data?.steamErrorCode
-    return code === 'STEAM_TIMEOUT' || code === 'STEAM_UPSTREAM_UNAVAILABLE' || code === 'STEAM_RATE_LIMIT'
-  }
-  return false
 }
 
 const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
@@ -1015,6 +989,7 @@ async function loadInstances() {
 }
 
 async function loadInstalledMods() {
+  if (!pageActive) return
   if (!selectedInstanceId.value) {
     installedMods.value = []
     resetState()
@@ -1024,22 +999,13 @@ async function loadInstalledMods() {
   const request = ++listRequest
   loadingInstalled.value = true
   try {
-    // 补缩略图：导入存档带进来的 Mod 本地没有图，服务端按创意工坊 ID 补齐后落库，只补缺的那些
     const response = await apiMod.getModList(id)
-    if (request !== listRequest || id !== selectedInstanceId.value) return
+    if (!pageActive || request !== listRequest || id !== selectedInstanceId.value) return
     if (dragSnapshot.value || reorderingMods.value) {
       if (dragSnapshot.value) dragSnapshot.value.invalidated = true
       return
     }
     installedMods.value = response.data.mods
-    if (previewRequestInstance !== id) {
-      previewRequestInstance = id
-      void apiMod.getModList(id, { enrich: 'previews' }).then(({ data }) => {
-        if (id !== selectedInstanceId.value) return
-        const previews = new Map(data.mods.map(mod => [mod.workshopId, mod.previewImage]))
-        installedMods.value = installedMods.value.map(mod => ({ ...mod, previewImage: previews.get(mod.workshopId) ?? mod.previewImage }))
-      }).catch(() => {})
-    }
     modInstanceStatus.value = response.data.instanceStatus
     riskTipBanner.value = response.data.riskTip?.trim() || null
     void restoreInstallJobs({
@@ -1499,6 +1465,9 @@ watch([selectedInstanceId, isMobileMode, activeTab], () => {
   sortElement.value = null
 }, { flush: 'sync' })
 onBeforeUnmount(() => {
+  pageActive = false
+  actionScope.invalidate()
+  steamAbortController.value?.abort()
   if (dragSnapshot.value) restoreDragDom(dragSnapshot.value)
   dragSnapshot.value = null
 })
@@ -1556,8 +1525,9 @@ async function saveModLoadOrder(workshopIds: string[], fromId: string) {
 
 async function loadSteamMods(
   resetPage = false,
-  options?: { isRetry?: boolean, suppressErrorToast?: boolean },
+  automatic = false,
 ) {
+  if (!pageActive || activeTab.value !== 'market') return
   const action = actionScope.capture()
   if (!selectedInstanceId.value) {
     steamMods.value = []
@@ -1570,11 +1540,15 @@ async function loadSteamMods(
   if (resetPage) {
     steamPage.value = 1
   }
+  const queryIdentity = JSON.stringify([selectedInstanceId.value, steamKeyword.value.trim(), steamPage.value, steamPageSize.value, steamSort.value, steamTrendDays.value])
+  if (pendingSteamQuery === queryIdentity || (automatic && attemptedSteamQuery === queryIdentity)) return
   steamAbortController.value?.abort()
   const controller = new AbortController()
   steamAbortController.value = controller
+  pendingSteamQuery = queryIdentity
+  attemptedSteamQuery = queryIdentity
   loadingSteam.value = true
-  const queryIdentity = JSON.stringify([selectedInstanceId.value, steamKeyword.value.trim(), steamPage.value, steamPageSize.value, steamSort.value, steamTrendDays.value])
+  steamLoadError.value = null
   const sameQuery = queryIdentity === renderedSteamQuery
   const previousMeta = steamMeta.value
   const previousSourceUrl = steamSourceUrl.value
@@ -1585,10 +1559,10 @@ async function loadSteamMods(
     steamTotalPages.value = null
     steamMeta.value = null
     steamSourceUrl.value = ''
-    steamLoadError.value = null
+    renderedSteamQuery = ''
   }
   try {
-    const response = await apiMod.getSteamModList(selectedInstanceId.value, {
+    const response = await apiMod.getSteamModList(action.instanceId, {
       keyword: steamKeyword.value.trim() || undefined,
       page: steamPage.value,
       pageSize: steamPageSize.value,
@@ -1597,7 +1571,7 @@ async function loadSteamMods(
     }, {
       signal: controller.signal,
     })
-    if (controller.signal.aborted) {
+    if (controller.signal.aborted || !action.isCurrent() || !pageActive) {
       return
     }
     if (response.data.meta?.upstreamUnavailable) {
@@ -1614,7 +1588,7 @@ async function loadSteamMods(
       steamPage.value = response.data.page
       steamPageSize.value = response.data.pageSize > 0 ? response.data.pageSize : steamPageSize.value
       steamMeta.value = sameQuery && hasRenderedSteamRows.value && previousMeta
-        ? { ...previousMeta, cached: true, offline: true }
+        ? { ...previousMeta, cached: true, stale: true, offline: true, source: 'cache-stale' }
         : response.data.meta
       return
     }
@@ -1633,14 +1607,7 @@ async function loadSteamMods(
     })
   }
   catch (error: unknown) {
-    if (isRequestCanceled(error)) {
-      return
-    }
-    if (!options?.isRetry && isSteamTransientError(error)) {
-      await sleep(1800)
-      if (!controller.signal.aborted) {
-        return loadSteamMods(resetPage, { isRetry: true })
-      }
+    if (isRequestCanceled(error) || controller.signal.aborted || !action.isCurrent() || !pageActive) {
       return
     }
     // 请求整个失败了（超时/网络中断）：有内容就留着，只在确实空白时清空。
@@ -1652,20 +1619,18 @@ async function loadSteamMods(
       steamTotalPages.value = null
     }
     steamSourceUrl.value = sameQuery && hasRenderedSteamRows.value ? previousSourceUrl : ''
-    steamMeta.value = sameQuery && hasRenderedSteamRows.value && previousMeta ? { ...previousMeta, cached: true, offline: true } : null
-    if (isAuthUnauthorizedError(error)) {
+    steamMeta.value = sameQuery && hasRenderedSteamRows.value && previousMeta ? { ...previousMeta, cached: true, stale: true, offline: true, source: 'cache-stale' } : null
+    if (isAuthUnauthorizedError(error) || (error as BusinessErrorLike)?.code === 'AUTH_FORBIDDEN' || (error as BusinessErrorLike)?.code === 'AUTH_FORCE_PASSWORD_CHANGE') {
       return
     }
-    steamLoadError.value = getErrorMessage(error, 'Steam 创意工坊列表加载失败，请点击重试')
-    if (!options?.suppressErrorToast) {
-      message.error(getErrorMessage(error, '加载 Steam 创意工坊列表失败'))
-    }
+    steamLoadError.value = getErrorMessage(error, '请稍后重试，或检查面板连接。')
   }
   finally {
     if (steamAbortController.value === controller) {
       steamAbortController.value = null
+      pendingSteamQuery = ''
+      loadingSteam.value = false
     }
-    if (!steamAbortController.value || steamAbortController.value === controller) loadingSteam.value = false
   }
 }
 
@@ -1881,28 +1846,33 @@ async function subscribeManualWorkshop() {
 function onInstanceChange(value: string) {
   selectedInstanceId.value = value
   steamAbortController.value?.abort()
+  steamAbortController.value = null
+  pendingSteamQuery = ''
+  attemptedSteamQuery = ''
+  loadingSteam.value = false
   steamMods.value = []
   steamMeta.value = null
   steamLoadError.value = null
   renderedSteamQuery = ''
-  previewRequestInstance = ''
+  steamPage.value = 1
+  steamSourceUrl.value = ''
+  steamHasMore.value = false
+  steamTotalCount.value = null
+  steamTotalPages.value = null
   checkedRowKeys.value = []
   resetState()
-  void Promise.all([activeTab.value === 'market' ? loadSteamMods(true) : Promise.resolve(), loadInstalledMods()])
+  void Promise.all([loadSteamMods(true, true), loadInstalledMods()])
 }
 
 const triggerSteamReloadDebounced = useDebounceFn(() => {
-  if (!selectedInstanceId.value) {
+  if (!pageActive || activeTab.value !== 'market' || !selectedInstanceId.value) {
     return
   }
-  void loadSteamMods(true)
+  void loadSteamMods(true, true)
 }, 400)
 
 watch([steamSort, steamTrendDays], () => {
-  if (Date.now() < suppressSteamSortWatchUntil.value) {
-    return
-  }
-  if (!selectedInstanceId.value) {
+  if (activeTab.value !== 'market' || !selectedInstanceId.value) {
     return
   }
   triggerSteamReloadDebounced()
@@ -1911,34 +1881,34 @@ watch([steamSort, steamTrendDays], () => {
 watch(steamKeyword, (keyword, previousKeyword) => {
   if (!keyword.trim() && steamSort.value === 'relevance') {
     steamSort.value = 'trend'
-    if (selectedInstanceId.value) {
+    if (activeTab.value === 'market' && selectedInstanceId.value) {
       triggerSteamReloadDebounced()
     }
     return
   }
-  if (!selectedInstanceId.value || keyword.trim() === previousKeyword.trim()) {
+  if (activeTab.value !== 'market' || !selectedInstanceId.value || keyword.trim() === previousKeyword.trim()) {
     return
   }
   triggerSteamReloadDebounced()
 })
 
 watch(activeTab, (tab) => {
-  if (tab === 'market' && selectedInstanceId.value && !steamMods.value.length) void loadSteamMods(true)
+  if (tab === 'market' && selectedInstanceId.value) void loadSteamMods(false, true)
   if (tab === 'subscribed' && selectedInstanceId.value && !loadingInstalled.value) {
     void loadInstalledMods()
   }
 })
 
 watch(() => route.query, (query) => {
+  activeTab.value = query.tab === 'market' ? 'market' : 'subscribed'
   const id = typeof query.instanceId === 'string' ? query.instanceId : ''
   if (id && id !== selectedInstanceId.value && instances.value.some(item => item.id === id)) onInstanceChange(id)
-  if (query.tab === 'subscribed' || query.tab === 'market') activeTab.value = query.tab
 })
 
 onMounted(async () => {
-  suppressSteamSortWatchUntil.value = Date.now() + 500
   await loadInstances()
-  await Promise.all([activeTab.value === 'market' ? loadSteamMods(true) : Promise.resolve(), loadInstalledMods()])
+  if (!pageActive) return
+  await Promise.all([loadSteamMods(true, true), loadInstalledMods()])
 })
 </script>
 
@@ -1999,13 +1969,35 @@ onMounted(async () => {
         content-class="flex min-h-0 flex-1 flex-col"
       >
         <div class="flex min-h-0 flex-1 flex-col gap-3">
+          <div v-if="hasPermission('mod:install')" class="flex shrink-0 flex-wrap items-center gap-2">
+            <NInput
+              v-model:value="manualWorkshopInput"
+              class="w-full md:w-64"
+              placeholder="粘贴工坊 ID 或详情页链接"
+              :disabled="!selectedInstanceId"
+              clearable
+              @keydown.enter="subscribeManualWorkshop"
+            />
+            <NButton :disabled="!selectedInstanceId" @click="subscribeManualWorkshop">直接订阅</NButton>
+            <NButton :disabled="!selectedInstanceId" @click="localImportShow = true">从本地导入</NButton>
+          </div>
           <div v-if="activeTab === 'market'" class="flex shrink-0 flex-wrap items-center gap-3">
-            <div
-              v-if="steamMeta?.offline && steamMods.length > 0"
-              class="flex w-full flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning"
+            <NAlert
+              v-if="marketConnectionTitle"
+              :title="marketConnectionTitle"
+              type="warning"
+              class="w-full"
+              :bordered="false"
+              role="status"
             >
-              <span>{{ resolveSteamOfflineHint(steamMeta) }}</span>
-            </div>
+              <p v-if="steamLoadError">{{ steamLoadError }}</p>
+              <p v-else-if="steamMeta?.offline && steamMods.length > 0">{{ resolveSteamOfflineHint(steamMeta) }}</p>
+              <p v-else>请稍后重试，或查看代理配置说明。已订阅 Mod 仍可管理。<template v-if="hasPermission('mod:install')">也可按工坊 ID 订阅或从本地导入。</template></p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <NButton size="small" :loading="loadingSteam" :disabled="!selectedInstanceId" @click="loadSteamMods(false)">重试</NButton>
+                <NButton size="small" @click="accessStatusPanel?.openConfiguration()">代理配置说明</NButton>
+              </div>
+            </NAlert>
             <AdminListToolbar
               v-model:keyword="steamKeyword"
               keyword-placeholder="按名称搜索 Mod"
@@ -2029,21 +2021,7 @@ onMounted(async () => {
                 />
               </template>
               <template #actions>
-                <NInput
-                  v-if="hasPermission('mod:install')"
-                  v-model:value="manualWorkshopInput"
-                  class="w-full md:w-56"
-                  placeholder="粘贴工坊 ID 或详情页链接"
-                  clearable
-                  @keydown.enter="subscribeManualWorkshop"
-                />
-                <NButton :disabled="!selectedInstanceId" @click="subscribeManualWorkshop" v-if="hasPermission('mod:install')">
-                  直接订阅
-                </NButton>
-                <NButton v-if="hasPermission('mod:install')" :disabled="!selectedInstanceId" @click="localImportShow = true">
-                  从本地导入
-                </NButton>
-                <NButton type="primary" :disabled="!selectedInstanceId" @click="loadSteamMods(true)">
+                <NButton type="primary" :loading="loadingSteam" :disabled="!selectedInstanceId" @click="loadSteamMods(false)">
                   刷新列表
                 </NButton>
               </template>
@@ -2059,90 +2037,8 @@ onMounted(async () => {
             </span>
           </div>
 
+          <ModAccessStatusPanel ref="accessStatusPanel" :instance-id="selectedInstanceId" :queue="downloadQueue" />
           <NTabs v-model:value="activeTab" type="segment" class="dst-mod-tabs min-h-0 flex-1">
-            <NTabPane name="market" tab="Mod 市场" display-directive="show" class="h-full">
-              <NDataTable
-                v-if="!isMobileMode"
-                :bordered="false"
-                :single-line="false"
-                :columns="marketColumns"
-                :data="steamMods"
-                :loading="loadingSteam"
-                :pagination="pagination"
-                :row-key="(row: SteamModListQueryResultItem) => row.workshopId"
-                class="dst-mod-table h-full"
-                flex-height
-                remote
-                :scroll-x="1180"
-              >
-                <template #empty>
-                  <div class="dst-mod-table-empty">
-                    <NEmpty size="large" :description="marketEmptyDescription" />
-                  </div>
-                </template>
-              </NDataTable>
-              <div v-else class="dst-mod-market-list space-y-3 overflow-y-auto pr-1" :aria-busy="loadingSteam">
-                <NEmpty v-if="!loadingSteam && steamMods.length === 0" size="small" :description="marketEmptyDescription" />
-                <article
-                  v-for="mod in steamMods"
-                  :key="mod.workshopId"
-                  class="rounded-lg border border-border bg-card p-3 space-y-3"
-                >
-                  <div class="flex gap-3">
-                    <NImage
-                      v-if="mod.previewImage"
-                      :src="mod.previewImage"
-                      width="64"
-                      height="64"
-                      object-fit="cover"
-                      lazy
-                      class="shrink-0 rounded"
-                    />
-                    <div class="min-w-0 flex-1">
-                      <h3 class="line-clamp-2 font-medium">{{ mod.title }}</h3>
-                      <p class="mt-1 text-xs text-muted-foreground">Workshop ID: {{ mod.workshopId }}</p>
-                      <NRate v-if="mod.rating != null" class="mt-1" readonly allow-half size="small" :value="mod.rating" />
-                    </div>
-                    <NTag size="small" :bordered="false" :type="marketStatusType(mod)">
-                      {{ marketStatusLabel(mod) }}
-                    </NTag>
-                  </div>
-                  <div class="flex gap-2">
-                    <NButton
-                      class="flex-1"
-                      type="primary"
-                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
-                      :disabled="marketActionDisabled(mod)"
-                      @click="handleMarketAction(mod)"
-                      v-if="hasPermission('mod:install')"
-                    >
-                      {{ marketActionLabel(mod) }}
-                    </NButton>
-                    <NButton
-                      v-if="resolveMarketSubscribeStatus(mod) === 'failed' && hasPermission('mod:install')"
-                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
-                      :disabled="marketActionDisabled(mod)"
-                      @click="confirmUnsubscribeFromMarket(mod)"
-                    >
-                      取消订阅
-                    </NButton>
-                    <NButton :disabled="!hasSelectedInstance" @click="goToModDetail(mod.workshopId)">
-                      详情
-                    </NButton>
-                  </div>
-                </article>
-                <NPagination
-                  v-if="resolvedPageCount > 1"
-                  :page="steamPage"
-                  :page-count="resolvedPageCount"
-                  :disabled="loadingSteam"
-                  simple
-                  class="justify-center py-2"
-                  @update:page="changeSteamPage"
-                />
-              </div>
-            </NTabPane>
-
             <NTabPane
               name="subscribed"
               display-directive="if"
@@ -2210,9 +2106,6 @@ onMounted(async () => {
                     </span>
                   </div>
                   <div class="flex shrink-0 gap-2" :class="{ 'ml-auto': !isMobileMode }">
-                    <NButton v-if="hasPermission('mod:install')" size="small" :disabled="!selectedInstanceId" @click="localImportShow = true">
-                      从本地导入
-                    </NButton>
                     <NButton size="small" :disabled="!selectedInstanceId" :loading="loadingInstalled" @click="loadInstalledMods()">
                       刷新列表
                     </NButton>
@@ -2230,7 +2123,6 @@ onMounted(async () => {
                 <NAlert v-if="downloadQueue?.warnings.length" class="mb-2 shrink-0" type="warning" :bordered="false" :show-icon="false">
                   <p v-for="warning in downloadQueue.warnings" :key="warning">{{ warning }}</p>
                 </NAlert>
-                <ModAccessStatusPanel :instance-id="selectedInstanceId" :queue="downloadQueue" />
                 <NDataTable
                   v-if="!isMobileMode"
                   :key="`subscribed-${selectedInstanceId}`"
@@ -2355,6 +2247,89 @@ onMounted(async () => {
                 </div>
               </div>
             </NTabPane>
+            <NTabPane name="market" tab="Mod 市场" display-directive="show" class="h-full">
+              <NDataTable
+                v-if="!isMobileMode"
+                :bordered="false"
+                :single-line="false"
+                :columns="marketColumns"
+                :data="steamMods"
+                :loading="loadingSteam"
+                :pagination="pagination"
+                :row-key="(row: SteamModListQueryResultItem) => row.workshopId"
+                class="dst-mod-table h-full"
+                flex-height
+                remote
+                :scroll-x="1180"
+              >
+                <template #empty>
+                  <div class="dst-mod-table-empty">
+                    <NEmpty size="large" :description="marketEmptyDescription" />
+                  </div>
+                </template>
+              </NDataTable>
+              <div v-else class="dst-mod-market-list space-y-3 overflow-y-auto pr-1" :aria-busy="loadingSteam">
+                <NEmpty v-if="!loadingSteam && steamMods.length === 0" size="small" :description="marketEmptyDescription" />
+                <article
+                  v-for="mod in steamMods"
+                  :key="mod.workshopId"
+                  class="rounded-lg border border-border bg-card p-3 space-y-3"
+                >
+                  <div class="flex gap-3">
+                    <NImage
+                      v-if="mod.previewImage"
+                      :src="mod.previewImage"
+                      width="64"
+                      height="64"
+                      object-fit="cover"
+                      lazy
+                      class="shrink-0 rounded"
+                    />
+                    <div class="min-w-0 flex-1">
+                      <h3 class="line-clamp-2 font-medium">{{ mod.title }}</h3>
+                      <p class="mt-1 text-xs text-muted-foreground">Workshop ID: {{ mod.workshopId }}</p>
+                      <NRate v-if="mod.rating != null" class="mt-1" readonly allow-half size="small" :value="mod.rating" />
+                    </div>
+                    <NTag size="small" :bordered="false" :type="marketStatusType(mod)">
+                      {{ marketStatusLabel(mod) }}
+                    </NTag>
+                  </div>
+                  <div class="flex gap-2">
+                    <NButton
+                      class="flex-1"
+                      type="primary"
+                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
+                      :disabled="marketActionDisabled(mod)"
+                      @click="handleMarketAction(mod)"
+                      v-if="hasPermission('mod:install')"
+                    >
+                      {{ marketActionLabel(mod) }}
+                    </NButton>
+                    <NButton
+                      v-if="resolveMarketSubscribeStatus(mod) === 'failed' && hasPermission('mod:install')"
+                      :loading="unsubscribingWorkshopIds.has(mod.workshopId)"
+                      :disabled="marketActionDisabled(mod)"
+                      @click="confirmUnsubscribeFromMarket(mod)"
+                    >
+                      取消订阅
+                    </NButton>
+                    <NButton :disabled="!hasSelectedInstance" @click="goToModDetail(mod.workshopId)">
+                      详情
+                    </NButton>
+                  </div>
+                </article>
+                <NPagination
+                  v-if="resolvedPageCount > 1"
+                  :page="steamPage"
+                  :page-count="resolvedPageCount"
+                  :disabled="loadingSteam"
+                  simple
+                  class="justify-center py-2"
+                  @update:page="changeSteamPage"
+                />
+              </div>
+            </NTabPane>
+
           </NTabs>
         </div>
       </NCard>

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import { validateSteamcmdAppUpdateResult } from './steamcmd-app-update-result'
+import { prepareSteamcmdManifestRecovery } from './steamcmd-manifest-recovery'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { buildSteamcmdAppUpdateArgs, buildSteamcmdWorkshopDownloadArgs } from './steamcmd-args'
@@ -281,7 +282,7 @@ export async function runSteamcmdAppUpdateNative(input: {
     input.onLogLine?.(`使用 Native SteamCMD: ${getServerContainerConfig().nativeSteamcmdPath}`)
     input.onLogLine?.(`安装目录: ${input.hostInstallPath}`)
     input.onLogLine?.(formatSteamcmdDownloadRegionForLog(steamcmdConfig.downloadRegion))
-    const result = validateSteamcmdAppUpdateResult(await runNativeSteamcmdJob({
+    const result = prepareSteamcmdManifestRecovery(validateSteamcmdAppUpdateResult(await runNativeSteamcmdJob({
       args: buildSteamcmdAppUpdateArgs(
         input.hostInstallPath,
         input.appId,
@@ -290,7 +291,7 @@ export async function runSteamcmdAppUpdateNative(input: {
       cancelKey: input.cancelKey,
       timeoutMs: resolveSteamcmdAppUpdateTimeoutMs(),
       onLogLine: input.onLogLine,
-    }), input.hostInstallPath, input.appId)
+    }), input.hostInstallPath, input.appId), input)
     return {
       ok: result.ok,
       output: result.output,

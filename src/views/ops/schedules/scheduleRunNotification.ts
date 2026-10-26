@@ -6,7 +6,7 @@ const PANEL_DB_INSTANCE_ID = 'panel-db'
 export const SCHEDULE_KIND_LABELS: Record<ScheduleTaskItem['kind'], string> = {
   restart: '定时重启',
   backup: '定时备份',
-  update_check: '更新检查',
+  update: '定时更新',
   db_snapshot: '面板快照',
 }
 
@@ -23,9 +23,11 @@ export interface ScheduleTriggerNotice {
   title: string
   content: string
   durationMs: number
+  /** 定时更新最终失败不能被页面的「立即执行」提示抑制。 */
+  mustNotify?: boolean
 }
 
-/** 触发时刻 → 基线。null 表示该任务尚未执行过 */
+/** 普通任务记录触发时刻；定时更新另带状态，以捕获同轮最终失败。 */
 export type ScheduleRunBaseline = Map<string, string | null>
 
 export function defaultScheduleTargetName(instanceId: string): string {
@@ -49,16 +51,17 @@ export function buildScheduleTriggerNotice(task: ScheduleTaskItem, targetName: s
   return {
     taskId: task.id,
     level: noticeLevel(status),
-    title: '计划任务已触发',
+    title: task.kind === 'update' && status === 'failed' ? '定时更新失败' : '计划任务已触发',
     content: `${SCHEDULE_KIND_LABELS[task.kind]}｜${targetName}：${SCHEDULE_STATUS_LABELS[status]}${detail}`,
-    durationMs: status === 'failed' ? 8000 : 6000,
+    durationMs: task.kind === 'update' && status === 'failed' ? 0 : status === 'failed' ? 8000 : 6000,
+    ...(task.kind === 'update' && status === 'failed' ? { mustNotify: true } : {}),
   }
 }
 
 /**
  * 依据上一次基线找出「新触发」的任务：某任务的 lastRunAt 相对基线出现了新值。
  * 传空基线时为首次采集（只建立基线，不产生通知）。
- * 调度器在终态写回时复用触发时刻，因此一次执行只会产生一条通知。
+ * 定时更新还识别同轮 running→failed；首次采集也提示尚未处理的失败。
  */
 export function collectScheduleTriggerNotices(
   previous: ReadonlyMap<string, string | null>,
@@ -70,10 +73,19 @@ export function collectScheduleTriggerNotices(
   for (const task of tasks) {
     const lastRunAt = task.lastRunAt ?? null
     const previousRunAt = previous.get(task.id) ?? null
-    if (previous.has(task.id) && lastRunAt !== null && lastRunAt !== previousRunAt) {
+    const key = task.kind === 'update' && lastRunAt ? `${lastRunAt}|${task.lastRunStatus}` : lastRunAt
+    const failedUpdate = task.kind === 'update' && task.lastRunStatus === 'failed' && !task.enabled
+    const changed = previous.has(task.id) && lastRunAt !== null && key !== previousRunAt
+    const newRun = task.kind !== 'update' || !previousRunAt?.startsWith(`${lastRunAt}|`)
+    if ((changed && (newRun || failedUpdate)) || (!previous.has(task.id) && failedUpdate)) {
       notices.push(buildScheduleTriggerNotice(task, resolveTargetName(task.instanceId)))
     }
-    baseline.set(task.id, lastRunAt)
+    baseline.set(task.id, key)
   }
   return { notices, baseline }
+}
+
+export function consumeScheduleNoticeSuppression(notice: ScheduleTriggerNotice, suppressed: Set<string>): boolean {
+  const wasSuppressed = suppressed.delete(notice.taskId)
+  return wasSuppressed && !notice.mustNotify
 }

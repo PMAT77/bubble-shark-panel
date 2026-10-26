@@ -116,6 +116,18 @@ describe('isRetriableSteamcmdInstallOutput', () => {
 })
 
 describe('failure evidence and redaction', () => {
+  it('reports the real manifest denial from diagnostics instead of harmless bootstrap cache messages', () => {
+    const denial = "[SteamCMD 诊断] CDepotDownloadMgr::BYldRequestDepotManifest(App: 343050, Depot: 343052, Manifest: 5351080740317260085, branch: ): Failed to get manifest request code, 'Access Denied'"
+    const output = `Error! App '343050' state is 0x6 after update job.\n${denial}\n[SteamCMD 诊断] Failed to load cached hosts file, using defaults`
+    assert.equal(classifySteamcmdInstallFailure(output), 'manifest_denied')
+    assert.equal(isRetriableSteamcmdInstallOutput(output), true)
+    const message = formatSteamcmdAppUpdateFailureMessage({ appId: '343050', output, mode: 'anonymous', hasAccountCredentials: false })
+    assert.match(message, /Access Denied/)
+    assert.match(message, /5351080740317260085/)
+    assert.doesNotMatch(message, /cached hosts|挂载.*权限|网络.*不稳定/)
+    assert.equal(classifySteamcmdInstallFailure('[SteamCMD 诊断] content_log.txt 未采集：Access Denied'), 'unknown')
+  })
+
   it('retries the reported 0x402 failure but prioritizes explicit causes', () => {
     const output = "Update state (0x61) downloading, progress: 2.43\nError! App '343050' state is 0x402 after update job."
     assert.equal(classifySteamcmdInstallFailure(output), 'incomplete')

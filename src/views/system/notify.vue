@@ -321,7 +321,7 @@ const columns = computed<DataTableColumns<NotifyChannelItem>>(() => [
 
     <div class="flex items-center justify-between">
       <div class="text-sm opacity-70">
-        告警事件：实例异常退出、CPU / 内存 / 磁盘占用过高、计划任务备份结果。
+        告警事件：实例异常退出、CPU / 内存 / 磁盘占用过高、计划任务备份结果、定时更新失败。
       </div>
       <NButton type="primary" @click="openCreateDialog" v-if="hasPermission('settings:write')">
         新建渠道

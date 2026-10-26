@@ -2,12 +2,12 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 /**
  * 实例计划任务（单机定时动作）。
- * Community 核心承诺的「单机实例定时重启/备份/更新检查/数据库快照」。
+ * Community 核心承诺的「单机实例定时重启/备份/定时更新/数据库快照」。
  */
 export const scheduledTasks = sqliteTable('scheduled_tasks', {
   id: text('id').primaryKey(),
   instanceId: text('instance_id').notNull(),
-  /** 任务类型：restart/backup/update_check/db_snapshot */
+  /** 任务类型：restart/backup/update/db_snapshot */
   kind: text('kind').notNull(),
   /** 调度类型：interval=每 N 小时；daily=每日 HH:MM */
   scheduleType: text('schedule_type').notNull(),

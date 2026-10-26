@@ -13,6 +13,7 @@ import {
   addUserInstanceGrants, closeDatabase, createGameInstance, findUserByAccount,
   getGameInstanceById, initDatabase, updateGameInstanceRuntime, updateUserMustChangePassword,
   getSystemBackupSettings, saveSystemBackupSettings,
+  listBackups,
 } from '../../shared/db'
 import { createMember, createRole } from '../system/rbac-service'
 import { clearRemoteBuildCache, fetchRemoteBuildId, REMOTE_BUILD_CACHE_MS } from '../../shared/steam-update/build-id'
@@ -26,17 +27,20 @@ import { cancelInstallJob, getInstallLogsDirPath } from './install-service'
 import { InstanceInstallLogWriter, readInstallProgress } from '../../shared/instance-install/log-store'
 import { ensureDstLayout } from '../../infra/game-adapter/dst/cluster-config'
 import { redactSteamcmdLogLine } from '../../infra/container/steamcmd-errors'
+import { scheduledUpdateOperations } from './scheduled-update'
+import { withInstanceContentOperation } from '../../shared/instance-content/operation'
 
 const app = Fastify({ logger: false })
 // test-results 不受开发服务监听，安装目录仍需避开系统临时目录黑名单。
 const fixtureParent = path.join(process.cwd(), 'test-results')
 fs.mkdirSync(fixtureParent, { recursive: true })
 const root = fs.mkdtempSync(path.join(fixtureParent, '.bsp-update-regression-'))
-const envKeys = ['DB_PATH', 'BSP_RUNTIME_MODE', 'BSP_INSTANCES_ROOT', 'BSP_PANEL_CONTAINER_NAME', 'BSP_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'BSP_UNIT_TEST', 'BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS', 'BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS', 'BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS'] as const
+const envKeys = ['DB_PATH', 'BSP_RUNTIME_MODE', 'BSP_INSTANCES_ROOT', 'BSP_BACKUPS_ROOT', 'BSP_PANEL_CONTAINER_NAME', 'BSP_INSTALL_DEFER_DST_IMAGE_PULL', 'SERVER_LOG_DIR', 'BSP_UNIT_TEST', 'BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS', 'BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS', 'BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS'] as const
 const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]))
 process.env.DB_PATH = path.join(root, 'test.sqlite')
 process.env.BSP_RUNTIME_MODE = 'docker'
 process.env.BSP_INSTANCES_ROOT = path.join(root, 'instances')
+process.env.BSP_BACKUPS_ROOT = path.join(root, 'backups')
 process.env.BSP_PANEL_CONTAINER_NAME = 'bsp-update-regression-panel'
 process.env.SERVER_LOG_DIR = path.join(root, 'logs')
 process.env.BSP_UNIT_TEST = '1'
@@ -53,6 +57,7 @@ let queries = 0
 let updates = 0
 let queryDelayMs = 0
 let updateOutput = "Success! App '343050' fully installed.\n"
+let updateResults: Array<{ output: string, manifest?: string }> = []
 
 function metadata(publicBuild = '25643504') {
   return `"343050" {\n"depots" {\n${Array.from({ length: 120 }, (_, i) => `"depot${i}" { "manifests" { "public" { "gid" "1" } } }`).join('\n')}
@@ -121,7 +126,8 @@ before(async () => {
   mock.method(Docker.prototype, 'createContainer', async (options: Docker.ContainerCreateOptions) => {
     const cmd = options.Cmd ?? []
     const query = cmd.includes('+app_info_print')
-    const text = query ? queryOutput : updateOutput
+    const update = query ? undefined : updateResults.shift()
+    const text = query ? queryOutput : update?.output ?? updateOutput
     const exitCode = query ? queryExitCode : 0
     if (query) {
       queries++
@@ -133,6 +139,7 @@ before(async () => {
       if (target) {
         fs.mkdirSync(path.join(target, 'bin64'), { recursive: true })
         fs.writeFileSync(path.join(target, 'bin64', 'dontstarve_dedicated_server_nullrenderer_x64'), 'binary')
+        if (update?.manifest) fs.writeFileSync(path.join(target, 'steamapps', 'appmanifest_343050.acf'), update.manifest)
       }
     }
     const frame = framed(text)
@@ -359,6 +366,78 @@ describe('game update regression', () => {
     assert.equal(body.data.isSuccess, true)
     await waitForInstall(current.id)
     assert.equal(updates, count + 1)
+  })
+
+  it('定时更新单次任务强制校验最新版文件，并等待安装清理完成', async () => {
+    const current = await instance('25643504')
+    const beforeUpdates = updates
+    const result = await scheduledUpdateOperations.install(app, current.id, new AbortController().signal)
+    assert.equal(result.ok, true, result.message)
+    assert.equal(result.cleanupPending, false)
+    assert.equal(updates - beforeUpdates, 1)
+    assert.equal(isInstallJobActive(current.id), false)
+    assert.equal(readInstallProgress(getInstallLogsDirPath(), current.id)?.maxAttempts, 1)
+  })
+
+  it('定时更新单次失败不会叠加手动安装的内层重试', async () => {
+    const current = await instance()
+    const beforeUpdates = updates
+    const previousOutput = updateOutput
+    updateOutput = "Error! App '343050' state is 0x602 after update job."
+    try {
+      const result = await scheduledUpdateOperations.install(app, current.id, new AbortController().signal)
+      assert.equal(result.ok, false)
+      assert.equal(updates - beforeUpdates, 1)
+      assert.equal(isInstallJobActive(current.id), false)
+    }
+    finally { updateOutput = previousOutput }
+  })
+
+  it('旧清单拒绝后备份元数据，下一次定时更新尝试完成真实文件校验', async () => {
+    const current = await instance('25643504')
+    const dir = path.join(current.installPath!, 'steamapps')
+    const save = path.join(current.installPath!, 'world.save')
+    fs.writeFileSync(save, 'saved world')
+    const beforeUpdates = updates
+    updateResults = [
+      { output: "Error! App '343050' state is 0x6 after update job.\n[SteamCMD 诊断] /depot/343052/manifest/8683614463113575289/5/code - manifest request received 200 (OK) HTTP response\n[SteamCMD 诊断] CDepotDownloadMgr::BYldRequestDepotManifest(App: 343050, Depot: 343052, Manifest: 5351080740317260085, branch: ): Failed to get manifest request code, 'Access Denied'" },
+      { output: "Success! App '343050' fully installed.", manifest: localMetadata('26148034', '8683614463113575289') },
+    ]
+    try {
+      const first = await scheduledUpdateOperations.install(app, current.id, new AbortController().signal)
+      assert.equal(first.ok, false)
+      assert.equal(first.cleanupPending, false)
+      assert.equal(updates - beforeUpdates, 1, '清单恢复不执行额外的内层重试')
+      assert.match(first.message ?? '', /Steam 拒绝获取 Depot 内容清单/)
+      assert.equal(fs.existsSync(path.join(dir, 'appmanifest_343050.acf')), false)
+      const backups = fs.readdirSync(dir).filter(name => name.includes('.denied-'))
+      assert.equal(backups.length, 1)
+      assert.equal(fs.readFileSync(path.join(dir, backups[0]), 'utf8'), localMetadata('25643504'))
+      const second = await scheduledUpdateOperations.install(app, current.id, new AbortController().signal)
+      assert.equal(second.ok, true, second.message)
+      assert.equal(updates - beforeUpdates, 2)
+      assert.equal(readInstallProgress(getInstallLogsDirPath(), current.id)?.phaseCode, 'complete')
+      assert.equal(fs.readFileSync(save, 'utf8'), 'saved world')
+      assert.match(fs.readFileSync(path.join(dir, 'appmanifest_343050.acf'), 'utf8'), /8683614463113575289/)
+    }
+    finally { updateResults = []; clearRemoteBuildCache() }
+  })
+
+  it('定时更新持有整轮互斥锁时仍能完成更新前备份', async () => {
+    const current = await instance()
+    fs.mkdirSync(path.join(current.installPath!, 'klei-storage'))
+    fs.writeFileSync(path.join(current.installPath!, 'klei-storage', 'save-fixture'), 'saved world')
+    const settings = await getSystemBackupSettings()
+    await saveSystemBackupSettings({ autoBackupBeforeUpdate: true })
+    try {
+      const result = await withInstanceContentOperation(current.id, () => scheduledUpdateOperations.install(app, current.id, new AbortController().signal))
+      assert.equal(result.ok, true, result.message)
+      const backups = await listBackups(current.id)
+      assert.equal(backups.length, 1)
+      assert.equal(backups[0].kind, 'pre_update')
+      assert.equal(backups[0].status, 'completed')
+    }
+    finally { await saveSystemBackupSettings(settings) }
   })
 
   it('forced recovery executes SteamCMD even when public and local builds match', async () => {

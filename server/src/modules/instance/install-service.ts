@@ -1,4 +1,4 @@
-import { withInstanceContentActivity, markInstanceContentCleanupPending } from '../../shared/instance-content/operation'
+import { withInstanceContentActivity, markInstanceContentCleanupPending, ownsInstanceContentOperation } from '../../shared/instance-content/operation'
 import type { FastifyInstance } from 'fastify'
 import process from 'node:process'
 import fs from 'node:fs'
@@ -17,7 +17,7 @@ import {
 import { loadServerConfig, resolveInstallLogsDir } from '../../shared/config'
 import { abortable } from '../../shared/abort'
 import { ensureContainerRuntimeReady } from './container-lifecycle'
-import { createInstanceBackup } from '../backup/backup-service'
+import { createInstanceBackup, createInstanceBackupUnlocked } from '../backup/backup-service'
 import { summarizeInstallFailure } from '../../shared/instance-install/log-format'
 import {
   InstanceInstallLogWriter,
@@ -67,6 +67,8 @@ export interface InstanceInstallJobInput {
   steamcmdCredentials?: { username: string, password: string }
   /** 已受理的更新必须实际校验文件，不能按清单跳过或改用供体复制。 */
   forceSteamcmd?: boolean
+  /** 定时更新由外层统一管理三次尝试，单次安装不再叠加重试。 */
+  maxAttempts?: number
 }
 
 const LOCAL_NODE_ID = 'local-node'
@@ -93,6 +95,20 @@ async function updateGameInstanceRuntime(id: string, patch: UpdateGameInstanceRu
 }
 
 export function getInstallTaskId(id: string) { return installJobs.get(id)?.taskId }
+
+/** 等待指定任务完成清理后读取持久化终态，不能误认随后启动的新任务。 */
+export async function waitForInstallJob(instanceId: string, taskId: string) {
+  const job = installJobs.get(instanceId)
+  if (job?.taskId === taskId) await job.completion
+  const current = await getGameInstanceById(instanceId)
+  if (!current || current.installTaskId !== taskId) throw new Error('更新任务已被替换或实例已删除')
+  return {
+    ok: current.installLogStatus === 'success',
+    cancelled: current.installLogStatus === 'cancelled',
+    cleanupPending: getInstanceInstallProgress(current)?.cleanupPending ?? false,
+    message: current.lastError ?? '更新未完成',
+  }
+}
 
 function hasCleanupFailure(instance: DbGameInstance) {
   return instance.lastErrorPhase === 'install' && /无法确认.*停止|清理未完成/.test(instance.lastError ?? '')
@@ -437,7 +453,8 @@ async function runInstallPipeline(
     logWriter.setPhase('backup')
     logWriter.event('正在创建更新前备份。')
     const signal = AbortSignal.any([installSignal(input.instanceId)!, AbortSignal.timeout(resolveSteamcmdAppUpdateTimeoutMs())])
-    const backup = await createInstanceBackup({ instanceId: input.instanceId, kind: 'pre_update', saveBeforeArchive: false, signal })
+    const createBackup = ownsInstanceContentOperation(input.instanceId) ? createInstanceBackupUnlocked : createInstanceBackup
+    const backup = await createBackup({ instanceId: input.instanceId, kind: 'pre_update', saveBeforeArchive: false, signal })
     assertNotCancelled(input.instanceId)
     if (!backup.ok) throw new Error('更新前备份失败，已停止更新：' + backup.message)
     logWriter.event('更新前备份已完成。')
@@ -510,8 +527,9 @@ async function runInstallPipeline(
 
   const withRetries = (run: () => Promise<{ ok: boolean, output: string, cancelled?: boolean }>, account = false) => {
     let attempt = 1
-    const { installMaxAttempts } = loadSteamcmdRuntimeConfig()
+    const installMaxAttempts = input.maxAttempts ?? loadSteamcmdRuntimeConfig().installMaxAttempts
     return retrySteamcmdInstall({
+      maxAttempts: installMaxAttempts,
       signal: installSignal(input.instanceId),
       run: async () => {
         logWriter.beginAttempt(attempt, installMaxAttempts, account)
@@ -678,7 +696,7 @@ async function runInstallJobInBackground(
   let lastPhase = ''
   try {
     logWriter = new InstanceInstallLogWriter(getInstallLogsDirPath(), input.instanceId)
-    logWriter.clear(loadSteamcmdRuntimeConfig().installMaxAttempts, {
+    logWriter.clear(input.maxAttempts ?? loadSteamcmdRuntimeConfig().installMaxAttempts, {
       taskId: input.taskId!, kind: input.kind ?? 'install', runtimeMode: getServerContainerConfig().runtimeMode,
       backup: Boolean(input.backupBeforeUpdate),
     })

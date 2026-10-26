@@ -167,7 +167,7 @@ export async function bootstrap() {
   // 计划任务调度器必须在数据库初始化之后启动：
   // 启动恢复要读 scheduled_tasks 并把面板离线期间错过的任务标记为 skipped 顺延（绝不补跑）。
   // 放在 createServerApp（模块注册）里启动会因为 SQLite 尚未就绪而必然失败。
-  startScheduleScheduler(app)
+  await startScheduleScheduler(app)
 
   try {
     await app.listen({ port: config.port, host: config.host })

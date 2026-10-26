@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import type { ScheduledUpdateResult } from './scheduled-update'
 
 export interface InstanceScheduledOperationResult {
   ok: boolean
@@ -13,6 +14,8 @@ export interface InstanceScheduledOperationResult {
 export interface InstanceScheduledOps {
   /** 停止运行中实例并重新启动（等价手动重启语义，但无需用户会话） */
   restart: (app: FastifyInstance, instanceId: string) => Promise<InstanceScheduledOperationResult>
+  update: (app: FastifyInstance, instanceId: string, progress: (message: string) => Promise<void>) => Promise<ScheduledUpdateResult>
+  recoverUpdate: (instanceId: string) => Promise<string>
 }
 
 let registered: InstanceScheduledOps | null = null
@@ -26,4 +29,14 @@ export async function restartInstanceBySchedule(app: FastifyInstance, instanceId
     return { ok: false, message: '实例模块尚未初始化，无法执行计划重启' }
   }
   return registered.restart(app, instanceId)
+}
+
+export async function updateInstanceBySchedule(app: FastifyInstance, instanceId: string, progress: (message: string) => Promise<void>): Promise<ScheduledUpdateResult> {
+  if (!registered) return { status: 'failed', disableTask: true, message: '实例模块尚未初始化，无法执行定时更新；任务已停用' }
+  return registered.update(app, instanceId, progress)
+}
+
+export async function recoverScheduledInstanceUpdate(instanceId: string): Promise<string> {
+  if (!registered) return '实例模块尚未初始化，未能确认实例停止'
+  return registered.recoverUpdate(instanceId)
 }

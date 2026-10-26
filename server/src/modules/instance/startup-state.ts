@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { HostResourceSnapshot, InstanceStartupSnapshot } from '../../../../shared/contracts/instance-resources'
 import { buildStartupSwapAdvice } from '../../infra/container/host-resource-guard'
 import { updateGameInstanceRuntime } from '../../shared/db'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
+import { abortableDelay } from '../../shared/abort'
+import { getGameInstanceById } from '../../shared/db'
 
 export interface StartupTask {
   instanceId: string
@@ -74,6 +77,18 @@ export function getStartupSnapshot(instanceId: string, fallback?: InstanceStartu
   return snapshot ? startupSummary(snapshot) : null
 }
 
+/** 复用启动监控自身的阶段期限，等待同一任务真正就绪或失败。 */
+export async function waitForStartupTask(instanceId: string, taskId: string, signal?: AbortSignal) {
+  for (;;) {
+    signal?.throwIfAborted()
+    const current = await getGameInstanceById(instanceId)
+    const snapshot = getStartupSnapshot(instanceId, current?.lastStartupReport)
+    if (!current || snapshot?.taskId !== taskId) throw new Error('启动任务已被替换或实例已删除')
+    if (!startupIsActive(snapshot)) return snapshot
+    await abortableDelay(250, signal)
+  }
+}
+
 /** 同实例的检查点按顺序写入；旧任务的迟到写入不能覆盖新启动。 */
 export async function persistStartupTask(task: StartupTask): Promise<void> {
   const snapshot = structuredClone(startupSummary(task.snapshot))
@@ -138,7 +153,8 @@ export function cancelStartupTask(instanceId: string): void {
 
 /** 本地节点同一时间只加载一个实例；排队阶段没有分片 deadline。 */
 export function enqueueStartupTask(task: StartupTask, run: () => Promise<void>): void {
-  queue.push({ task, run })
+  // 队列可能由另一个实例的调用链消费，必须保留本次内容操作的互斥所有者。
+  queue.push({ task, run: AsyncLocalStorage.bind(run) })
   if (draining) return
   draining = true
   setImmediate(() => { void drainQueue() })

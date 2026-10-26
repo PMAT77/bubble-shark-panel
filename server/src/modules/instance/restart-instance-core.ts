@@ -14,6 +14,7 @@ import {
 } from './install-service'
 import { getStartupSnapshot, startupIsActive } from './startup-state'
 import { instanceStartSource } from './start-source'
+import { isScheduledUpdateActive } from './scheduled-update'
 
 export interface RestartInstanceCoreOptions {
   autoAllocatePorts?: boolean
@@ -43,6 +44,7 @@ export async function restartInstanceCore(
   if (!id) {
     return businessError('实例 ID 不能为空', request)
   }
+  if (isScheduledUpdateActive(id)) return businessError('实例正在执行定时更新，请先停止实例以取消更新', request)
   const current = await getGameInstanceById(id)
   if (!current) {
     return businessError('实例不存在', request)

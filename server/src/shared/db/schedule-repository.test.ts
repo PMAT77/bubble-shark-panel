@@ -149,7 +149,7 @@ describe('schedule repository & boot recovery', () => {
     const task = await createScheduleTask({
       id: newScheduleTaskId(),
       instanceId,
-      kind: 'update_check',
+      kind: 'update',
       scheduleType: 'interval',
       scheduleValue: '12',
     })

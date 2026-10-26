@@ -1,7 +1,7 @@
 import type { ScheduleTaskItem } from '@/api/modules/schedule'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { buildScheduleTriggerNotice, collectScheduleTriggerNotices, defaultScheduleTargetName } from './scheduleRunNotification.ts'
+import { buildScheduleTriggerNotice, collectScheduleTriggerNotices, consumeScheduleNoticeSuppression, defaultScheduleTargetName } from './scheduleRunNotification.ts'
 
 function makeTask(overrides: Partial<ScheduleTaskItem> & Pick<ScheduleTaskItem, 'id'>): ScheduleTaskItem {
   return {
@@ -24,6 +24,35 @@ function makeTask(overrides: Partial<ScheduleTaskItem> & Pick<ScheduleTaskItem, 
 const TRIGGERED_AT = '2026-09-16T20:30:00.000Z'
 
 describe('collectScheduleTriggerNotices', () => {
+  it('定时更新同轮从执行中转为失败必须提示，重试消息和重复轮询不重复通知', () => {
+    const previous = new Map([['st-update', null]])
+    const running = makeTask({ id: 'st-update', kind: 'update', lastRunAt: TRIGGERED_AT, lastRunStatus: 'running' })
+    const first = collectScheduleTriggerNotices(previous, [running])
+    assert.equal(first.notices.length, 1)
+    const retry = collectScheduleTriggerNotices(first.baseline, [{ ...running, lastRunMessage: '第 2/3 次更新失败' }])
+    assert.equal(retry.notices.length, 0)
+    const failed = { ...running, enabled: false, lastRunStatus: 'failed' as const, lastRunMessage: '更新尝试 3/3；实例已停止，任务已停用' }
+    const final = collectScheduleTriggerNotices(retry.baseline, [failed], () => '生存服')
+    assert.equal(final.notices.length, 1)
+    assert.equal(final.notices[0].level, 'error')
+    assert.equal(final.notices[0].title, '定时更新失败')
+    assert.equal(final.notices[0].durationMs, 0)
+    assert.match(final.notices[0].content, /生存服.*3\/3.*实例已停止/)
+    assert.equal(collectScheduleTriggerNotices(final.baseline, [failed]).notices.length, 0)
+  })
+
+  it('首次进入页面提示未处理的更新失败，手动执行的抑制不能吞掉错误', () => {
+    const failed = makeTask({ id: 'st-update', kind: 'update', enabled: false, lastRunAt: TRIGGERED_AT, lastRunStatus: 'failed' })
+    const result = collectScheduleTriggerNotices(new Map(), [failed])
+    assert.equal(result.notices.length, 1)
+    const suppressed = new Set(['st-update'])
+    assert.equal(consumeScheduleNoticeSuppression(result.notices[0], suppressed), false)
+    assert.equal(suppressed.size, 0)
+    assert.equal(collectScheduleTriggerNotices(result.baseline, [failed]).notices.length, 0)
+    const trigger = buildScheduleTriggerNotice({ ...failed, lastRunStatus: 'running' }, '生存服')
+    assert.equal(consumeScheduleNoticeSuppression(trigger, new Set(['st-update'])), true)
+  })
+
   it('首次采集只建立基线，不为历史执行弹通知', () => {
     const task = makeTask({ id: 'st-1', lastRunAt: '2026-09-15T20:30:00.000Z', lastRunStatus: 'ok' })
     const result = collectScheduleTriggerNotices(new Map(), [task])

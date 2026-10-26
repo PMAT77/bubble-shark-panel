@@ -326,7 +326,7 @@ export interface DbNotifySettings {
   }
 }
 
-export type DbScheduleTaskKind = 'restart' | 'backup' | 'update_check' | 'db_snapshot'
+export type DbScheduleTaskKind = 'restart' | 'backup' | 'update' | 'db_snapshot'
 export type DbScheduleType = 'interval' | 'daily'
 export type DbScheduleTimezone = 'beijing' | 'server'
 export type DbScheduleRunStatus = 'running' | 'ok' | 'failed' | 'skipped'

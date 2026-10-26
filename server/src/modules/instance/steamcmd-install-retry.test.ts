@@ -12,6 +12,16 @@ afterEach(() => keys.forEach((key, index) => {
   else process.env[key] = previous[index]
 }))
 
+it('定时更新的单次预算覆盖安装重试配置，避免外层三次再叠加内层重试', async () => {
+  process.env.BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS = '9'
+  let attempts = 0
+  await retrySteamcmdInstall({
+    maxAttempts: 1, run: async () => { attempts++; return { ok: false, output: 'Missing configuration' } },
+    isCancelled: () => false, onRetry: async () => { assert.fail('不应叠加内部重试') },
+  })
+  assert.equal(attempts, 1)
+})
+
 it('retries incomplete updates with a finite budget and preserves download artifacts', async () => {
   process.env.BSP_STEAMCMD_INSTALL_MAX_ATTEMPTS = '3'
   process.env.BSP_STEAMCMD_INSTALL_RETRY_DELAYS_MS = '1'

@@ -32,7 +32,7 @@ let active = false
 const kindMeta: Record<ScheduleTaskItem['kind'], { label: string, type: 'default' | 'info' | 'warning' | 'error' | 'success' }> = {
   restart: { label: '定时重启', type: 'warning' },
   backup: { label: '定时备份', type: 'info' },
-  update_check: { label: '更新检查', type: 'default' },
+  update: { label: '定时更新', type: 'default' },
   db_snapshot: { label: '面板快照', type: 'success' },
 }
 
@@ -218,7 +218,7 @@ function formatTsToHHmm(ts: number): string {
 const kindOptions: SelectOption[] = [
   { label: '定时备份（实例存档）', value: 'backup' },
   { label: '定时重启', value: 'restart' },
-  { label: '检查游戏更新', value: 'update_check' },
+  { label: '定时更新', value: 'update' },
   { label: '面板数据库快照（全局）', value: 'db_snapshot' },
 ]
 
@@ -317,6 +317,18 @@ async function submitEditor() {
 // ---------------------------------------------------------------------------
 
 async function toggleEnabled(task: ScheduleTaskItem, enabled: boolean) {
+  if (enabled && task.kind === 'update') {
+    dialog.warning({
+      title: '启用定时更新',
+      content: `将按计划停止「${instanceName(task.instanceId)}」、更新服务端并启动；累计失败 3 次后保持停止并停用任务。`,
+      positiveText: '启用', negativeText: '取消', onPositiveClick: () => applyEnabled(task, enabled),
+    })
+    return
+  }
+  await applyEnabled(task, enabled)
+}
+
+async function applyEnabled(task: ScheduleTaskItem, enabled: boolean) {
   try {
     const response = await apiSchedule.updateScheduleTask({ taskId: task.id, enabled })
     if (response.data.isSuccess) {
@@ -333,11 +345,13 @@ async function toggleEnabled(task: ScheduleTaskItem, enabled: boolean) {
 function runNow(task: ScheduleTaskItem) {
   dialog.warning({
     title: '立即执行',
-    content: `确定立即执行「${kindMeta[task.kind].label}」？`,
+    content: task.kind === 'update'
+      ? `将立即停止「${instanceName(task.instanceId)}」、更新服务端并启动；累计失败 3 次后保持停止并停用任务。`
+      : `确定立即执行「${kindMeta[task.kind].label}」？`,
     positiveText: '执行',
     negativeText: '取消',
     onPositiveClick: async () => {
-      // 乐观反馈：接口同步等待执行完成，先把该行置为执行中并抑制重复的右上角通知
+      // 定时更新异步受理，页面轮询终态；仅抑制触发提示，最终失败仍通知。
       task.lastRunStatus = 'running'
       task.lastRunMessage = '执行中…'
       suppressScheduleRunNotificationOnce(task.id)
@@ -406,6 +420,7 @@ const columns = computed<DataTableColumns<ScheduleTaskItem>>(() => {
         return h(NSwitch, {
           value: row.enabled,
           size: 'small',
+          disabled: row.lastRunStatus === 'running' || !hasPermission('schedule:write'),
           onUpdateValue: (value: boolean) => toggleEnabled(row, value),
         })
       },
@@ -413,12 +428,18 @@ const columns = computed<DataTableColumns<ScheduleTaskItem>>(() => {
     {
       title: '执行状态',
       key: 'lastRunStatus',
-      width: 110,
+      minWidth: 220,
       render: (row) => {
         if (!row.lastRunStatus) {
           return h('span', { class: 'text-xs opacity-60' }, '尚未执行')
         }
         const meta = runStatusMeta[row.lastRunStatus]
+        if (row.kind === 'update') {
+          return h('div', { class: 'space-y-1' }, [
+            h(NTag, { type: meta.type, size: 'small', bordered: false }, { default: () => meta.label }),
+            h('div', { class: 'text-sm whitespace-normal break-words' }, row.lastRunMessage ?? ''),
+          ])
+        }
         return h(NTooltip, null, {
           trigger: () => h(NTag, { type: meta.type, size: 'small', bordered: false }, { default: () => meta.label }),
           default: () => row.lastRunMessage ?? '',
@@ -452,9 +473,9 @@ const columns = computed<DataTableColumns<ScheduleTaskItem>>(() => {
         // 三个按钮同属一个权限点：后端 run-now / update / delete 都是 schedule:write
         // （最初这里写成 schedule:run，那个点位并不存在——类型收紧后才会编译报错）
         if (hasPermission('schedule:write')) {
-          actions.push(h(NButton, { size: 'small', secondary: true, disabled: !row.enabled, onClick: () => runNow(row) }, { default: () => '立即执行' }))
-          actions.push(h(NButton, { size: 'small', secondary: true, onClick: () => openEditDialog(row) }, { default: () => '编辑' }))
-          actions.push(h(NButton, { size: 'small', secondary: true, type: 'error', onClick: () => removeTask(row) }, { default: () => '删除' }))
+          actions.push(h(NButton, { size: 'small', secondary: true, disabled: !row.enabled || row.lastRunStatus === 'running', onClick: () => runNow(row) }, { default: () => '立即执行' }))
+          actions.push(h(NButton, { size: 'small', secondary: true, disabled: row.lastRunStatus === 'running', onClick: () => openEditDialog(row) }, { default: () => '编辑' }))
+          actions.push(h(NButton, { size: 'small', secondary: true, type: 'error', disabled: row.lastRunStatus === 'running', onClick: () => removeTask(row) }, { default: () => '删除' }))
         }
         return h(NSpace, { size: 8, wrap: false }, { default: () => actions })
       },
@@ -542,6 +563,9 @@ const columns = computed<DataTableColumns<ScheduleTaskItem>>(() => {
         </NFormItem>
         <div v-if="editorKind === 'backup'" class="mb-3 text-xs opacity-50">
           运行中会先让世界保存一次。
+        </div>
+        <div v-if="editorKind === 'update'" class="mb-3 text-sm">
+          到点后停止实例，更新完成后自动启动。原本停止的实例也会启动；累计失败 3 次后保持停止并停用任务，通过页面和已启用的通知渠道告警。
         </div>
         <NSpace justify="end">
           <NButton @click="editorVisible = false">

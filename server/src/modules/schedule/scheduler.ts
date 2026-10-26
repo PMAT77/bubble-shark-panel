@@ -5,17 +5,15 @@ import {
   listScheduleTasks,
   updateScheduleTask,
 } from '../../shared/db/index'
-import type { DbScheduledTask } from '../../shared/db/index'
 import { computeNextRunAtIso } from './next-run'
-import { executeScheduleAction } from './schedule-actions'
+import { startScheduleTask, notifyScheduledUpdateFailure } from './task-runner'
+import { recoverScheduledInstanceUpdate } from '../instance/scheduled-entry'
 
 const TICK_INTERVAL_MS = 30_000
 
 let tickTimer: NodeJS.Timeout | null = null
 let schedulerStarted = false
 let tickInFlight = false
-/** 单进程内防同任务重入（执行中的任务不会被下一次 tick 重复捞取） */
-const inFlightTaskIds = new Set<string>()
 
 function isUnitTest(): boolean {
   return readBrandEnv('BSP_UNIT_TEST') === '1'
@@ -32,6 +30,14 @@ export async function recoverMissedTasksOnBoot(app: FastifyInstance): Promise<vo
   const now = new Date()
   for (const task of tasks) {
     const wasRunning = task.lastRunStatus === 'running'
+    if (!wasRunning && !task.enabled) continue
+    if (wasRunning && task.kind === 'update') {
+      const cleanup = await recoverScheduledInstanceUpdate(task.instanceId)
+      const message = `面板重启导致定时更新中断；${cleanup}，任务已停用`
+      await updateScheduleTask(task.id, { lastRunStatus: 'failed', lastRunMessage: message, enabled: false, nextRunAt: null })
+      await notifyScheduledUpdateFailure(task, message)
+      continue
+    }
     const dueAt = task.nextRunAt ? Date.parse(task.nextRunAt) : Number.NaN
     const missed = !(Number.isFinite(dueAt) && dueAt > now.getTime())
     if (!wasRunning && !missed) {
@@ -64,42 +70,6 @@ export async function recoverMissedTasksOnBoot(app: FastifyInstance): Promise<vo
   }
 }
 
-async function runDueTask(app: FastifyInstance, task: DbScheduledTask): Promise<void> {
-  const now = new Date()
-  // 先推进 next_run_at 再执行：执行中崩溃也不会在重启后立即重复执行同一到期任务。
-  // 同时把最近执行置为执行中，供面板列表展示（终态写回时复用同一个 lastRunAt 触发时刻）。
-  const nextRunAt = computeNextRunAtIso(task.scheduleType, task.scheduleValue, now, task.scheduleTz)
-  await updateScheduleTask(task.id, {
-    ...(nextRunAt === null ? {} : { nextRunAt }),
-    lastRunAt: now.toISOString(),
-    lastRunStatus: 'running',
-    lastRunMessage: '执行中…',
-  })
-
-  let result
-  try {
-    result = await executeScheduleAction(app, task)
-  }
-  catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    result = { status: 'failed' as const, message: `执行异常: ${message}` }
-  }
-
-  await updateScheduleTask(task.id, {
-    lastRunAt: now.toISOString(),
-    lastRunStatus: result.status,
-    lastRunMessage: result.message,
-  })
-  app.log.info({
-    taskId: task.id,
-    kind: task.kind,
-    instanceId: task.instanceId,
-    status: result.status,
-    message: result.message,
-    nextRunAt,
-  }, '计划任务执行完成')
-}
-
 async function tick(app: FastifyInstance): Promise<void> {
   if (tickInFlight) {
     return
@@ -108,13 +78,7 @@ async function tick(app: FastifyInstance): Promise<void> {
   try {
     const due = await listDueScheduleTasks(new Date().toISOString())
     for (const task of due) {
-      if (inFlightTaskIds.has(task.id)) {
-        continue
-      }
-      inFlightTaskIds.add(task.id)
-      void runDueTask(app, task)
-        .catch(error => app.log.error({ taskId: task.id, err: error }, '计划任务执行流程异常'))
-        .finally(() => inFlightTaskIds.delete(task.id))
+      await startScheduleTask(app, task)
     }
   }
   catch (error) {
@@ -126,16 +90,15 @@ async function tick(app: FastifyInstance): Promise<void> {
 }
 
 /** 启动调度循环（幂等；单元测试环境不自动启动） */
-export function startScheduleScheduler(app: FastifyInstance): void {
+export async function startScheduleScheduler(app: FastifyInstance): Promise<void> {
   if (schedulerStarted || isUnitTest()) {
     return
   }
   schedulerStarted = true
-  void recoverMissedTasksOnBoot(app).catch(error => app.log.error({ err: error }, '计划任务启动恢复失败'))
+  await recoverMissedTasksOnBoot(app)
+  if (!schedulerStarted) return
   tickTimer = setInterval(() => void tick(app), TICK_INTERVAL_MS)
-  if (typeof tickTimer === 'object' && 'unref' in tickTimer && typeof tickTimer.unref === 'function') {
-    tickTimer.unref()
-  }
+  tickTimer.unref()
   app.log.info({ tickIntervalMs: TICK_INTERVAL_MS }, '计划任务调度器已启动')
 }
 

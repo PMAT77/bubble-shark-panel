@@ -1,5 +1,7 @@
 import { readBrandEnv } from '../../../../shared/brand-env'
 import { validateSteamcmdAppUpdateResult } from './steamcmd-app-update-result'
+import { buildSteamcmdCachedAppUpdateCommand } from './steamcmd-depot-cache'
+import { prepareSteamcmdManifestRecovery } from './steamcmd-manifest-recovery'
 import fs from 'node:fs'
 import { abortable } from '../../shared/abort'
 import DockerClient from 'dockerode'
@@ -200,20 +202,17 @@ async function runSteamcmdAppUpdateInContainerUnlocked(input: {
     }
   }
 
-  const result = validateSteamcmdAppUpdateResult(await runSteamcmdJob({
+  const result = prepareSteamcmdManifestRecovery(validateSteamcmdAppUpdateResult(await runSteamcmdJob({
     signal: input.signal,
     image: steamcmdImage,
-    cmd: [
-      '/home/steam/steamcmd/steamcmd.sh',
-      ...steamcmdArgs,
-    ],
+    cmd: buildSteamcmdCachedAppUpdateCommand(bindPlan.containerInstallPath, steamcmdArgs),
     hostBinds: bindPlan.hostBinds.map(appendSteamcmdBindMountOptions),
     user: resolveSteamcmdContainerUser(),
     jobId: input.cancelKey,
     kind: 'app-update',
     timeoutMs: appUpdateTimeoutMs,
     onLogLine: input.onLogLine,
-  }), input.hostInstallPath, input.appId)
+  }), input.hostInstallPath, input.appId), input)
 
   if (result.ok) {
     pushLine('SteamCMD app_update 已完成')

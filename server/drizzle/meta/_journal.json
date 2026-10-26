@@ -225,6 +225,13 @@
       "when": 1791612022585,
       "tag": "0031_icy_black_crow",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1793003561726,
+      "tag": "0032_scheduled_update",
+      "breakpoints": true
     }
   ]
 }

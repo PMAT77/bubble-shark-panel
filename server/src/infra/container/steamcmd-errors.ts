@@ -27,6 +27,7 @@ export type SteamcmdInstallFailureKind
     | 'timeout'
     | 'permission'
     | 'subscription'
+    | 'manifest_denied'
     | 'disk'
     | 'oom'
     | 'incomplete'
@@ -42,6 +43,13 @@ export const STEAMCMD_OOM_MARKER = 'BSP-STEAMCMD-OOM'
 
 /** 保留可用于诊断的主错误，避免后续进度/卸载输出挤掉它。 */
 export const STEAMCMD_FAILURE_LINE = /error|failed|failure|missing|denied|timeout|timed?\s*out|invalid|no subscription|fatal|not enough disk|no space left|disk write|out of memory|BSP-STEAMCMD-OOM/i
+
+export function findDeniedDepotManifests(output: string): Array<{ appId: string, depotId: string, manifestId: string, line: string }> {
+  return output.split('\n').flatMap(line => {
+    const match = /CDepotDownloadMgr::BYldRequestDepotManifest\(App:\s*(\d+),\s*Depot:\s*(\d+),\s*Manifest:\s*(\d+),[^\n]*Failed to get manifest request code,\s*'Access Denied'/i.exec(line)
+    return match ? [{ appId: match[1], depotId: match[2], manifestId: match[3], line: line.trim() }] : []
+  })
+}
 
 export function redactSteamcmdLogLine(line: string, secrets: string[] = []): string {
   let text = sanitizeSteamcmdLogLine(line)
@@ -98,6 +106,9 @@ export function classifySteamcmdInstallFailure(output: string): SteamcmdInstallF
   if (text.includes(STEAMCMD_TIMEOUT_MARKER)) {
     return 'timeout'
   }
+  if (findDeniedDepotManifests(output).length) {
+    return 'manifest_denied'
+  }
   if (
     /needs to be online/i.test(text)
     || /network connection/i.test(text)
@@ -119,7 +130,7 @@ export function classifySteamcmdInstallFailure(output: string): SteamcmdInstallF
 export function isRetriableSteamcmdInstallOutput(output: string): boolean {
   const kind = classifySteamcmdInstallFailure(output)
   // timeout 也重试：已下载内容保留在 steamapps/downloading，下一轮 app_update 断点续传
-  return kind === 'network' || kind === 'timeout' || kind === 'incomplete'
+  return kind === 'network' || kind === 'timeout' || kind === 'incomplete' || kind === 'manifest_denied'
 }
 
 function extractSteamcmdFailureSnippet(output: string): string {
@@ -128,6 +139,10 @@ function extractSteamcmdFailureSnippet(output: string): string {
     return '（无 SteamCMD 输出）'
   }
   const lines = sanitized.split('\n').map(line => line.trim()).filter(Boolean)
+  const denied = findDeniedDepotManifests(sanitized)[0]
+  if (denied) return denied.line
+  const fatal = [...lines].reverse().find(line => /(?:^|\s)(?:ERROR!|Fatal Error:)/i.test(line) && !line.startsWith('[SteamCMD 诊断]'))
+  if (fatal) return fatal
   const errorLine = [...lines].reverse().find(line =>
     STEAMCMD_FAILURE_LINE.test(line) && !line.startsWith('[SteamCMD 诊断]'),
   )
@@ -149,6 +164,10 @@ export function formatSteamcmdAppUpdateFailureMessage(input: {
   const output = sanitizeSteamcmdLogLine(input.output) || input.output.trim()
   const failureSnippet = extractSteamcmdFailureSnippet(input.output)
   const kind = classifySteamcmdInstallFailure(input.output)
+
+  if (kind === 'manifest_denied') {
+    return `SteamCMD 安装 ${input.appId} 失败：Steam 拒绝获取 Depot 内容清单（Access Denied）。请查看日志中的清单恢复结果后重试，现有游戏文件和存档会保留。SteamCMD 输出：${failureSnippet}`
+  }
 
   if (kind === 'disk' || kind === 'oom' || kind === 'incomplete') {
     const detail = {

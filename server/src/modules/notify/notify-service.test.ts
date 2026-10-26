@@ -9,9 +9,11 @@ import {
   createNotifyChannel,
   getNotifyChannelById,
   initDatabase,
+  getNotifySettings,
+  saveNotifySettings,
 } from '../../shared/db/index'
 import type { DbNotifyChannel } from '../../shared/db/index'
-import { deliverToChannel, resetNotifyStateForTests } from './notify-service'
+import { deliverToChannel, dispatchToChannels, resetNotifyStateForTests } from './notify-service'
 import type { PanelEvent } from './events'
 
 const dbFilePath = path.join(os.tmpdir(), `bsp-notify-test-${randomUUID()}.sqlite`)
@@ -88,6 +90,25 @@ describe('notify service delivery', () => {
     const sentAgain = await deliverToChannel(stubApp, channel, event, 15)
     assert.equal(sentAgain, false)
     assert.equal(fetchCalls.length, 1, 'second send inside cooldown must not hit the wire')
+  })
+
+  it('定时更新失败沿用已启用渠道、总开关和每轮去重', async () => {
+    installFetchStub('ok')
+    resetNotifyStateForTests()
+    const settings = await getNotifySettings()
+    const failure: PanelEvent = { ...event, type: 'scheduled_update_failed', severity: 'critical', occurrenceKey: 'task:run-1' }
+    try {
+      await saveNotifySettings({ ...settings, enabled: false })
+      await dispatchToChannels(stubApp, failure)
+      assert.equal(fetchCalls.length, 0)
+      await saveNotifySettings({ ...settings, enabled: true, cooldownMinutes: 15 })
+      await dispatchToChannels(stubApp, failure)
+      await dispatchToChannels(stubApp, failure)
+      assert.equal(fetchCalls.length, 1)
+      await dispatchToChannels(stubApp, { ...failure, occurrenceKey: 'task:run-2' })
+      assert.equal(fetchCalls.length, 2)
+    }
+    finally { await saveNotifySettings(settings) }
   })
 
   it('different subject bypasses cooldown (不同实例互不影响)', async () => {

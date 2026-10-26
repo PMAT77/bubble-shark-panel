@@ -27,7 +27,7 @@ import { businessError, success } from '../../shared/http/response'
 import { authorizeInstance, requirePermission, resolveAuthorizedContext, resolveInstanceScope } from '../system/auth'
 import { DB_BACKUP_INSTANCE_ID } from '../system/db-snapshot-service'
 import { computeNextRunAtIso, describeSchedule } from './next-run'
-import { executeScheduleAction } from './schedule-actions'
+import { isScheduleTaskRunning, startScheduleTask } from './task-runner'
 
 function toTaskItem(task: DbScheduledTask): ScheduleTaskItem {
   return {
@@ -66,7 +66,7 @@ async function authorize(
 /**
  * 计划任务的实例归属校验。
  *
- * 计划任务分两种归属：绑定某个实例的（重启/备份/更新检查），以及**面板全局**的
+ * 计划任务分两种归属：绑定某个实例的（重启/备份/定时更新），以及**面板全局**的
  * 数据库快照——后者用哨兵实例 id 存在同一个表里，不属于任何实例，因此跳过实例授权，
  * 只要求 `schedule:write` 权限点。
  *
@@ -86,7 +86,7 @@ async function authorizeTaskInstance(
 }
 
 /**
- * schedule 模块：实例计划任务（定时重启/备份/更新检查/数据库快照）。
+ * schedule 模块：实例计划任务（定时重启/备份/定时更新/数据库快照）。
  * Community 核心承诺的单机定时动作；调度器随模块注册启动。
  */
 export function registerScheduleModule(app: FastifyInstance) {
@@ -184,6 +184,7 @@ export function registerScheduleModule(app: FastifyInstance) {
     }
 
     const finalType = body.data.scheduleType ?? task.scheduleType
+    if (isScheduleTaskRunning(task.id)) return businessError('任务正在执行，请先停止实例以取消定时更新', request)
     const finalValue = body.data.scheduleValue ?? task.scheduleValue
     const finalTz = body.data.scheduleTimezone ?? task.scheduleTz
     if (computeNextRunAtIso(finalType, finalValue, new Date(), finalTz) === null) {
@@ -224,6 +225,7 @@ export function registerScheduleModule(app: FastifyInstance) {
     if (authorized) {
       return authorized
     }
+    if (isScheduleTaskRunning(target.id)) return businessError('任务正在执行，请先停止实例以取消定时更新', request)
     const removed = await deleteScheduleTask(body.data.taskId)
     if (!removed) {
       return businessError('计划任务不存在', request)
@@ -253,21 +255,10 @@ export function registerScheduleModule(app: FastifyInstance) {
       return businessError('任务已停用，请先启用再执行', request)
     }
 
-    // 与调度器一致：先置执行中，执行后写回 last_run_* 并顺延 next_run_at
-    // （终态复用同一个触发时刻，便于前端把「一次触发」识别为一条通知）
-    const startedAt = new Date()
-    await updateScheduleTask(task.id, {
-      lastRunAt: startedAt.toISOString(),
-      lastRunStatus: 'running',
-      lastRunMessage: '执行中…（手动触发）',
-    })
-    const result = await executeScheduleAction(app, task)
-    await updateScheduleTask(task.id, {
-      lastRunAt: startedAt.toISOString(),
-      lastRunStatus: result.status,
-      lastRunMessage: result.message,
-      nextRunAt: computeNextRunAtIso(task.scheduleType, task.scheduleValue, new Date(), task.scheduleTz),
-    })
+    const execution = await startScheduleTask(app, task)
+    if (execution.error) return businessError(execution.error, request)
+    if (task.kind === 'update') return success({ triggered: true, message: '定时更新已受理，执行结果见任务列表' }, request)
+    const result = await execution.completion!
     return success({ triggered: true, message: result.message }, request)
   })
 

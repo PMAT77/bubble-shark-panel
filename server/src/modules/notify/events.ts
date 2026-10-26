@@ -9,6 +9,7 @@ export type PanelEventType =
   | 'backup_completed'
   | 'backup_failed'
   | 'update_available'
+  | 'scheduled_update_failed'
   | 'resource_threshold'
 
 export interface PanelEvent {

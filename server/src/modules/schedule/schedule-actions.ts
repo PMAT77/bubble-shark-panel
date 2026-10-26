@@ -1,15 +1,16 @@
 import type { FastifyInstance } from 'fastify'
 import { DB_BACKUP_INSTANCE_ID, createDatabaseSnapshot } from '../system/db-snapshot-service'
 import { createInstanceBackup } from '../backup/backup-service'
-import { enqueueInstanceUpdateCheck, resolveSteamcmdCommandForUpdateCheck } from '../instance/update-check'
-import { restartInstanceBySchedule } from '../instance/scheduled-entry'
+import { restartInstanceBySchedule, updateInstanceBySchedule } from '../instance/scheduled-entry'
 import { emitPanelEvent } from '../notify/events'
-import { getGameInstanceById } from '../../shared/db/index'
+import { getGameInstanceById, updateScheduleTask } from '../../shared/db/index'
+import { assertInstanceContentAvailable, InstanceContentBusyError } from '../../shared/instance-content/operation'
 import type { DbScheduledTask, DbScheduleRunStatus } from '../../shared/db/index'
 
 export interface ScheduleActionResult {
   status: DbScheduleRunStatus
   message: string
+  disableTask?: boolean
 }
 
 const SCHEDULED_OPERATOR = 'scheduler'
@@ -38,6 +39,12 @@ export async function executeScheduleAction(app: FastifyInstance, task: DbSchedu
   }
   if (isInstanceBusy(instance.status)) {
     return { status: 'skipped', message: `实例当前状态为 ${instance.status}，已跳过本次执行` }
+  }
+  try { assertInstanceContentAvailable(task.instanceId) }
+  catch (error) {
+    if (error instanceof InstanceContentBusyError) return { status: 'skipped', message: error.message }
+    if (task.kind !== 'update') throw error
+    return { status: 'failed', disableTask: true, message: `${error instanceof Error ? error.message : String(error)}；任务已停用` }
   }
 
   switch (task.kind) {
@@ -74,18 +81,10 @@ export async function executeScheduleAction(app: FastifyInstance, task: DbSchedu
       }
       return { status: 'ok', message: '实例已按计划重启' }
     }
-    case 'update_check': {
-      const steamcmdCommand = await resolveSteamcmdCommandForUpdateCheck()
-      const status = enqueueInstanceUpdateCheck({
-        steamcmdCommand,
-        instanceIds: [task.instanceId],
-        force: false,
+    case 'update':
+      return updateInstanceBySchedule(app, task.instanceId, async (message) => {
+        await updateScheduleTask(task.id, { lastRunMessage: message })
       })
-      if (!status.checking && status.error) {
-        return { status: 'failed', message: status.error }
-      }
-      return { status: 'ok', message: '更新检查已触发（结果见实例更新状态）' }
-    }
     default:
       return { status: 'failed', message: `未知任务类型：${task.kind}` }
   }

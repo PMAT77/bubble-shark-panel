@@ -72,6 +72,7 @@ export function summarizeInstallFailure(message: string): NonNullable<InstanceIn
     timeout: '检查下载连接或调整下载超时后重试，已下载内容会保留。',
     permission: '检查安装目录和挂载目录的写入权限后重试。',
     subscription: '检查游戏是否需要拥有该游戏的 Steam 账号登录。',
+    manifest_denied: '查看日志中的清单恢复结果后重试；现有游戏文件和存档会保留。',
     disk: '检查安装目录及容器存储所在磁盘的可用空间和写入权限。',
     oom: '检查宿主机可用内存和 SteamCMD 内存限制后重试。',
     incomplete: '查看原始日志中的内容服务器诊断后重试，已下载内容会保留。',
@@ -81,6 +82,7 @@ export function summarizeInstallFailure(message: string): NonNullable<InstanceIn
   const reason = {
     network: '连接 Steam 或下载服务器失败。', timeout: '本次下载超过等待时间，任务已终止。',
     permission: '安装目录无法写入。', subscription: 'Steam 账号没有对应内容的下载权限。',
+    manifest_denied: 'Steam 拒绝获取 Depot 内容清单。',
     disk: '磁盘空间不足或写入失败。', oom: 'SteamCMD 因内存不足被终止。',
     incomplete: '游戏文件更新未完成。',
     unknown: /[\u4E00-\u9FFF]/.test(clean) && !/安装失败[（(]|^安装失败。$/.test(clean) ? clean : '安装未完成。',

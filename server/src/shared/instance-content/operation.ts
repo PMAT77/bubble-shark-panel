@@ -7,6 +7,11 @@ const activities = new Map<string, Map<symbol, number>>()
 const recoveryFailures = new Set<string>()
 const cleanupFailures = new Set<string>()
 
+/** 仅供已有锁内入口复用同一操作的保护，不允许跨请求绕过互斥。 */
+export function ownsInstanceContentOperation(instanceId: string): boolean {
+  return exclusive.has(instanceId) && exclusive.get(instanceId) === context.getStore()
+}
+
 export function markInstanceContentCleanupPending(id: string, pending: boolean) {
   if (pending) cleanupFailures.add(id)
   else cleanupFailures.delete(id)

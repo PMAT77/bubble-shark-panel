@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
-/** 任务类型：定时重启 / 定时备份 / 更新检查 / 数据库快照 */
-export const scheduleTaskKindSchema = z.enum(['restart', 'backup', 'update_check', 'db_snapshot'])
+/** 任务类型：定时重启 / 定时备份 / 定时更新 / 数据库快照 */
+export const scheduleTaskKindSchema = z.enum(['restart', 'backup', 'update', 'db_snapshot'])
 export type ScheduleTaskKind = z.infer<typeof scheduleTaskKindSchema>
 
 /** 调度类型：interval=每 N 小时；daily=每日固定时刻 */

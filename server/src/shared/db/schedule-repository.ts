@@ -12,7 +12,7 @@ import type {
   UpdateScheduleTaskInput,
 } from './types'
 
-const TASK_KINDS: DbScheduleTaskKind[] = ['restart', 'backup', 'update_check', 'db_snapshot']
+const TASK_KINDS: DbScheduleTaskKind[] = ['restart', 'backup', 'update', 'db_snapshot']
 const SCHEDULE_TYPES: DbScheduleType[] = ['interval', 'daily']
 const SCHEDULE_TIMEZONES: DbScheduleTimezone[] = ['beijing', 'server']
 const RUN_STATUSES: DbScheduleRunStatus[] = ['running', 'ok', 'failed', 'skipped']

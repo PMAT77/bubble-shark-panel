@@ -32,4 +32,8 @@ it('uses evidence-based failure advice and removes technical output from the sum
   const native = summarizeInstallFailure('SteamCMD 启动失败: spawn /tools/steamcmd EACCES')
   assert.equal(native.code, 'steamcmd_unavailable')
   assert.match(native.advice, /执行权限/)
+  const denied = summarizeInstallFailure("SteamCMD 安装 343050 失败：Steam 拒绝获取 Depot 内容清单（Access Denied）。SteamCMD 输出：[SteamCMD 诊断] CDepotDownloadMgr::BYldRequestDepotManifest(App: 343050, Depot: 343052, Manifest: 5351080740317260085, branch: ): Failed to get manifest request code, 'Access Denied'")
+  assert.equal(denied.code, 'manifest_denied')
+  assert.match(denied.message, /Depot 内容清单/)
+  assert.match(denied.advice, /清单恢复/)
 })

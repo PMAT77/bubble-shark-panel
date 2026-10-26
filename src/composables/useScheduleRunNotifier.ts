@@ -4,7 +4,7 @@ import { useNotification } from 'naive-ui'
 import { h, onMounted, ref, watch } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiSchedule from '@/api/modules/schedule'
-import { collectScheduleTriggerNotices, defaultScheduleTargetName } from '@/views/ops/schedules/scheduleRunNotification'
+import { collectScheduleTriggerNotices, consumeScheduleNoticeSuppression, defaultScheduleTargetName } from '@/views/ops/schedules/scheduleRunNotification'
 import { FRONTEND_ROUTE_PATHS } from '../../shared/constants/frontend-routes'
 import { usePollingTask } from './usePollingTask'
 
@@ -109,7 +109,7 @@ export function useScheduleRunNotifier(): void {
       baseline = result.baseline
       for (const notice of result.notices) {
         // 页面内手动触发的任务不重复弹通知（页面自己已有 toast）
-        if (!suppressedTaskIds.delete(notice.taskId)) {
+        if (!consumeScheduleNoticeSuppression(notice, suppressedTaskIds)) {
           showNotice(notice)
         }
       }

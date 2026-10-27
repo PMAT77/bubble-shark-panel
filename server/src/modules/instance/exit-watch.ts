@@ -4,7 +4,7 @@ import { LOCAL_NODE_ID } from '../../shared/dst/local-dst-instance'
 import { getGameInstanceById, listGameInstances, updateGameInstanceRuntime } from '../../shared/db/index'
 import { emitPanelEvent } from '../notify/events'
 import { isInstallJobActive } from './install-service'
-import { inspectInstanceShardRuntime, resolveInstanceContainerRef, protectExitedShardOom, stopInstanceContainer, runtimeMemoryEpoch } from './container-lifecycle'
+import { inspectInstanceShardRuntime, isInstanceStopping, resolveInstanceContainerRef, protectExitedShardOom, stopInstanceContainer, runtimeMemoryEpoch } from './container-lifecycle'
 import { getStartupSnapshot, startupIsActive } from './startup-state'
 import { reconcileCavesRuntime } from './runtime-reconciliation'
 
@@ -31,6 +31,7 @@ export async function reconcileUnexpectedExits(app: FastifyInstance): Promise<nu
   const now = new Date()
   let detected = 0
   for (const instance of running) {
+    if (isInstanceStopping(instance.id)) continue
     if (instance.runtimeFailureKind === 'memory_protection') continue
     if (startupIsActive(getStartupSnapshot(instance.id, instance.lastStartupReport))) continue
     if (instance.nodeId !== LOCAL_NODE_ID) {

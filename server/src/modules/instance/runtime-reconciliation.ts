@@ -5,7 +5,7 @@ import { listGameInstances, updateGameInstanceRuntime, getInstanceRuntimeRevisio
 import { describeSystemdExitReason, readHostMemorySnapshot, readRuntimeMemoryCapMb } from '../../infra/container/exit-reason'
 import { getContainerRuntime } from '../../infra/container'
 import { resolveInstanceResourceSettings } from '../../infra/container/dst-container-resources'
-import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, resolveInstanceContainerRef, resolveCavesContainerRef, stopInstanceContainer, stopFailedCaves, recoverInstanceStartup, protectExitedShardOom, runtimeMemoryEpoch } from './container-lifecycle'
+import { ensureInstanceContainerLogFollow, findShardLuaFailure, hasMasterReadyMarker, inspectInstanceShardRuntime, isHealthyRuntimeForResurrect, isInstanceStopping, resolveInstanceContainerRef, resolveCavesContainerRef, stopInstanceContainer, stopFailedCaves, recoverInstanceStartup, protectExitedShardOom, runtimeMemoryEpoch } from './container-lifecycle'
 import { currentStartupTask, getStartupSnapshot, isCurrentStartupTask, startupIsActive } from './startup-state'
 import { reconcileStaleInstallingInstances } from './install-service'
 import { buildRestartLoopWarning, shouldClearRuntimeWarning } from './runtime-warning'
@@ -141,6 +141,7 @@ async function reconcileStaleRunningInstances(app: FastifyInstance, health: { co
   const instances = await listGameInstances({ status: 'running' })
   let reconciled = 0
   for (const instance of instances) {
+    if (isInstanceStopping(instance.id)) continue
     if (instance.runtimeFailureKind === 'memory_protection') continue
     const task = currentStartupTask(instance.id)
     if ((task && isCurrentStartupTask(task)) || startupIsActive(getStartupSnapshot(instance.id, instance.lastStartupReport))) {
@@ -252,6 +253,7 @@ async function reconcileStoppedButContainerRunning(app: FastifyInstance, health:
   const instances = await listGameInstances()
   let reconciled = 0
   for (const instance of instances) {
+    if (isInstanceStopping(instance.id)) continue
     if (instance.runtimeFailureKind === 'memory_protection') continue
     const task = currentStartupTask(instance.id)
     if ((task && isCurrentStartupTask(task)) || startupIsActive(getStartupSnapshot(instance.id, instance.lastStartupReport))) {

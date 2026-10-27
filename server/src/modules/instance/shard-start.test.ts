@@ -23,6 +23,8 @@ import { currentStartupTask, releaseStartupTask } from './startup-state'
 import { reconcileInstanceRuntimeState } from './runtime-reconciliation'
 import { restartInstanceCore } from './restart-instance-core'
 import { reconcileUnexpectedExits } from './exit-watch'
+import { runScheduledUpdate, scheduledUpdateOperations } from './scheduled-update'
+import { subscribePanelEvent, type PanelEvent } from '../notify/events'
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-shard-start-'))
 before(async () => {
@@ -134,6 +136,37 @@ async function fixture(t: TestContext, mode: 'native' | 'docker', readyMaster = 
 }
 
 for (const mode of ['native', 'docker'] as const) {
+  for (const [observer, reconcile] of [['状态轮询', reconcileInstanceRuntimeState], ['退出监控', reconcileUnexpectedExits]] as const) {
+    it(`${mode}: 定时更新停服期间${observer}不会替换停止请求或误报异常退出`, async t => {
+      const f = await fixture(t, mode, true)
+      const current = (await getGameInstanceById(f.instance.id))!
+      const report = structuredClone(current.lastStartupReport!)
+      report.caves.state = 'ready'
+      const caveName = buildCavesContainerName(f.instance.id)
+      f.refs.set(caveName, { id: 'caves-old', name: caveName, runtimeIdentity: 'caves-round' })
+      await updateGameInstanceRuntime(f.instance.id, { lastStartupReport: report, runtimeStartedAt: new Date(Date.now() - 120_000).toISOString() })
+      const events: PanelEvent[] = []
+      t.after(subscribePanelEvent(event => { events.push(event) }))
+      const remove = t.mock.method(f.runtime, 'remove', async (ref: ContainerRef) => {
+        if (f.refs.delete(ref.name)) await reconcile(f.app)
+      })
+      const install = t.mock.method(scheduledUpdateOperations, 'install', async () => {
+        assert.equal(f.refs.size, 0)
+        assert.equal((await getGameInstanceById(f.instance.id))?.status, 'stopped')
+        return { ok: true, cancelled: false, cleanupPending: false, message: '' }
+      })
+      t.mock.method(scheduledUpdateOperations, 'waitForStartup', async () => report)
+      const start = t.mock.fn(async () => ({ ok: true, taskId: 'updated-startup' }))
+      const result = await runScheduledUpdate(f.app, f.instance.id, start, async () => {})
+      assert.equal(result.status, 'ok', result.message)
+      assert.equal(result.disableTask, undefined)
+      assert.equal(install.mock.callCount(), 1)
+      assert.equal(start.mock.callCount(), 1)
+      assert.equal(remove.mock.callCount(), 2)
+      assert.equal(events.length, 0)
+    })
+  }
+
   it(`${mode}: 主世界确认退出后停止失去依赖的洞穴并清理共享网络`, async t => {
     const f = await fixture(t, mode, true)
     const caveName = buildCavesContainerName(f.instance.id)
@@ -312,6 +345,32 @@ it('旧轮次的异常退出清理不能停止新轮次主世界', async t => {
   assert.equal(f.stop.mock.callCount(), 0)
   assert.equal(f.networkRemove.mock.callCount(), 0)
   assert.equal((await getGameInstanceById(f.instance.id))?.containerId, 'healthy-master')
+})
+
+it('停服前读取的主世界和洞穴退出快照不能抢占正在执行的停服', async t => {
+  const f = await fixture(t, 'native', true)
+  const observed = (await getGameInstanceById(f.instance.id))!
+  const remove = t.mock.method(f.runtime, 'remove', async (ref: ContainerRef) => {
+    f.refs.delete(ref.name)
+    assert.equal(await stopInstanceContainer(f.instance.id, runtimeMemoryEpoch(observed)), false)
+    await stopFailedCaves(f.app, observed, 'shard_exited', '洞穴退出')
+  })
+  assert.equal(await stopInstanceContainer(f.instance.id), true)
+  assert.equal(remove.mock.callCount(), 1)
+  assert.equal((await getGameInstanceById(f.instance.id))?.lastStartupReport?.caves.state, 'stopped')
+})
+
+it('停服清理失败后仍允许退出监控重新清理实例', async t => {
+  const f = await fixture(t, 'native', true)
+  await updateGameInstanceRuntime(f.instance.id, { runtimeStartedAt: new Date(Date.now() - 120_000).toISOString() })
+  let cleanupFails = true
+  t.mock.method(f.runtime, 'removeShardNetwork', async () => {
+    if (cleanupFails) throw new Error('network cleanup failed')
+  })
+  await assert.rejects(stopInstanceContainer(f.instance.id), /network cleanup failed/)
+  cleanupFails = false
+  assert.equal(await reconcileUnexpectedExits(f.app), 1)
+  assert.equal((await getGameInstanceById(f.instance.id))?.status, 'stopped')
 })
 
 it('洞穴任务出队后确认主世界已退出时不得保留运行中状态', async t => {

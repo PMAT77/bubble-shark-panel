@@ -66,7 +66,9 @@ import { describeSystemdExitReason, readHostMemorySnapshot, readRuntimeMemoryCap
 /** 主世界分片互联端口（cluster.ini [SHARD] master_port）；读不到时退回 DST 默认值 */
 const DEFAULT_DST_MASTER_PORT = 10888
 const memoryProtectionInFlight = new Set<string>()
+const stoppingInstances = new Map<string, number>()
 export const isMemoryProtectionInFlight = (id: string) => memoryProtectionInFlight.has(id)
+export const isInstanceStopping = (id: string) => stoppingInstances.has(id)
 export const runtimeMemoryEpoch = (instance: DbGameInstance) => `${instance.containerId ?? ''}|${instance.runtimeStartedAt ?? ''}|${instance.lastStartupReport?.taskId ?? ''}`
 
 function hostGuardReading(host: HostResourceSnapshot) {
@@ -1356,6 +1358,7 @@ export async function stopFailedCaves(app: FastifyInstance, observed: DbGameInst
   } satisfies InstanceStartupSnapshot)
   const recordedIdentity = report.caves.resources?.runtimeIdentity
   if (recordedIdentity && inspect?.runtimeIdentity && recordedIdentity !== inspect.runtimeIdentity) return
+  if (isInstanceStopping(current.id)) return
   const generation = bumpCavesStartGeneration(current.id, 'caves')
   const stale = () => !isCurrentCavesStartGeneration(current.id, generation)
   report.caves.state = 'failed'
@@ -1383,10 +1386,12 @@ export async function stopInstanceContainer(instanceId: string, expectedEpoch?: 
   if (memoryProtectionInFlight.has(instanceId)) throw new Error('内存保护正在清理分片，请稍后再试')
   if (expectedEpoch !== undefined) {
     const observed = await getGameInstanceById(instanceId)
-    if (!observed || runtimeMemoryEpoch(observed) !== expectedEpoch || startupIsActive(getStartupSnapshot(instanceId, observed.lastStartupReport))) return false
+    if (isInstanceStopping(instanceId) || !observed || runtimeMemoryEpoch(observed) !== expectedEpoch || startupIsActive(getStartupSnapshot(instanceId, observed.lastStartupReport))) return false
   }
   // 先作废还在等待中的洞穴启动任务：否则它会在实例停机之后把洞穴拉起来
   const generation = bumpCavesStartGeneration(instanceId)
+  // 正常停服的分片消失不能被后台对账当成异常退出，再次递增代号会作废本次停服。
+  stoppingInstances.set(instanceId, generation)
   const stale = () => !isCurrentCavesStartGeneration(instanceId, generation)
   stopLogFollow(instanceId)
   try {
@@ -1464,6 +1469,7 @@ export async function stopInstanceContainer(instanceId: string, expectedEpoch?: 
     })
   }
   catch (error) { if (!stale()) throw error; return false }
+  finally { if (stoppingInstances.get(instanceId) === generation) stoppingInstances.delete(instanceId) }
   return !stale()
 }
 

@@ -15,9 +15,16 @@ it('gates notifications by permission and visibility, catches up once and retain
   const root = fs.mkdtempSync(path.join(process.cwd(), '.bsp-schedule-polling-'))
   const document = Object.assign(new EventTarget(), { visibilityState: 'visible' })
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const stored = new Map<string, string>()
   Object.defineProperty(globalThis, 'document', { value: document, configurable: true })
+  Object.defineProperty(globalThis, 'localStorage', { value: {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => { stored.set(key, value) },
+  }, configurable: true })
   const globals = globalThis as typeof globalThis & { __bspScheduleFixture?: unknown }
   const allowed = ref(false)
+  const account = ref('admin')
   const notices: object[] = []
   const requests: AbortSignal[] = []
   let fail = false
@@ -26,6 +33,7 @@ it('gates notifications by permission and visibility, catches up once and retain
   let task = { id: 'task', instanceId: 'instance', kind: 'backup', lastRunAt: 'historical', lastRunStatus: 'ok' } as ScheduleTaskItem
   globals.__bspScheduleFixture = {
     allowed,
+    account,
     notification: Object.fromEntries(['success', 'error', 'warning', 'info'].map(kind => [kind, (notice: object) => notices.push(notice)])),
     api: {
       getScheduleList: async (_id: unknown, { signal }: { signal: AbortSignal }) => {
@@ -43,6 +51,8 @@ it('gates notifications by permission and visibility, catches up once and retain
     unmount?.()
     if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument)
     else Reflect.deleteProperty(globalThis, 'document')
+    if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage)
+    else Reflect.deleteProperty(globalThis, 'localStorage')
     delete globals.__bspScheduleFixture
     assert.equal(path.dirname(root), process.cwd())
     fs.rmSync(root, { recursive: true, force: true })
@@ -52,7 +62,7 @@ it('gates notifications by permission and visibility, catches up once and retain
     entryPoints: [path.resolve('src/composables/useScheduleRunNotifier.ts')],
     outfile: hookFile, bundle: true, platform: 'node', format: 'esm', external: ['vue'],
     alias: { '@': path.resolve('src') },
-    banner: { js: 'const useAppAuth = () => ({ auth: () => globalThis.__bspScheduleFixture.allowed.value }); const useRouter = () => ({ resolve: () => ({ href: "/tasks" }), push() {} });' },
+    banner: { js: 'const useAppAuth = () => ({ auth: () => globalThis.__bspScheduleFixture.allowed.value }); const useAppAccountStore = () => ({ get account() { return globalThis.__bspScheduleFixture.account.value } }); const useRouter = () => ({ resolve: () => ({ href: "/tasks" }), push() {} });' },
     plugins: [{ name: 'schedule-fixture', setup(builder) {
       builder.onResolve({ filter: /^(?:@\/api\/modules\/(?:schedule|instance)|naive-ui)$/ }, args => ({ path: args.path, namespace: 'fixture' }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ contents: args.path === 'naive-ui'
@@ -62,8 +72,8 @@ it('gates notifications by permission and visibility, catches up once and retain
   })
   const { useScheduleRunNotifier, suppressScheduleRunNotificationOnce } = await import(pathToFileURL(hookFile).href) as typeof import('./useScheduleRunNotifier')
   const renderer = createRenderer({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null })
-  const mount = () => {
-    const app = renderer.createApp({ setup() { useScheduleRunNotifier(); return () => null } })
+  const mount = (useNotifier = useScheduleRunNotifier) => {
+    const app = renderer.createApp({ setup() { useNotifier(); return () => null } })
     app.mount({})
     unmount = () => app.unmount()
   }
@@ -164,4 +174,39 @@ it('gates notifications by permission and visibility, catches up once and retain
   visibility(false)
   t.mock.timers.tick(90_000)
   assert.equal(requests.length, beforeUnmount)
+
+  task = { ...task, kind: 'update', enabled: false, lastRunAt: 'failed-1', lastRunStatus: 'failed' }
+  const beforeFailureNotice = notices.length
+  mount()
+  await flush()
+  assert.equal(notices.length, beforeFailureNotice + 1, '首次发现的历史更新失败仍需提醒')
+  unmount!()
+  unmount = undefined
+  // 重新导入整个 bundle，模拟刷新丢失模块内存，但保留同源浏览器存储。
+  const reloaded = await import(`${pathToFileURL(hookFile).href}?reload=1`) as typeof import('./useScheduleRunNotifier')
+  mount(reloaded.useScheduleRunNotifier)
+  await flush()
+  assert.equal(notices.length, beforeFailureNotice + 1, '刷新后不再重复通知同一次更新失败')
+
+  task = { ...task, enabled: true, lastRunAt: 'failed-2', lastRunStatus: 'running' }
+  reloaded.suppressScheduleRunNotificationOnce(task.id)
+  t.mock.timers.tick(30_000)
+  await flush()
+  assert.equal(notices.length, beforeFailureNotice + 1, '手动触发的新一轮执行仍抑制普通通知')
+  task = { ...task, enabled: false, lastRunStatus: 'failed' }
+  t.mock.timers.tick(30_000)
+  await flush()
+  assert.equal(notices.length, beforeFailureNotice + 2, '新一轮失败不能被持久去重或手动抑制吞掉')
+  unmount!()
+  unmount = undefined
+  const reloadedAgain = await import(`${pathToFileURL(hookFile).href}?reload=2`) as typeof import('./useScheduleRunNotifier')
+  mount(reloadedAgain.useScheduleRunNotifier)
+  await flush()
+  assert.equal(notices.length, beforeFailureNotice + 2, '新失败提示后刷新也不重复')
+  account.value = 'operator'
+  await flush()
+  assert.equal(notices.length, beforeFailureNotice + 3, '不同账号各自接收失败提醒')
+  account.value = 'admin'
+  await flush()
+  assert.equal(notices.length, beforeFailureNotice + 3, '切回已提示的账号不重复提醒')
 })

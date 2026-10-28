@@ -1,7 +1,7 @@
 import type { ScheduleTaskItem } from '@/api/modules/schedule'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { buildScheduleTriggerNotice, collectScheduleTriggerNotices, consumeScheduleNoticeSuppression, defaultScheduleTargetName } from './scheduleRunNotification.ts'
+import { buildScheduleTriggerNotice, collectScheduleTriggerNotices, consumeScheduleNoticeSuppression, createScheduleRunNoticeTracker, defaultScheduleTargetName } from './scheduleRunNotification.ts'
 
 function makeTask(overrides: Partial<ScheduleTaskItem> & Pick<ScheduleTaskItem, 'id'>): ScheduleTaskItem {
   return {
@@ -22,6 +22,21 @@ function makeTask(overrides: Partial<ScheduleTaskItem> & Pick<ScheduleTaskItem, 
 }
 
 const TRIGGERED_AT = '2026-09-16T20:30:00.000Z'
+
+it('浏览器存储禁用、读写失败或旧值损坏时仍提醒新失败，并在本页去重', () => {
+  for (const storage of [
+    undefined,
+    { getItem: () => { throw new Error('blocked') }, setItem: () => {} },
+    { getItem: () => null, setItem: () => { throw new Error('quota') } },
+    { getItem: () => '{invalid', setItem: () => {} },
+  ]) {
+    const tracker = createScheduleRunNoticeTracker(storage)
+    const failed = makeTask({ id: 'st-update', kind: 'update', enabled: false, lastRunAt: TRIGGERED_AT, lastRunStatus: 'failed' })
+    assert.equal(tracker.collect('admin', [failed]).length, 1)
+    assert.equal(tracker.collect('admin', [failed]).length, 0)
+    assert.equal(tracker.collect('admin', [{ ...failed, lastRunAt: '2026-09-17T20:30:00.000Z' }]).length, 1)
+  }
+})
 
 describe('collectScheduleTriggerNotices', () => {
   it('定时更新同轮从执行中转为失败必须提示，重试消息和重复轮询不重复通知', () => {

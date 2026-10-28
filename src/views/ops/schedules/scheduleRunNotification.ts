@@ -89,3 +89,30 @@ export function consumeScheduleNoticeSuppression(notice: ScheduleTriggerNotice, 
   const wasSuppressed = suppressed.delete(notice.taskId)
   return wasSuppressed && !notice.mustNotify
 }
+
+/** 按账号记住已提示的更新失败；刷新后去重，新的执行仍会提醒。 */
+export function createScheduleRunNoticeTracker(storage?: Pick<Storage, 'getItem' | 'setItem'>) {
+  let baseline: ScheduleRunBaseline = new Map()
+  let currentAccount: string | undefined
+  return {
+    collect(account: string, tasks: ScheduleTaskItem[], resolveTargetName = defaultScheduleTargetName): ScheduleTriggerNotice[] {
+      if (currentAccount !== account) {
+        baseline = new Map()
+        currentAccount = account
+      }
+      const result = collectScheduleTriggerNotices(baseline, tasks, resolveTargetName)
+      baseline = result.baseline
+      return result.notices.filter((notice) => {
+        if (!notice.mustNotify) return true
+        const storageKey = `bsp-schedule-update-failure:${JSON.stringify([account, notice.taskId])}`
+        const runKey = baseline.get(notice.taskId) ?? 'failed'
+        try {
+          if (storage?.getItem(storageKey) === runKey) return false
+          storage?.setItem(storageKey, runKey)
+        }
+        catch { /* 存储不可用时，内存基线仍可避免重复轮询通知。 */ }
+        return true
+      })
+    },
+  }
+}

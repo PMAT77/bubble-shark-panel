@@ -1,10 +1,10 @@
 import type { InstanceSummaryItem } from '@/api/modules/instance'
-import type { ScheduleRunBaseline, ScheduleTriggerNotice } from '@/views/ops/schedules/scheduleRunNotification'
+import type { ScheduleTriggerNotice } from '@/views/ops/schedules/scheduleRunNotification'
 import { useNotification } from 'naive-ui'
 import { h, onMounted, ref, watch } from 'vue'
 import apiInstance from '@/api/modules/instance'
 import apiSchedule from '@/api/modules/schedule'
-import { collectScheduleTriggerNotices, consumeScheduleNoticeSuppression, defaultScheduleTargetName } from '@/views/ops/schedules/scheduleRunNotification'
+import { consumeScheduleNoticeSuppression, createScheduleRunNoticeTracker, defaultScheduleTargetName } from '@/views/ops/schedules/scheduleRunNotification'
 import { FRONTEND_ROUTE_PATHS } from '../../shared/constants/frontend-routes'
 import { usePollingTask } from './usePollingTask'
 
@@ -13,8 +13,9 @@ const POLL_INTERVAL_MS = 30_000
 /** 连续失败达到该次数后停止，重新挂载或恢复权限时可重启。 */
 const MAX_CONSECUTIVE_FAILURES = 5
 
-/** taskId → 上次已知的 lastRunAt；用「触发时刻变化」识别一次新的触发 */
-let baseline: ScheduleRunBaseline = new Map()
+let storage: Storage | undefined
+try { storage = globalThis.localStorage } catch { /* 禁用存储时回退到内存去重。 */ }
+const noticeTracker = createScheduleRunNoticeTracker(storage)
 /** 页面内手动「立即执行」登记的任务：变化时跳过通知（页面已有 toast 反馈） */
 const suppressedTaskIds = new Set<string>()
 /** 实例名缓存（懒加载一次，失败时回退显示实例 id） */
@@ -54,6 +55,7 @@ export function useScheduleRunNotifier(): void {
   const notification = useNotification()
   const router = useRouter()
   const { auth: hasPermission } = useAppAuth()
+  const accountStore = useAppAccountStore()
 
   const mounted = ref(false)
   let failures = 0
@@ -105,9 +107,8 @@ export function useScheduleRunNotifier(): void {
       await loadInstanceNamesOnce(signal).catch(() => undefined)
       signal.throwIfAborted()
       failures = 0
-      const result = collectScheduleTriggerNotices(baseline, response.data ?? [], resolveTargetName)
-      baseline = result.baseline
-      for (const notice of result.notices) {
+      const notices = noticeTracker.collect(accountStore.account, response.data ?? [], resolveTargetName)
+      for (const notice of notices) {
         // 页面内手动触发的任务不重复弹通知（页面自己已有 toast）
         if (!consumeScheduleNoticeSuppression(notice, suppressedTaskIds)) {
           showNotice(notice)
@@ -124,10 +125,10 @@ export function useScheduleRunNotifier(): void {
     }
   }, { intervalMs: POLL_INTERVAL_MS, pauseWhenHidden: true })
 
-  watch(() => mounted.value && hasPermission('schedule:read'), (allowed) => {
+  watch(() => mounted.value && hasPermission('schedule:read') ? accountStore.account : null, (account) => {
     failures = 0
-    if (allowed) poller.start()
-    else poller.stop()
+    poller.stop()
+    if (account !== null) poller.start()
   }, { flush: 'sync' })
 
   onMounted(() => {

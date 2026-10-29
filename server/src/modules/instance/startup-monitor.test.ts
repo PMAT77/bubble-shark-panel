@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { after, before, it, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { setTimeout as delay } from 'node:timers/promises'
 import Fastify from 'fastify'
 import { getContainerRuntime, type ContainerRef, type ContainerRuntime } from '../../infra/container'
 import { emptyResourceSnapshot } from '../../infra/container/dst-container-resources'
@@ -11,6 +12,7 @@ import { buildHostResourceSnapshot } from '../../infra/container/memory-budget'
 import { closeDatabase, createGameInstance, deleteGameInstanceById, getGameInstanceById, initDatabase, updateGameInstanceRuntime } from '../../shared/db'
 import { instanceConsoleLogStore } from '../../shared/instance-runtime/console-log-store'
 import { runStartupMonitor } from './startup-monitor'
+import { queryStartupShard } from './container-lifecycle'
 import {
   cancelStartupTask, changeStartupPhase, createStartupTask, currentStartupTask,
   enqueueStartupTask, getStartupSnapshot, persistStartupTask, releaseStartupTask,
@@ -58,6 +60,61 @@ async function fixture(t: TestContext, name: string) {
   })
   return { instance, task, runtime, masterRef, cavesRef, inspect, probe, cleanup, run }
 }
+
+it('游戏响应超过一秒且跨轮询周期时，仍确认主世界并启动和连接洞穴', async (t) => {
+  const f = await fixture(t, 'delayed-game-responses')
+  const deliveries: Promise<void>[] = []
+  t.after(async () => {
+    await Promise.all(deliveries)
+    instanceConsoleLogStore.removeInstance(f.instance.id)
+  })
+  const commands = t.mock.method(f.runtime, 'execStdin', async (ref: ContainerRef, command: string) => {
+    const token = /BSPSTART:([a-f0-9-]{36})\|/.exec(command)?.[1]
+    assert.ok(token)
+    const shard = ref.id === f.masterRef.id ? 'master' : 'caves'
+    deliveries.push(delay(1200).then(() => {
+      instanceConsoleLogStore.appendDockerLine(f.instance.id, `BSPSTART:${token}|1|${shard === 'master' ? '1' : 'actual-cave-id'}|1`, shard)
+    }))
+    return { exitCode: 0, output: '' }
+  })
+  const startCaves = t.mock.fn(async () => {
+    assert.equal(f.task.snapshot.master.state, 'ready')
+    return { ok: true as const, ref: f.cavesRef }
+  })
+  await f.run({ waitSec: 4, pollIntervalMs: 50, startCaves,
+    probe: (ref, shard, remoteShardId, context) => queryStartupShard(ref, f.instance.id, shard, context.signal, remoteShardId, context.deadline),
+  })
+  assert.equal(f.task.snapshot.status, 'success')
+  assert.equal(f.task.snapshot.caves.state, 'ready')
+  assert.equal(startCaves.mock.callCount(), 1)
+  const masterCommands = commands.mock.calls.filter(call => call.arguments[0].id === f.masterRef.id)
+  assert.equal(masterCommands.length, 2, '主世界就绪和连接查询各发送一次，等待期间不重复发送')
+  assert.match(masterCommands[1]!.arguments[1], /peers\["actual-cave-id"\]/)
+  assert.equal(f.cleanup.mock.callCount(), 0)
+})
+
+it('游戏查询未响应时仍检查 OOM，失败后中断查询并释放订阅', async (t) => {
+  const f = await fixture(t, 'pending-probe-oom')
+  let samples = 0
+  t.mock.method(f.runtime, 'resourceSnapshot', async () => ({ ...emptyResourceSnapshot(), oomKillCount: ++samples > 1 ? 1 : 0 }))
+  const commands = t.mock.method(f.runtime, 'execStdin', async () => ({ exitCode: 0, output: '' }))
+  let probeSignal: AbortSignal | undefined
+  const subscribe = instanceConsoleLogStore.subscribe.bind(instanceConsoleLogStore)
+  const unsubscribe = t.mock.fn()
+  t.mock.method(instanceConsoleLogStore, 'subscribe', (...[id, listener]: Parameters<typeof subscribe>) => {
+    const remove = subscribe(id, listener)
+    return () => { unsubscribe(); remove() }
+  })
+  await f.run({ probe: (ref, shard, remoteShardId, context) => {
+    probeSignal = context.signal
+    return queryStartupShard(ref, f.instance.id, shard, context.signal, remoteShardId, context.deadline)
+  } })
+  assert.equal(f.task.snapshot.diagnosis?.code, 'oom')
+  assert.equal(commands.mock.callCount(), 1)
+  assert.equal(f.cleanup.mock.callCount(), 1)
+  assert.equal(probeSignal?.aborted, true)
+  assert.equal(unsubscribe.mock.callCount(), 1)
+})
 
 it('单世界进程和就绪日志不替代本轮游戏查询，查询成功后才持久化成功', async (t) => {
   const f = await fixture(t, 'single-ready')

@@ -26,7 +26,7 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
   waitSec: number
   isCancelled: () => boolean
   luaFailure: (shard?: Shard) => string | null
-  probe: (ref: ContainerRef, shard: Shard, remoteShardId?: string) => Promise<DstStartupProbe | null>
+  probe: (ref: ContainerRef, shard: Shard, remoteShardId: string | undefined, context: { signal: AbortSignal, deadline: number }) => Promise<DstStartupProbe | null>
   startCaves?: () => Promise<{ ok: true, ref: ContainerRef, baselineRestarts?: number | null } | { ok: false, message: string, ref?: ContainerRef }>
   cleanup: (refs: ContainerRef[]) => Promise<void>
   protectOom?: (shard: Shard) => Promise<void>
@@ -44,6 +44,9 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
   let masterBaselineRestarts = task.snapshot.master.restartBaseline ?? input.baselineRestarts
   let cavesBaselineRestarts = task.snapshot.caves.restartBaseline ?? task.snapshot.caves.resources?.restarts ?? null
   const pollInterval = input.pollIntervalMs ?? 5000
+  const probeController = new AbortController()
+  const probeSignal = AbortSignal.any([signal, probeController.signal])
+  const pendingProbes = new Map<string, Promise<{ value: DstStartupProbe | null }>>()
 
   // 只读查询不能让超时/取消卡在不可达的 user bus 或 Docker API 上。
   const bounded = async <T>(read: Promise<T>, deadline: number): Promise<T | null> => {
@@ -58,6 +61,20 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
       })])
     }
     finally { clearTimeout(timer); signal.removeEventListener('abort', abort) }
+  }
+
+  const queryShard = async (ref: ContainerRef, shard: Shard, deadline: number, remoteShardId?: string) => {
+    const key = JSON.stringify([ref.id, shard, remoteShardId])
+    let pending = pendingProbes.get(key)
+    if (!pending) {
+      pending = input.probe(ref, shard, remoteShardId, { signal: probeSignal, deadline })
+        .then(value => ({ value }), () => ({ value: null }))
+      pendingProbes.set(key, pending)
+    }
+    // 轮询只暂停等待，不丢弃尚未完成的本轮查询；继续检查进程、OOM 和取消。
+    const result = await bounded(pending, deadline)
+    if (result) pendingProbes.delete(key)
+    return result?.value ?? null
   }
 
   const fail = async (code: string, message: string, raw = message, inspect?: ContainerInspect | null, sampledExitCode?: number | null) => {
@@ -223,15 +240,14 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
       progress()
       diagnose(resources, baseline, host)
       if (inspect?.running && !inspect.probeFailed) {
-        const probeDeadline = Math.min(deadline, tick + pollInterval)
-        const probe = await bounded(input.probe(ref, shard), probeDeadline)
+        const probe = await queryShard(ref, shard, deadline)
         if (cancelled()) return false
         if (probe) task.snapshot[shard].lastProbe = { ...probe, at: new Date().toISOString() }
         responded ||= probe !== null
         worldSeen ||= probe?.worldReady === true
         let connected = shard === 'master'
         if (shard === 'caves' && probe?.worldReady && probe.shardId) {
-          const masterProbe = await bounded(input.probe(input.masterRef, 'master', probe.shardId), probeDeadline)
+          const masterProbe = await queryShard(input.masterRef, 'master', deadline, probe.shardId)
           if (cancelled()) return false
           if (masterProbe) task.snapshot.master.lastProbe = { ...masterProbe, at: new Date().toISOString() }
           connected = masterProbe?.worldReady === true && masterProbe.remoteConnected === true
@@ -285,7 +301,7 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
         if (inspect && !inspect.probeFailed && (!inspect.running || inspect.restarting || (inspect.restarts ?? 0) > (masterBaselineRestarts ?? 0))) {
           task.snapshot.master.state = 'failed'; await fail('master_exited', '恢复启动时主世界已退出或重启', undefined, inspect, resources?.exitCode); return
         }
-        const probe = inspect?.running && !inspect.probeFailed ? await bounded(input.probe(input.masterRef, 'master'), deadline) : null
+        const probe = inspect?.running && !inspect.probeFailed ? await queryShard(input.masterRef, 'master', deadline) : null
         if (cancelled()) return
         if (probe) task.snapshot.master.lastProbe = { at: new Date().toISOString(), worldReady: probe.worldReady, shardId: probe.shardId ?? null, remoteConnected: probe.remoteConnected ?? null }
         if (Date.now() < deadline && probe?.worldReady) break
@@ -325,4 +341,5 @@ export async function runStartupMonitor(app: FastifyInstance, input: {
   catch (error) {
     if (!cancelled()) await fail('startup_internal_error', '启动监控发生异常，请查看控制台', String(error))
   }
+  finally { probeController.abort() }
 }

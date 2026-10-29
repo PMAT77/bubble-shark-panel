@@ -1,4 +1,5 @@
 import { withInstanceContentActivity, markInstanceContentCleanupPending, ownsInstanceContentOperation } from '../../shared/instance-content/operation'
+import { withInstallPathLock } from '../../shared/instance-content/install-lock'
 import type { FastifyInstance } from 'fastify'
 import process from 'node:process'
 import fs from 'node:fs'
@@ -718,7 +719,9 @@ async function runInstallJobInBackground(
       void progressWrites.catch(error => installJobs.get(input.instanceId)?.controller.abort(error))
     }, 1000)
     heartbeat.unref()
-    await runInstallPipeline(input, logWriter)
+    await withInstallPathLock(input.installPath, () => runInstallPipeline(input, writer), {
+      signal: installSignal(input.instanceId), onQueued: () => writer.event('正在等待实例文件操作完成。'),
+    })
     await progressWrites
   }
   catch (error) {

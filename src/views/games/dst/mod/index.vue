@@ -758,7 +758,7 @@ const marketColumns: DataTableColumns<SteamModListQueryResultItem> = [
 
 function subscribedStatusProps(row: ModItemDto) {
   return { name: row.name, label: subscribedStatusLabel(row), tone: subscribedStatusType(row),
-    version: modUpdateLabel(row), versionHint: modUpdateTooltip(row), error: row.installError }
+    version: modUpdateLabel(row), versionHint: modUpdateTooltip(row) }
 }
 function subscribedEnabledProps(row: ModItemDto) {
   return { name: row.name, ready: row.installStatus === 'ready', enabled: row.enabled,

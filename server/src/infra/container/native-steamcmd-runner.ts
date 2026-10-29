@@ -5,6 +5,7 @@ import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { buildSteamcmdAppUpdateArgs, buildSteamcmdWorkshopDownloadArgs } from './steamcmd-args'
 import { cancelQueuedSteamcmdJob, SteamcmdQueuedJobCancelledError, withSteamcmdAppUpdateLock } from './steamcmd-app-update-queue'
+import { withInstallPathLock } from '../../shared/instance-content/install-lock'
 import { redactSteamcmdLogLine, steamcmdLogSecrets } from './steamcmd-errors'
 import { getServerContainerConfig } from '../../shared/config/container'
 import {
@@ -272,7 +273,7 @@ export async function runSteamcmdAppUpdateNative(input: {
   onAwaitingSteamcmdLock?: () => void | Promise<void>
 }): Promise<{ ok: boolean, output: string, cancelled?: boolean }> {
   const jobId = input.cancelKey?.trim() || 'anonymous'
-  return withSteamcmdAppUpdateLock(jobId, async () => {
+  return withInstallPathLock(input.hostInstallPath, () => withSteamcmdAppUpdateLock(jobId, async () => {
     if (input.cancelKey && cancelledNativeSteamcmdJobs.has(input.cancelKey)) {
       // 出队即检查：排队期间被取消的任务直接跳过并消费取消标记（保证后续重试不受影响）。
       cancelledNativeSteamcmdJobs.delete(input.cancelKey)
@@ -297,7 +298,7 @@ export async function runSteamcmdAppUpdateNative(input: {
       output: result.output,
       cancelled: result.cancelled,
     }
-  }, { onQueued: input.onAwaitingSteamcmdLock, signal: input.signal })
+  }, { onQueued: input.onAwaitingSteamcmdLock, signal: input.signal }), { signal: input.signal, onQueued: input.onAwaitingSteamcmdLock })
 }
 
 export async function runSteamcmdWorkshopDownloadNative(input: {

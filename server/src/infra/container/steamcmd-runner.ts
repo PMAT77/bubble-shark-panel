@@ -12,6 +12,7 @@ import { buildSteamcmdAppUpdateArgs, buildSteamcmdWorkshopDownloadArgs } from '.
 import { resolveSteamcmdInstallBind } from './steamcmd-install-bind'
 import { appendSteamcmdBindMountOptions, resolveSteamcmdContainerUser } from './steamcmd-container-user'
 import { SteamcmdQueuedJobCancelledError, withSteamcmdAppUpdateLock } from './steamcmd-app-update-queue'
+import { withInstallPathLock } from '../../shared/instance-content/install-lock'
 import { loadServerConfig, resolveInstallLogsDir } from '../../shared/config'
 import {
   formatSteamcmdTimeoutForLog,
@@ -119,11 +120,11 @@ export async function runSteamcmdAppUpdateInContainer(input: {
     return runSteamcmdAppUpdateNative(input)
   }
   const jobId = input.cancelKey?.trim() || 'anonymous'
-  return withSteamcmdAppUpdateLock(
+  return withInstallPathLock(input.hostInstallPath, () => withSteamcmdAppUpdateLock(
     jobId,
     () => runSteamcmdAppUpdateInContainerUnlocked(input),
     { onQueued: input.onAwaitingSteamcmdLock, signal: input.signal },
-  )
+  ), { signal: input.signal, onQueued: input.onAwaitingSteamcmdLock })
 }
 
 async function runSteamcmdAppUpdateInContainerUnlocked(input: {

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import { ensureDstLegacyModLink, resolveDstUgcModDir } from './ugc-mod-install'
 
 /** 实例存档与房间配置，seed 复制时必须隔离 */
 const EXCLUDED_TOP_LEVEL = new Set(['klei-storage'])
@@ -40,14 +41,25 @@ export async function copyGameDepotFromDonorAsync(donorPath: string, recipientPa
     if (installPathsOverlap(source, target)) throw new Error('复制源与目标安装目录不能相同或互相包含')
     const files: Array<{ relative: string, size: number, mode: number }> = []
     const directories: string[] = []
+    const modLinks: Array<{ workshopId: string, relativeTarget: string }> = []
     const walk = async (relative: string) => {
       options.signal?.throwIfAborted()
       for (const entry of await fs.promises.readdir(path.join(source, relative), { withFileTypes: true })) {
         if (!relative && EXCLUDED_TOP_LEVEL.has(entry.name)) continue
         if (relative === 'steamapps' && STEAMAPPS_EXCLUDED_TOP_LEVEL.has(entry.name)) continue
         const name = path.join(relative, entry.name)
-        // 不跟随符号链接，避免供体链接将读取范围带出安装目录。
-        if (entry.isSymbolicLink()) throw new Error(`复制源包含符号链接: ${name}`)
+        if (entry.isSymbolicLink()) {
+          const workshopId = relative === 'mods' ? /^workshop-(\d+)$/.exec(entry.name)?.[1] : undefined
+          if (!workshopId) throw new Error(`复制源包含符号链接: ${name}`)
+          const linked = await fs.promises.realpath(path.join(source, name))
+          // 只接受本实例同一 Mod 的标准 UGC 目录，不跟随链接扫描或读取存档。
+          if (![resolveDstUgcModDir(source, 'Master', workshopId), resolveDstUgcModDir(source, 'Caves', workshopId)].includes(linked)
+            || !(await fs.promises.stat(linked)).isDirectory()) {
+            throw new Error(`复制源包含非托管或越界 Mod 链接: ${name}`)
+          }
+          modLinks.push({ workshopId, relativeTarget: path.relative(source, linked) })
+          continue
+        }
         if (entry.isDirectory()) {
           directories.push(name)
           await walk(name)
@@ -87,6 +99,11 @@ export async function copyGameDepotFromDonorAsync(donorPath: string, recipientPa
       })
       await pipeline(input, fs.createWriteStream(destination, { mode: file.mode }), { signal: options.signal })
       await fs.promises.chmod(destination, file.mode)
+    }
+    for (const link of modLinks) {
+      options.signal?.throwIfAborted()
+      // 内容复制完成后，接入新实例自己的 UGC 目录，绝不能保留供体的绝对链接。
+      ensureDstLegacyModLink(target, link.workshopId, path.join(target, link.relativeTarget))
     }
     options.onProgress?.(total, total)
     return { ok: true }

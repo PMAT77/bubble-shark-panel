@@ -5,6 +5,8 @@ export function resolveModDownloadItemLabel(item?: ModDownloadQueueItemDto, stat
   if (status === 'paused' && item?.installStatus === 'pending') return '已暂停'
   if (item?.phase === 'verifying') return '下载完成，正在校验'
   if (item?.phase === 'installing') return '下载完成，正在安装'
+  if (item?.phase === 'waiting_install') return '等待安装'
+  if (item?.phase === 'waiting_download') return '等待下载'
   if (item?.phase === 'downloading') return item.progress ? item.progress.percent >= 100 ? '下载完成，正在校验' : `下载中 ${Math.floor(item.progress.percent)}%` : '下载中'
   return item?.phase === 'preparing_download' ? '准备下载' : item?.phase === 'preparing_steamcmd' ? '准备下载环境' : item?.phase === 'waiting_steamcmd' ? '等待其他任务' : item?.phase === 'retry_wait' ? '等待重试' : item?.phase === 'queued' ? '等待下载' : '待下载'
 }
@@ -24,7 +26,13 @@ export function resolveModDownloadHelp(queue: ModDownloadQueueDto | null, files?
   const failed = queue?.items.filter(item => item.phase === 'failed') ?? []
   const errors = failed.map(item => item.error)
   if (queue?.lastError) errors.push(queue.lastError)
-  const reasons = [...new Set(errors.map(summarizeModDownloadFailure))].slice(0, 3)
+  const stageLabels = { connection: '连接 Steam 失败。', metadata: '未能获取 Mod 信息。', manifest: '未能获取 Mod 文件清单。',
+    content: 'Mod 文件下载未完成。', verify: 'Mod 文件校验失败。', install: 'Mod 文件安装失败。' }
+  const reasons = [...new Set(errors.map(error => {
+    const known = summarizeModDownloadFailure(error)
+    const item = failed.find(item => item.error === error)
+    return known.startsWith('下载未完成，') && item?.failureStage ? stageLabels[item.failureStage] : known
+  }))].slice(0, 3)
   if (queue?.status === 'running' && queue.phase === 'retry_wait') {
     return { summary: '部分 Mod 下载失败，正在等待自动重试。', reasons, retryHint: null }
   }
@@ -41,6 +49,7 @@ export function resolveModDownloadHelp(queue: ModDownloadQueueDto | null, files?
   if (queue?.status === 'pausing') return { summary: '正在暂停下载，未完成项会保留。', reasons: [], retryHint: null }
   if (queue?.status === 'paused') return { summary: '下载已暂停，未完成项仍可恢复下载。', reasons: [], retryHint: null }
   if (queue?.status === 'running') return { summary: queue.phase === 'waiting_steamcmd' ? '正在等待其他安装或下载任务完成。'
+    : queue.phase === 'waiting_download' ? '正在等待下载。' : queue.phase === 'waiting_install' ? '正在等待安装。'
     : queue.phase === 'preparing_steamcmd' || queue.phase === 'preparing_download' ? '正在准备下载环境。'
       : queue.phase === 'verifying' ? '正在校验 Mod 文件。' : queue.phase === 'installing' ? '正在安装 Mod 文件。' : '正在下载 Mod。', reasons: [], retryHint: null }
   if (queue?.success || queue?.startedAt || files?.status === 'success') return { summary: '当前没有下载失败的 Mod。', reasons: [], retryHint: null }

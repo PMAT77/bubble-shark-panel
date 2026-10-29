@@ -7,7 +7,6 @@ defineProps<{
   tone: 'default' | 'success' | 'warning' | 'error'
   version: string
   versionHint: string
-  error?: string | null
 }>()
 </script>
 
@@ -22,9 +21,5 @@ defineProps<{
         {{ versionHint }}
       </NPopover>
     </div>
-    <details v-if="error" class="text-rose-600 dark:text-rose-400">
-      <summary class="cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-primary">失败原因</summary>
-      <p class="mt-1 break-words">{{ error }}</p>
-    </details>
   </div>
 </template>

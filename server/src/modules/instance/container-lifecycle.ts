@@ -1271,23 +1271,41 @@ export function isCurrentCavesStartGeneration(instanceId: string, generation: nu
 /**
  * 用本次随机标记读取世界和分片连接状态，命令回显与旧轮响应不能作为证据。
  */
-export async function queryStartupShard(ref: ContainerRef, instanceId: string, shard: 'master' | 'caves', signal: AbortSignal, remoteShardId?: string) {
+export async function queryStartupShard(ref: ContainerRef, instanceId: string, shard: 'master' | 'caves', signal: AbortSignal, remoteShardId?: string, deadline = Date.now() + 5000) {
   if (signal.aborted) return null
   const token = randomUUID()
-  const afterId = instanceConsoleLogStore.listLogs(instanceId).at(-1)?.id ?? 0
-  const result = await getContainerRuntime().execStdin(ref, buildDstStartupProbe(token, remoteShardId))
-  if (result.exitCode !== 0 || signal.aborted) return null
-  const until = Date.now() + 1000
-  while (Date.now() < until && !signal.aborted) {
-    for (const line of instanceConsoleLogStore.listLogs(instanceId, afterId)) {
-      if (line.stream !== 'stdout' || line.shard !== shard) continue
-      const parsed = parseDstStartupProbe(line.text, token)
-      if (parsed) return parsed
+  const command = buildDstStartupProbe(token, remoteShardId)
+  return new Promise<ReturnType<typeof parseDstStartupProbe>>((resolve) => {
+    let finished = false
+    let retryTimer: NodeJS.Timeout | undefined
+    const finish = (value: ReturnType<typeof parseDstStartupProbe>) => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      clearTimeout(retryTimer)
+      unsubscribe()
+      signal.removeEventListener('abort', abort)
+      resolve(value)
     }
-    try { await sleep(100, undefined, { signal }) }
-    catch { if (signal.aborted) return null; throw new Error('启动查询等待中断') }
-  }
-  return null
+    const abort = () => finish(null)
+    // 先订阅再发命令，避免同步回包或大量日志挤出环形缓冲造成漏判。
+    const unsubscribe = instanceConsoleLogStore.subscribe(instanceId, (line) => {
+      if (line.stream !== 'stdout' || line.shard !== shard || Date.now() >= deadline) return
+      const parsed = parseDstStartupProbe(line.text, token)
+      if (parsed) finish(parsed)
+    })
+    const timer = setTimeout(abort, Math.max(0, deadline - Date.now()))
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted || Date.now() >= deadline) { finish(null); return }
+    const send = () => {
+      void getContainerRuntime().execStdin(ref, command).then((result) => {
+        if (result.exitCode !== 0) finish(null)
+        // 游戏加载期间可能未处理命令；沿用 token 重试，迟到响应仍然有效。
+        else if (!finished) retryTimer = setTimeout(send, 5000)
+      }, () => finish(null))
+    }
+    send()
+  })
 }
 
 export async function startCavesAfterMasterReady(
@@ -1315,7 +1333,7 @@ export async function startCavesAfterMasterReady(
     ...input, task, runtime, waitSec: task.snapshot.settings.shardReadyWaitSec,
     isCancelled: stale,
     luaFailure: shard => findShardLuaFailure(input.instanceId, input.installPath, task.snapshot[shard ?? 'master'].startedAt ?? input.startedAt, shard),
-    probe: (ref, shard, remoteShardId) => queryStartupShard(ref, input.instanceId, shard, task.controller.signal, remoteShardId),
+    probe: (ref, shard, remoteShardId, context) => queryStartupShard(ref, input.instanceId, shard, context.signal, remoteShardId, context.deadline),
     protectOom: async shard => {
       const current = await getGameInstanceById(input.instanceId)
       if (!current || stale() || !isCurrentStartupTask(task)) return

@@ -1388,7 +1388,7 @@ describe('persistent download intent and truthful queue state', () => {
     await startModDownloadQueue({ instanceId: 'waiting', installPath })
     await started
     const waiting = await resolveModDownloadQueueState({ instanceId: 'waiting', installPath })
-    assert.equal(waiting.phase, 'waiting_steamcmd')
+    assert.equal(waiting.phase, 'waiting_download')
     assert.equal(waiting.downloading, 0)
     // 先标记实际执行，再验证暂停不会启动额外 worker（不触发真实运行环境的取消）。
     release()

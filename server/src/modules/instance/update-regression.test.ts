@@ -26,6 +26,7 @@ import { findInstallSeedDonor } from './install-seed'
 import { cancelInstallJob, getInstallLogsDirPath } from './install-service'
 import { InstanceInstallLogWriter, readInstallProgress } from '../../shared/instance-install/log-store'
 import { ensureDstLayout } from '../../infra/game-adapter/dst/cluster-config'
+import { resolveDstUgcModDir } from '../../infra/game-adapter/dst/ugc-mod-install'
 import { redactSteamcmdLogLine } from '../../infra/container/steamcmd-errors'
 import { scheduledUpdateOperations } from './scheduled-update'
 import { withInstanceContentOperation } from '../../shared/instance-content/operation'
@@ -180,6 +181,26 @@ after(async () => {
 })
 
 describe('game update regression', () => {
+  it('本地复制带有托管 Mod 链接的供体后完成安装，无需 SteamCMD 下载', async () => {
+    const donor = await instance('25643504')
+    const modDir = resolveDstUgcModDir(donor.installPath!, 'Master', '1185229307')
+    fs.mkdirSync(modDir, { recursive: true })
+    fs.writeFileSync(path.join(modDir, 'modinfo.lua'), "name = 'Donor Mod'")
+    fs.mkdirSync(path.join(donor.installPath!, 'mods'), { recursive: true })
+    fs.symlinkSync(modDir, path.join(donor.installPath!, 'mods', 'workshop-1185229307'), process.platform === 'win32' ? 'junction' : 'dir')
+    clearRemoteBuildCache()
+    queryOutput = metadata()
+    const installPath = path.join(root, 'instances', 'managed-mod-link-recipient')
+    const recipient = await createGameInstance({ nodeId: 'local-node', name: 'Mod 链接复制', gameCode: '343050', status: 'pending_install', installPath })
+    const beforeUpdates = updates
+    assert.equal(startInstallJob(app, { instanceId: recipient.id, instanceName: recipient.name, installPath, appId: '343050', steamcmdCommand: 'steamcmd' }), 'started')
+    await waitForInstall(recipient.id)
+    assert.equal(updates, beforeUpdates)
+    assert.equal(fs.readFileSync(path.join(installPath, 'mods', 'workshop-1185229307', 'modinfo.lua'), 'utf8'), "name = 'Donor Mod'")
+    const log = new InstanceInstallLogWriter(getInstallLogsDirPath(), recipient.id).readContent()
+    assert.match(log, /安装完成（本地复制）/)
+  })
+
   it('Docker retains complete framed output, rejects overflow and times out', async () => {
     const result = await runSteamcmdAppInfoInContainer('343050')
     assert.equal(result.ok, true)

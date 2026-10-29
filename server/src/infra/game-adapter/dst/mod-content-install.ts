@@ -6,7 +6,7 @@ import { resolveDstSteamWorkshopModDir } from './constants'
 import { resolveDstLegacyModDir, resolveDstUgcModDir, resolveDstUgcShardFolders, writeDstLegacyCopyRecord, type DstShardFolder } from './ugc-mod-install'
 
 /** 为本地、Steam 与迁移准备相同的加载布局，正式替换由外层事务统一执行。 */
-export async function prepareDstModContent<T>(transaction: ContentTransaction<T>, installPath: string, workshopId: string, sourceDir: string, options: { shardFolders?: DstShardFolder[], copySource?: boolean } = {}): Promise<void> {
+export async function prepareDstModContent<T>(transaction: ContentTransaction<T>, installPath: string, workshopId: string, sourceDir: string, options: { shardFolders?: DstShardFolder[], copySource?: boolean, workshopVersion?: { manifestId: string, updatedAt: string } } = {}): Promise<void> {
   assertWorkshopId(workshopId)
   const tree = await inspectContentTree(sourceDir, { requireModInfo: true })
   const shards = options.shardFolders ?? resolveDstUgcShardFolders(installPath)
@@ -36,6 +36,10 @@ export async function prepareDstModContent<T>(transaction: ContentTransaction<T>
     const prepared = await transaction.prepareDirectory(sourceDir, legacy)
     preparedDirectories.push(prepared)
     writeDstLegacyCopyRecord(prepared, first, fs.statSync(preparedShards.get(shards[0] ?? 'Master')!).mtimeMs)
+  }
+  // Shared verified sources stay immutable while other instances copy them.
+  if (options.workshopVersion) for (const directory of preparedDirectories) {
+    fs.writeFileSync(path.join(directory, '.bsp-workshop-download.json'), JSON.stringify(options.workshopVersion))
   }
   // 使用实例目录的所有者，包内 uid/mode 不参与生产运行时权限。
   if (process.platform !== 'win32') {

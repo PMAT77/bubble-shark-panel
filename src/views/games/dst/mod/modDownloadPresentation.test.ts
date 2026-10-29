@@ -16,6 +16,8 @@ describe('download presentation', () => {
     const item = { workshopId: '1', installStatus: 'pending' as const, phase: 'downloading' as const, error: null, nextRetryAt: null }
     assert.equal(resolveModDownloadItemLabel(item), '下载中')
     assert.equal(resolveModDownloadItemLabel({ ...item, phase: 'preparing_download' }), '准备下载')
+    assert.equal(resolveModDownloadItemLabel({ ...item, phase: 'waiting_download' }), '等待下载')
+    assert.equal(resolveModDownloadItemLabel({ ...item, phase: 'waiting_install' }), '等待安装')
     assert.equal(resolveModDownloadItemLabel({ ...item, progress: { downloadedBytes: 45, totalBytes: 100, percent: 45 } }), '下载中 45%')
     assert.equal(resolveModDownloadItemLabel({ ...item, progress: { downloadedBytes: 100, totalBytes: 100, percent: 100 } }), '下载完成，正在校验')
     assert.equal(resolveModDownloadItemLabel({ ...item, phase: 'installing' }), '下载完成，正在安装')

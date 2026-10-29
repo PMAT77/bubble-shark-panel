@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { copyGameDepotFromDonor, copyGameDepotFromDonorAsync } from './depot-copy.ts'
+import { resolveDstUgcModDir } from './ugc-mod-install'
 
 describe('copyGameDepotFromDonor', () => {
   const tempDirs: string[] = []
@@ -61,6 +62,69 @@ describe('copyGameDepotFromDonor', () => {
     const result = copyGameDepotFromDonor(dir, dir)
     assert.equal(result.ok, false)
   })
+
+  it('rebuilds managed Mod links inside the recipient without linking back to the donor', async () => {
+    const donor = makeTempDir()
+    const recipient = makeTempDir()
+    fs.mkdirSync(path.join(donor, 'mods'))
+    for (const [shard, id] of [['Master', '1185229307'], ['Caves', '222']] as const) {
+      const content = resolveDstUgcModDir(donor, shard, id)
+      fs.mkdirSync(content, { recursive: true })
+      fs.writeFileSync(path.join(content, 'modinfo.lua'), `name = '${id}'`)
+      fs.symlinkSync(content, path.join(donor, 'mods', `workshop-${id}`), process.platform === 'win32' ? 'junction' : 'dir')
+    }
+    const result = await copyGameDepotFromDonorAsync(donor, recipient)
+    assert.deepEqual(result, { ok: true })
+    for (const [shard, id] of [['Master', '1185229307'], ['Caves', '222']] as const) {
+      const link = path.join(recipient, 'mods', `workshop-${id}`)
+      const content = resolveDstUgcModDir(recipient, shard, id)
+      assert.equal(fs.readFileSync(path.join(link, 'modinfo.lua'), 'utf8'), `name = '${id}'`)
+      if (fs.lstatSync(link).isSymbolicLink()) assert.equal(fs.realpathSync(link), fs.realpathSync(content))
+      fs.writeFileSync(path.join(link, 'modinfo.lua'), 'recipient only')
+      assert.equal(fs.readFileSync(path.join(resolveDstUgcModDir(donor, shard, id), 'modinfo.lua'), 'utf8'), `name = '${id}'`)
+    }
+    assert.deepEqual(await copyGameDepotFromDonorAsync(donor, recipient), { ok: true }, '复制可重试，已生成的链接不会指回供体')
+  })
+
+  it('rejects external, save, mismatched Mod, cyclic and broken source links before copying files', async () => {
+    const outside = makeTempDir()
+    for (const kind of ['external', 'save', 'wrong-mod', 'cycle', 'broken', 'unmanaged'] as const) {
+      const donor = makeTempDir()
+      const recipient = makeTempDir()
+      fs.mkdirSync(path.join(donor, 'mods'))
+      fs.writeFileSync(path.join(donor, 'game'), 'game')
+      let target: string
+      if (kind === 'external') target = outside
+      else if (kind === 'cycle') target = donor
+      else if (kind === 'save') target = path.join(donor, 'klei-storage')
+      else target = resolveDstUgcModDir(donor, 'Master', kind === 'wrong-mod' ? '222' : '1185229307')
+      if (kind !== 'broken') fs.mkdirSync(target, { recursive: true })
+      const link = path.join(donor, 'mods', kind === 'unmanaged' ? 'other-link' : 'workshop-1185229307')
+      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir')
+      const result = await copyGameDepotFromDonorAsync(donor, recipient)
+      assert.equal(result.ok, false, kind)
+      assert.equal(fs.existsSync(path.join(recipient, 'game')), false, kind)
+    }
+  })
+
+  it('rejects links inside Mod content and recipient paths that escape the installation directory', async () => {
+    const donor = makeTempDir()
+    const recipient = makeTempDir()
+    const outside = makeTempDir()
+    const content = resolveDstUgcModDir(donor, 'Master', '1185229307')
+    fs.mkdirSync(content, { recursive: true })
+    fs.writeFileSync(path.join(content, 'modinfo.lua'), 'mod')
+    fs.mkdirSync(path.join(donor, 'mods'))
+    fs.symlinkSync(content, path.join(donor, 'mods', 'workshop-1185229307'), process.platform === 'win32' ? 'junction' : 'dir')
+    const nested = path.join(content, 'nested')
+    fs.symlinkSync(outside, nested, process.platform === 'win32' ? 'junction' : 'dir')
+    assert.equal((await copyGameDepotFromDonorAsync(donor, recipient)).ok, false)
+    fs.unlinkSync(nested)
+    fs.symlinkSync(outside, path.join(recipient, 'mods'), process.platform === 'win32' ? 'junction' : 'dir')
+    assert.equal((await copyGameDepotFromDonorAsync(donor, recipient)).ok, false)
+    assert.deepEqual(fs.readdirSync(outside), [])
+  })
+
   it('streams depot bytes, excludes saves and partial downloads, and cancels during a file', async () => {
     const donor = makeTempDir()
     const recipient = makeTempDir()

@@ -1,7 +1,7 @@
 {
   "name": "bubblesharkpanel",
   "type": "module",
-  "version": "0.22.3",
+  "version": "0.22.4",
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -50,6 +50,8 @@
     "release:check": "node scripts/run-local-checks.mjs"
   },
   "dependencies": {
+    "@doctormckay/stdlib": "2.10.0",
+    "@doctormckay/steam-crypto": "1.2.0",
     "@fantastic-admin/components": "workspace:*",
     "@fantastic-admin/settings": "workspace:*",
     "@fantastic-admin/types": "workspace:*",

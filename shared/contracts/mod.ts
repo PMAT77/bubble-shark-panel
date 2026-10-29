@@ -127,7 +127,9 @@ export interface ModMutationResult {
 
 export type ModInstallJobStatus = 'downloading' | 'success' | 'failed' | 'not_found'
 
-export type ModInstallJobPhase = 'waiting_steamcmd' | 'preparing_steamcmd' | 'preparing_download' | 'downloading' | 'verifying' | 'installing'
+export type ModInstallJobPhase = 'waiting_steamcmd' | 'preparing_steamcmd' | 'waiting_download' | 'waiting_install' | 'preparing_download' | 'downloading' | 'verifying' | 'installing'
+
+export type ModDownloadFailureStage = 'connection' | 'metadata' | 'manifest' | 'content' | 'verify' | 'install'
 
 /** Verified reusable content is excluded from this attempt's uncompressed bytes. */
 export interface ModDownloadProgress { downloadedBytes: number, totalBytes: number, percent: number }
@@ -135,6 +137,9 @@ export interface ModDownloadProgress { downloadedBytes: number, totalBytes: numb
 export interface ModInstallJobDto {
   taskId?: string | null
   progress?: ModDownloadProgress | null
+  reusedBytes?: number
+  failureStage?: ModDownloadFailureStage | null
+  errorCode?: string | null
   instanceId: string
   workshopId: string
   status: ModInstallJobStatus
@@ -158,6 +163,9 @@ export type ModDownloadItemPhase = ModInstallJobPhase | 'queued' | 'retry_wait' 
 export interface ModDownloadQueueItemDto {
   taskId?: string | null
   progress?: ModDownloadProgress | null
+  reusedBytes?: number
+  failureStage?: ModDownloadFailureStage | null
+  errorCode?: string | null
   workshopId: string
   installStatus: ModInstallStatus
   phase: ModDownloadItemPhase

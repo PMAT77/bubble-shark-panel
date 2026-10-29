@@ -1,16 +1,21 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { fork } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
-import type { ModDownloadProgress, ModInstallJobPhase } from '../../../../../shared/contracts/mod'
+import type { ModDownloadProgress, ModInstallJobPhase, ModDownloadFailureStage } from '../../../../../shared/contracts/mod'
 import { ContentTransaction } from '../../backup/content-transaction'
 import { prepareDstModContent } from './mod-content-install'
 import { assertWorkshopId, inspectContentTree, assertFreeSpace } from './mod-content'
 import { resolveDstSteamWorkshopModDir } from './constants'
-import { withSteamcmdAppUpdateLock, cancelQueuedSteamcmdJob } from '../../container/steamcmd-app-update-queue'
-import { loadSteamcmdRuntimeConfig, resolveSteamcmdWorkshopDownloadTimeoutMs } from '../../../shared/config/steamcmd'
+import { withInstallPathLock } from '../../../shared/instance-content/install-lock'
+import { assertInstanceContentAvailable } from '../../../shared/instance-content/operation'
+import { hasUnconfirmedSteamcmdJob } from '../../container/steamcmd-runner'
+import { loadServerConfig } from '../../../shared/config'
+import { readBrandEnv } from '../../../../../shared/brand-env'
+import { resolveSteamProxyConfig } from './steam-http'
+import { WorkshopWorker, type WorkshopContentResult } from './workshop-worker'
+import { loadSteamcmdRuntimeConfig, resolveWorkshopCdnDownloadTimeoutMs } from '../../../shared/config/steamcmd'
 
-export interface WorkshopDownloadProgress { workshopId: string, phase: ModInstallJobPhase, progress: ModDownloadProgress | null, error?: string }
+export interface WorkshopDownloadProgress { workshopId: string, phase: ModInstallJobPhase, progress: ModDownloadProgress | null, error?: string,
+  reusedBytes?: number, failureStage?: ModDownloadFailureStage, errorCode?: string }
 export interface WorkshopDownloadInput {
   hostInstallPath: string
   workshopIds: string[]
@@ -23,7 +28,6 @@ export interface WorkshopDownloadInput {
   onDownloadStart?: () => void
   onProgress?: (event: WorkshopDownloadProgress) => void
 }
-interface VerifiedContent { workshopId: string, ok: boolean, sourceDir?: string, manifestId?: string, updatedAt?: string, error?: string }
 export interface WorkshopDownloadResult {
   ok: boolean
   error?: string
@@ -34,62 +38,49 @@ const running = new Map<string, AbortController>()
 export function cancelDstWorkshopDownloads(cancelKey: string): boolean {
   const controller = running.get(cancelKey)
   controller?.abort()
-  cancelQueuedSteamcmdJob(cancelKey)
   return Boolean(controller)
 }
 
-/** Only byte events from this worker attempt reach the queue. Killing the child
- * stops SDK callbacks and keeps partial files outside the installed content. */
+const workers = new Map<string, { worker: WorkshopWorker, leases: number }>()
+let cacheRootForTest: string | undefined
+export function setWorkshopCacheRootForTest(value?: string): void { cacheRootForTest = value }
+
+/** Cancelling one subscriber never kills another instance's shared download. */
 async function runWorker(input: WorkshopDownloadInput, cacheRoot: string, signal: AbortSignal) {
-  return new Promise<{ results: VerifiedContent[], cancelled: boolean }>((resolve, reject) => {
-    const worker = new URL(import.meta.url.endsWith('.js') ? './mod-download-worker.js' : './mod-download-worker.mjs', import.meta.url)
-    const child = fork(fileURLToPath(worker), [], {
-      execArgv: [...(import.meta.url.endsWith('.ts') ? ['--import', import.meta.resolve('tsx')] : []), '--max-old-space-size=256'],
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-    })
-    const results = new Map<string, VerifiedContent>()
-    let error: string | null = null
-    let stopped = false
-    let cancelled = false
-    const stop = () => { stopped = true; cancelled = true; child.kill('SIGKILL') }
-    signal.addEventListener('abort', stop, { once: true })
-    const timer = setTimeout(() => { stopped = true; error = 'Mod 下载超时，请重试'; child.kill('SIGKILL') }, resolveSteamcmdWorkshopDownloadTimeoutMs())
-    child.on('message', (message: any) => {
-      if (stopped || signal.aborted) return
-      if (message?.type === 'progress' && input.workshopIds.includes(message.event?.workshopId)) {
-        const event = message.event
-        if (event.phase === 'verified') results.set(event.workshopId, event)
-        else if (['preparing_download', 'downloading', 'verifying'].includes(event.phase)) input.onProgress?.(event)
-        else if (event.ok === false) {
-          results.set(event.workshopId, event)
-          input.onProgress?.({ workshopId: event.workshopId, phase: 'verifying', progress: null, error: event.error ?? 'Mod 下载失败' })
-        }
-      }
-      if (message?.type === 'result' && Array.isArray(message.results)) {
-        for (const result of message.results) if (input.workshopIds.includes(result.workshopId)) results.set(result.workshopId, result)
-      }
-      if (message?.type === 'error') error = message.error
-    })
-    child.once('error', value => { error = value.message })
-    child.once('close', code => {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', stop)
-      if (error && results.size === 0 && !cancelled) return reject(new Error(error))
-      for (const workshopId of input.workshopIds) if (!results.has(workshopId)) {
-        results.set(workshopId, { workshopId, ok: false, error: error ?? (cancelled ? '下载已取消' : `下载进程异常结束（${code}）`) })
-      }
-      resolve({ results: [...results.values()], cancelled })
-    })
-    child.send({ ids: input.workshopIds, cacheRoot,
-      existingRoot: path.dirname(resolveDstSteamWorkshopModDir(input.hostInstallPath, input.workshopIds[0]!)),
-      httpProxy: loadSteamcmdRuntimeConfig().httpsProxy || undefined })
-    if (signal.aborted) stop()
-  })
+  let owner = workers.get(cacheRoot)
+  if (!owner || owner.worker.closed) {
+    const proxy = resolveSteamProxyConfig()
+    const configuredMax = Number(readBrandEnv('BSP_MOD_CACHE_MAX_BYTES'))
+    const worker = new WorkshopWorker({ cacheRoot, httpProxy: proxy?.url || loadSteamcmdRuntimeConfig().httpsProxy || undefined,
+      noProxy: proxy?.bypass ?? [], maxCacheBytes: Number.isSafeInteger(configuredMax) && configuredMax >= 0 && readBrandEnv('BSP_MOD_CACHE_MAX_BYTES') ? configuredMax : 5 * 1024 ** 3 },
+    message => { try { (input.onLogLine ?? console.info)(message) } catch { /* Diagnostics do not own task completion. */ } })
+    // Leases survive worker crashes until the parent has finished copying content.
+    owner = { worker, leases: owner?.leases ?? 0 }
+    workers.set(cacheRoot, owner)
+  }
+  owner.leases++
+  const handles = input.workshopIds.map(workshopId => owner!.worker.acquire({ workshopId, instanceId: input.instanceId, signal,
+    existingRoot: path.dirname(resolveDstSteamWorkshopModDir(input.hostInstallPath, workshopId)),
+    legacyCacheRoot: path.join(input.hostInstallPath, '.bsp-mod-download-cache'), timeoutMs: resolveWorkshopCdnDownloadTimeoutMs(),
+    onProgress: event => {
+      if (!signal.aborted && ['waiting_download', 'preparing_download', 'downloading', 'verifying'].includes(event.phase)) input.onProgress?.(event)
+    } }))
+  const results = await Promise.all(handles.map(async (handle, index): Promise<WorkshopContentResult> => {
+    try { return await handle.result }
+    catch (error) { return { workshopId: input.workshopIds[index]!, ok: false, error: signal.aborted ? '下载已取消' : (error as Error).message, failureStage: 'connection', errorCode: 'WORKSHOP_WORKER_FAILED' } }
+  }))
+  return { results, cancelled: signal.aborted, release: () => {
+    for (const handle of handles) handle.release()
+    const current = workers.get(cacheRoot)!
+    current.leases--
+    if (!current.leases) current.worker.prune()
+  } }
 }
 
 export const WORKSHOP_CONTENT_VERSION_FILE = '.bsp-workshop-download.json'
-let workerRunner = runWorker
-export function setWorkshopDownloadWorkerForTest(value?: typeof runWorker): void { workerRunner = value ?? runWorker }
+type WorkerResult = { results: WorkshopContentResult[], cancelled: boolean, release?: () => void }
+let workerRunner: (input: WorkshopDownloadInput, cacheRoot: string, signal: AbortSignal) => Promise<WorkerResult> = runWorker
+export function setWorkshopDownloadWorkerForTest(value?: typeof workerRunner): void { workerRunner = value ?? runWorker }
 
 export async function runWorkshopDownload(input: WorkshopDownloadInput): Promise<WorkshopDownloadResult> {
   for (const id of input.workshopIds) assertWorkshopId(id)
@@ -97,43 +88,68 @@ export async function runWorkshopDownload(input: WorkshopDownloadInput): Promise
   const key = input.cancelKey?.trim() || input.instanceId
   const controller = new AbortController()
   running.set(key, controller)
+  let release: (() => void) | undefined
+  const log = (message: string) => { try { (input.onLogLine ?? console.info)(message) } catch { /* Logging cannot undo an installation. */ } }
   try {
-    return await withSteamcmdAppUpdateLock(key, async () => {
-      for (const workshopId of input.workshopIds) input.onProgress?.({ workshopId, phase: 'preparing_download', progress: null })
-      const cacheRoot = path.join(input.hostInstallPath, '.bsp-mod-download-cache')
+    for (const workshopId of input.workshopIds) input.onProgress?.({ workshopId, phase: 'preparing_download', progress: null })
+    let cacheRoot = cacheRootForTest ?? path.join(path.dirname(loadServerConfig().dbPath), 'cache', 'steam-workshop', 'v1')
+    try { fs.mkdirSync(cacheRoot, { recursive: true }); fs.accessSync(cacheRoot, fs.constants.W_OK) }
+    catch {
+      cacheRoot = path.join(input.hostInstallPath, '.bsp-mod-download-cache')
       fs.mkdirSync(cacheRoot, { recursive: true })
-      assertFreeSpace(input.hostInstallPath, 0)
-      const { results, cancelled } = await workerRunner(input, cacheRoot, controller.signal)
-      const items: NonNullable<WorkshopDownloadResult['items']> = []
-      const errors: string[] = []
-      for (const result of results) {
-        if (!result.ok) { items.push({ workshopId: result.workshopId, ok: false }); errors.push(result.error ?? '下载失败'); continue }
-        let transaction: ContentTransaction<null> | undefined
-        try {
-          if (!result.manifestId || !/^\d+$/.test(result.manifestId) || !result.updatedAt || !Number.isFinite(Date.parse(result.updatedAt))) throw new Error('下载版本凭据无效')
-          const source = path.join(cacheRoot, result.workshopId, result.manifestId, 'content')
-          if (path.resolve(result.sourceDir ?? '') !== path.resolve(source)) throw new Error('下载目录越界')
-          await inspectContentTree(source, { requireModInfo: true })
-          input.onProgress?.({ workshopId: result.workshopId, phase: 'installing', progress: null })
-          fs.writeFileSync(path.join(source, WORKSHOP_CONTENT_VERSION_FILE), JSON.stringify({ manifestId: result.manifestId, updatedAt: result.updatedAt }))
-          transaction = new ContentTransaction(input.hostInstallPath, null)
-          await prepareDstModContent(transaction, input.hostInstallPath, result.workshopId, source)
-          transaction.apply()
-          transaction.commit()
-          items.push({ workshopId: result.workshopId, ok: true, installed: true })
-        }
-        catch (error) {
-          transaction?.rollback(() => {})
-          input.onProgress?.({ workshopId: result.workshopId, phase: 'installing', progress: null, error: (error as Error).message })
-          items.push({ workshopId: result.workshopId, ok: false })
-          errors.push((error as Error).message)
-        }
+    }
+    assertFreeSpace(input.hostInstallPath, 0)
+    const downloaded = await workerRunner(input, cacheRoot, controller.signal)
+    release = downloaded.release
+    const { results, cancelled } = downloaded
+    const items: NonNullable<WorkshopDownloadResult['items']> = []
+    const errors: string[] = []
+    for (const result of results) {
+      if (result.diagnostics) log(`[workshop] ${JSON.stringify({ instanceId: input.instanceId, workshopId: result.workshopId, manifestId: result.manifestId,
+        reusedBytes: result.reusedBytes, totalBytes: result.totalBytes, failureStage: result.failureStage, ...result.diagnostics })}`)
+      if (!result.ok) {
+        items.push({ workshopId: result.workshopId, ok: false }); errors.push(result.error ?? '下载失败')
+        if (!controller.signal.aborted) input.onProgress?.({ workshopId: result.workshopId, phase: 'verifying', progress: null,
+          error: result.error ?? 'Mod 下载失败', failureStage: result.failureStage, errorCode: result.errorCode })
+        continue
       }
-      return { ok: items.every(item => item.ok), cancelled, items, ...(errors.length ? { error: errors.join('；') } : {}) }
-    }, { signal: controller.signal, cancelKey: key, onQueued: input.onAwaitingSteamcmdLock })
+      if (controller.signal.aborted) { items.push({ workshopId: result.workshopId, ok: false }); continue }
+      const waitStarted = performance.now()
+      try {
+        await withInstallPathLock(input.hostInstallPath, async () => {
+          let transaction: ContentTransaction<null> | undefined
+          const installStarted = performance.now()
+          try {
+            controller.signal.throwIfAborted()
+            assertInstanceContentAvailable(input.instanceId)
+            if (hasUnconfirmedSteamcmdJob(input.instanceId)) throw new Error('安装任务清理未完成，请先停止实例')
+            if (!result.manifestId || !/^\d+$/.test(result.manifestId) || !result.updatedAt || !Number.isFinite(Date.parse(result.updatedAt))) throw new Error('下载版本凭据无效')
+            const source = path.join(cacheRoot, result.workshopId, result.manifestId, 'content')
+            if (path.resolve(result.sourceDir ?? '') !== path.resolve(source)) throw new Error('下载目录越界')
+            await inspectContentTree(source, { requireModInfo: true })
+            input.onProgress?.({ workshopId: result.workshopId, phase: 'installing', progress: null })
+            transaction = new ContentTransaction(input.hostInstallPath, null)
+            await prepareDstModContent(transaction, input.hostInstallPath, result.workshopId, source, { workshopVersion: { manifestId: result.manifestId, updatedAt: result.updatedAt } })
+            controller.signal.throwIfAborted()
+            transaction.apply()
+            transaction.commit()
+            items.push({ workshopId: result.workshopId, ok: true, installed: true })
+            log(`[workshop] ${JSON.stringify({ instanceId: input.instanceId, workshopId: result.workshopId, installed: true,
+              installWaitMs: installStarted - waitStarted, installMs: performance.now() - installStarted })}`)
+          }
+          catch (error) { transaction?.rollback(() => {}); throw error }
+        }, { signal: controller.signal, onQueued: () => input.onProgress?.({ workshopId: result.workshopId, phase: 'waiting_install', progress: null }) })
+      }
+      catch (error) {
+        input.onProgress?.({ workshopId: result.workshopId, phase: 'installing', progress: null, error: (error as Error).message, failureStage: 'install', errorCode: 'WORKSHOP_INSTALL_FAILED' })
+        items.push({ workshopId: result.workshopId, ok: false })
+        errors.push((error as Error).message)
+      }
+    }
+    return { ok: items.every(item => item.ok) && !controller.signal.aborted, cancelled: cancelled || controller.signal.aborted, items, ...(errors.length ? { error: errors.join('；') } : {}) }
   }
   catch (error) {
     return { ok: false, cancelled: controller.signal.aborted, error: controller.signal.aborted ? '下载已取消' : (error as Error).message }
   }
-  finally { if (running.get(key) === controller) running.delete(key) }
+  finally { release?.(); if (running.get(key) === controller) running.delete(key) }
 }

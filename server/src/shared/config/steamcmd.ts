@@ -93,6 +93,12 @@ export function resolveSteamcmdWorkshopDownloadTimeoutMs(): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 10 * 60 * 1000
 }
 
+/** CDN jobs are timed per item after scheduling; an explicit existing limit wins. */
+export function resolveWorkshopCdnDownloadTimeoutMs(): number {
+  const parsed = Number.parseInt(readBrandEnv('BSP_STEAMCMD_WORKSHOP_DOWNLOAD_TIMEOUT_MS') ?? '', 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 60 * 60 * 1000
+}
+
 export function formatSteamcmdTimeoutForLog(timeoutMs: number): string {
   return `${Math.round(timeoutMs / 60000)} 分钟`
 }

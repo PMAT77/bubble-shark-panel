@@ -352,6 +352,7 @@ export async function runSteamcmdWorkshopDownloadNative(input: {
 }
 
 export async function runSteamcmdAppInfoNative(appId: string): Promise<{ ok: boolean, output: string }> {
+  // 只读查询：仍排在 app_update 之后，但不能让面板认为游戏文件正在被改写（会阻塞实例启动）。
   return withSteamcmdAppUpdateLock(`app-info-${appId}`, async () => {
     const result = await runNativeSteamcmdJob({
       args: buildSteamcmdAppInfoArgs(appId.trim()),
@@ -359,7 +360,7 @@ export async function runSteamcmdAppInfoNative(appId: string): Promise<{ ok: boo
       timeoutMs: STEAMCMD_APP_INFO_TIMEOUT_MS,
     })
     return { ok: result.ok, output: result.output }
-  })
+  }, { kind: 'app-info' })
 }
 
 export function clearNativeSteamcmdCancelFlag(cancelKey: string): void {

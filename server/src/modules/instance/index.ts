@@ -807,7 +807,12 @@ function registerInstanceRouteHandlers(app: FastifyInstance) {
     if (current.status === 'pending_install' || current.status === 'installing') {
       return businessError('实例正在安装中，请稍后重试启动', request)
     }
-    if (isInstallJobActive(id) || isAnyInstallJobActive() || isSteamcmdAppUpdateBusy()) {
+    const ownInstall = isInstallJobActive(id)
+    const anyInstall = isAnyInstallJobActive()
+    const steamcmdBusy = isSteamcmdAppUpdateBusy()
+    if (ownInstall || anyInstall || steamcmdBusy) {
+      // 三者的失败文案相同，但排障必须知道是哪一类占用；定时更新被拒时会直接停用任务。
+      app.log.info({ instanceId: id, ownInstall, anyInstall, steamcmdBusy }, '实例启动被 SteamCMD/安装互斥拒绝')
       return businessError('当前有实例正在安装或更新游戏文件（SteamCMD），请等待完成后再启动', request)
     }
     if (await isInstanceContainerRunning(id)) {

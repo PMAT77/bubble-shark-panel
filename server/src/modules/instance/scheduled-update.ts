@@ -9,7 +9,8 @@ import { InstanceContentBusyError, withInstanceContentOperation } from '../../sh
 import { loadSteamcmdRuntimeConfig } from '../../shared/config/steamcmd'
 import { cancelStartupTask, getStartupSnapshot, startupIsActive, waitForStartupTask } from './startup-state'
 import { inspectInstanceShardRuntime, stopInstanceContainer } from './container-lifecycle'
-import { cancelInstallJob, getInstanceInstallProgress, getSteamcmdLoginCredentials, isInstallJobActive, startInstallJob, waitForInstallJob } from './install-service'
+import { cancelInstallJob, getInstanceInstallProgress, getSteamcmdLoginCredentials, isAnyInstallJobActive, isInstallJobActive, startInstallJob, waitForInstallJob } from './install-service'
+import { isSteamcmdAppUpdateBusy } from '../../infra/container/steamcmd-app-update-queue'
 import { resolveSteamcmdCommandForUpdateCheck } from './update-check'
 import { validateInstallPath } from './install-path-validation'
 
@@ -21,6 +22,48 @@ export interface ScheduledUpdateResult {
 
 export type ScheduledUpdateStart = (instanceId: string) => Promise<{ ok: boolean, taskId?: string, message?: string }>
 const activeUpdates = new Map<string, { controller: AbortController, completion: Promise<ScheduledUpdateResult> }>()
+
+/** 启动前等待清场的上限：覆盖 Native 版本查询 90 秒超时，再留一点余量。 */
+const START_CLEARANCE_TIMEOUT_MS = 120_000
+const START_CLEARANCE_POLL_MS = 500
+
+/** 与 `/app/instance/start` 的守卫同源：返回此刻会阻止启动的活动。 */
+export function describeStartBlockers(instanceId: string): string[] {
+  const blockers: string[] = []
+  if (isInstallJobActive(instanceId)) blockers.push('本实例安装任务')
+  if (isAnyInstallJobActive()) blockers.push('其他实例安装任务')
+  if (isSteamcmdAppUpdateBusy()) blockers.push('SteamCMD 游戏文件更新')
+  return blockers
+}
+
+/**
+ * 更新完成到启动之间面板仍在收尾：安装后的版本查询、其他实例的更新都会占用
+ * `/app/instance/start` 的互斥守卫。直接启动会被拒绝并把整个定时任务判失败，
+ * 这里按守卫同一口径等一小段时间，清场后再启动。
+ */
+export async function awaitStartClearance(
+  instanceId: string,
+  signal: AbortSignal,
+  options: {
+    timeoutMs?: number
+    pollMs?: number
+    onWait?: (blockers: string[]) => Promise<void> | void
+  } = {},
+): Promise<{ ok: true } | { ok: false, reason: string }> {
+  const timeoutMs = options.timeoutMs ?? START_CLEARANCE_TIMEOUT_MS
+  const pollMs = options.pollMs ?? START_CLEARANCE_POLL_MS
+  const deadline = Date.now() + timeoutMs
+  let blockers = describeStartBlockers(instanceId)
+  if (!blockers.length) return { ok: true }
+  await options.onWait?.(blockers)
+  while (blockers.length) {
+    signal.throwIfAborted()
+    if (Date.now() >= deadline) return { ok: false, reason: blockers.join('、') }
+    await abortableDelay(Math.min(pollMs, Math.max(0, deadline - Date.now())), signal)
+    blockers = describeStartBlockers(instanceId)
+  }
+  return { ok: true }
+}
 
 /** 运行时与安装边界集中在此，流程测试可替换边界而保留真实调度、互斥与落库。 */
 export const scheduledUpdateOperations = {
@@ -79,6 +122,7 @@ export const scheduledUpdateOperations = {
     finally { signal.removeEventListener('abort', cancel) }
   },
   waitForStartup: waitForStartupTask,
+  waitForStartClearance: awaitStartClearance,
   retryDelay: abortableDelay,
 }
 
@@ -148,6 +192,10 @@ export function runScheduledUpdate(
           if (!updateSucceeded) throw new Error('更新未完成')
           controller.signal.throwIfAborted()
           stage = '更新完成，启动失败'
+          const clearance = await scheduledUpdateOperations.waitForStartClearance(instanceId, controller.signal, {
+            onWait: blockers => progress(`更新完成，等待${blockers.join('、')}结束后启动实例`),
+          })
+          if (!clearance.ok) throw new Error(`启动前等待 SteamCMD 任务结束超时（${clearance.reason}）`)
           await progress(`更新完成（第 ${attempt}/3 次），正在启动实例`)
           const accepted = await start(instanceId)
           if (!accepted.ok || !accepted.taskId) throw new Error(accepted.message ?? '未取得启动任务')

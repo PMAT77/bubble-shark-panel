@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 
 process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
 
-const { isSteamcmdAppUpdateQueued, withSteamcmdAppUpdateLock } = await import('./steamcmd-app-update-queue.ts')
+const { isSteamcmdAppUpdateBusy, isSteamcmdAppUpdateQueued, withSteamcmdAppUpdateLock } = await import('./steamcmd-app-update-queue.ts')
 
 describe('withSteamcmdAppUpdateLock', () => {
   it('cancels a queued job immediately without releasing the active job', async () => {
@@ -47,6 +47,25 @@ describe('withSteamcmdAppUpdateLock', () => {
 
     await Promise.all([delay(30, 1), delay(10, 2)])
     assert.deepEqual(order, [1, -1, 2, -2])
+  })
+
+  it('marks app_update jobs as rewriting game files but not read-only version queries', async () => {
+    let releaseUpdate!: () => void
+    const update = withSteamcmdAppUpdateLock('install', () => new Promise<void>(resolve => { releaseUpdate = resolve }))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(isSteamcmdAppUpdateBusy(), true)
+    releaseUpdate()
+    await update
+    assert.equal(isSteamcmdAppUpdateBusy(), false)
+
+    let releaseQuery!: () => void
+    const query = withSteamcmdAppUpdateLock('app-info-343050', () => new Promise<void>(resolve => { releaseQuery = resolve }), { kind: 'app-info' })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(isSteamcmdAppUpdateBusy(), false)
+    assert.equal(isSteamcmdAppUpdateQueued(), false)
+    releaseQuery()
+    await query
+    assert.equal(isSteamcmdAppUpdateBusy(), false)
   })
 })
 

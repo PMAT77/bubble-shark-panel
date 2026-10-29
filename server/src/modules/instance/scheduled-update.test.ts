@@ -14,7 +14,8 @@ import { registerScheduleModule } from '../schedule'
 import { startScheduleTask } from '../schedule/task-runner'
 import { recoverMissedTasksOnBoot } from '../schedule/scheduler'
 import { registerInstanceScheduledOps } from './scheduled-entry'
-import { cancelScheduledUpdate, cleanupInterruptedScheduledUpdate, isScheduledUpdateActive, runScheduledUpdate, scheduledUpdateOperations } from './scheduled-update'
+import { awaitStartClearance, cancelScheduledUpdate, cleanupInterruptedScheduledUpdate, isScheduledUpdateActive, runScheduledUpdate, scheduledUpdateOperations } from './scheduled-update'
+import { withSteamcmdAppUpdateLock } from '../../infra/container/steamcmd-app-update-queue'
 import { changeStartupPhase, createStartupTask, enqueueStartupTask, persistStartupTask, releaseStartupTask, waitForStartupTask } from './startup-state'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bsp-scheduled-update-'))
@@ -80,6 +81,7 @@ beforeEach(async () => {
     return { ok: attempts === successOn, cancelled: false, cleanupPending: false, message: '下载失败' }
   })
   mock.method(scheduledUpdateOperations, 'retryDelay', async (ms: number) => { delays.push(ms) })
+  mock.method(scheduledUpdateOperations, 'waitForStartClearance', async () => ({ ok: true as const }))
   mock.method(scheduledUpdateOperations, 'waitForStartup', async () => startup())
   registerInstanceScheduledOps({
     restart: async () => ({ ok: true }),
@@ -115,6 +117,65 @@ it('原本停止且版本最新的实例仍执行文件更新并启动', async (
   assert.equal((await run()).status, 'ok')
   assert.equal(attempts, 1)
   assert.equal(starts, 1)
+})
+
+it('更新完成后先等 SteamCMD 清场再启动，不把临时占用当失败', async () => {
+  const order: string[] = []
+  mock.method(scheduledUpdateOperations, 'waitForStartClearance', async () => {
+    order.push('clearance')
+    return { ok: true as const }
+  })
+  const startAfterClearance = async () => {
+    order.push('start')
+    starts++
+    return { ok: true, taskId: 'startup-current' }
+  }
+  const result = await runScheduledUpdate(app, id, startAfterClearance, async message => { messages.push(message) })
+  assert.equal(result.status, 'ok', result.message)
+  assert.equal(result.disableTask, undefined)
+  assert.deepEqual(order, ['clearance', 'start'])
+  assert.equal(starts, 1)
+})
+
+it('启动前等待 SteamCMD 清场超时则失败并停用任务', async () => {
+  mock.method(scheduledUpdateOperations, 'waitForStartClearance', async () => ({
+    ok: false as const, reason: 'SteamCMD 游戏文件更新',
+  }))
+  const task = await createScheduleTask({ id: `task-wait-${id}`, instanceId: id, kind: 'update', scheduleType: 'interval', scheduleValue: '1' })
+  const execution = await startScheduleTask(app, task)
+  assert.ok(execution.completion)
+  const result = await execution.completion
+  assert.equal(result.status, 'failed')
+  assert.match(result.message, /更新完成，启动失败.*启动前等待 SteamCMD 任务结束超时（SteamCMD 游戏文件更新）.*实例已停止.*任务已停用/)
+  assert.equal(starts, 0)
+  assert.equal((await getScheduleTaskById(task.id))?.enabled, false)
+  assert.equal((await getGameInstanceById(id))?.status, 'stopped')
+})
+
+it('awaitStartClearance 等待 SteamCMD 任务结束后放行，超时给出占用方，可被取消', async () => {
+  const previousCooldown = process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS
+  process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = '0'
+  let release!: () => void
+  const hold = withSteamcmdAppUpdateLock('clearance-blocker', () => new Promise<void>(resolve => { release = resolve }))
+  try {
+    const timedOut = await awaitStartClearance(id, new AbortController().signal, { timeoutMs: 150, pollMs: 20 })
+    assert.equal(timedOut.ok, false)
+    assert.match((timedOut as { reason: string }).reason, /SteamCMD 游戏文件更新/)
+
+    const controller = new AbortController()
+    controller.abort(new Error('用户手动停止'))
+    await assert.rejects(awaitStartClearance(id, controller.signal, { timeoutMs: 150, pollMs: 20 }), /用户手动停止/)
+
+    release()
+    await hold
+    assert.deepEqual(await awaitStartClearance(id, new AbortController().signal, { timeoutMs: 150, pollMs: 20 }), { ok: true })
+  }
+  finally {
+    release()
+    await hold.catch(() => {})
+    if (previousCooldown === undefined) delete process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS
+    else process.env.BSP_STEAMCMD_INTER_JOB_COOLDOWN_MS = previousCooldown
+  }
 })
 
 it('三次失败后停用任务、持久化停机原因并仅发布一次失败事件', async () => {
